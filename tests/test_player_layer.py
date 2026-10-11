@@ -154,8 +154,11 @@ class StorageTests(unittest.TestCase):
         frames = 6000
         raw = frames * (64 + 2560 * 1440 * 8)
         with patch("dolly.player_layer.shutil.disk_usage", return_value=SimpleNamespace(free=raw)):
-            with self.assertRaisesRegex(RuntimeError, "temporary space"):
+            with self.assertRaisesRegex(RuntimeError, "temporary space") as caught:
                 player_layer.check_capture_space(Path("unused"), 2560, 1440, frames)
+        # The message names the shortfall and how to fix it, not just the fact.
+        self.assertIn("short by about", str(caught.exception))
+        self.assertIn("free space", str(caught.exception).casefold())
         with patch("dolly.player_layer.shutil.disk_usage", return_value=SimpleNamespace(free=raw+1024**3)):
             self.assertEqual(player_layer.check_capture_space(Path("unused"), 2560, 1440, frames), raw)
 

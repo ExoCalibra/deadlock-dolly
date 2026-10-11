@@ -1,9 +1,9 @@
-﻿"""Queue lifecycle contracts; real worker threads, no Tk or game calls."""
+"""Queue lifecycle contracts; real worker threads, no Tk or game calls."""
 import queue
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from dolly.gui import DollyApp, EVENT_QUEUE_LIMIT
 
@@ -71,9 +71,12 @@ class OperationLifecycleTests(unittest.TestCase):
         worker.join(2); self.assertFalse(worker.is_alive())
         self.assertIs(app.events.get(timeout=2)[2][0], result)
 
-    def test_export_recovery_finishes_before_error_is_published(self):
+    def test_export_recovery_runs_when_a_capture_actually_engaged(self):
         app = self.app(); app._base_capture = object(); order = []
         problem = ValueError('fixture')
+        # A recorder that is active means the layered run really started.
+        app.video_export = SimpleNamespace(status=lambda: {'state': 'recording'})
+        app.controller = SimpleNamespace(status=lambda: {'playing': False})
         app._recover_export_failure = lambda: order.append('recovered')
         put = app.events.put
         app.events.put = lambda event: (order.append('published'), put(event))[-1]
@@ -81,6 +84,24 @@ class OperationLifecycleTests(unittest.TestCase):
         app._worker_loop()
         self.assertEqual(order, ['recovered', 'published'])
         self.assertEqual(app.events.get_nowait(), ('export_error', 'Layer', problem))
+
+    def test_layered_preflight_failure_does_not_run_export_recovery(self):
+        # A layered run that fails before any capture (for example the Players
+        # disk-space preflight) has nothing to recover; it must fail fast.
+        app = self.app(); app._base_capture = object(); order = []
+        problem = RuntimeError('Players capture needs about 40.5 GiB')
+        app.video_export = SimpleNamespace(status=lambda: {'state': 'idle'})
+        app.controller = SimpleNamespace(status=lambda: {'playing': False})
+        app._recover_export_failure = Mock()
+        app._clear_layer_pipeline = lambda: order.append('cleared')
+        put = app.events.put
+        app.events.put = lambda event: (order.append('published'), put(event))[-1]
+        app.jobs.put(('Preparing', Mock(side_effect=problem), None)); app.jobs.put(None)
+        app._worker_loop()
+        app._recover_export_failure.assert_not_called()
+        self.assertIn('cleared', order)
+        self.assertEqual(order[-1], 'published')
+        self.assertEqual(app.events.get_nowait(), ('error', 'Preparing', problem))
 
     def test_failure_without_layer_does_not_recover_and_worker_keeps_processing(self):
         app = self.app(); app._recover_export_failure = Mock(); error = RuntimeError('fixture')
@@ -100,23 +121,54 @@ class OperationLifecycleTests(unittest.TestCase):
 
 
 class ErrorDialogCoalescingTests(unittest.TestCase):
-    def test_reentrant_failure_does_not_stack_a_second_dialog(self):
+    def test_reentrant_error_does_not_stack_a_second_dialog(self):
+        # Every error path funnels through _error, whose guard must reject a
+        # second dialog opened while the first native dialog is still shown (its
+        # nested Tk wait keeps the poll running, so reentrancy is real).
         app = DollyApp.__new__(DollyApp)
         app.closed = False
         app._error_dialog_open = False
         app._log = Mock()
+        app.status_text = Mock()
+        app.root = object()
         opened = []
 
-        def show(title, exc):
+        def fake_show(_root, title, text):
             opened.append(title)
-            # The native dialog runs a nested Tk wait that keeps polling, so a
-            # second failure arrives while this dialog is still open.
-            app._report_operation_error("Second failure", RuntimeError("second"))
+            # A second failure arrives while the first dialog is still open.
+            app._error("Second failure", RuntimeError("second"))
+            app._error("Third failure", RuntimeError("third"))
 
-        app._error = show
-        app._report_operation_error("First failure", RuntimeError("first"))
+        with patch("dolly.gui.dialogs.show_error", fake_show):
+            app._error("First failure", RuntimeError("first"))
         self.assertEqual(opened, ["First failure"])
         self.assertFalse(app._error_dialog_open)
-        app._report_operation_error("Third failure", RuntimeError("third"))
-        self.assertEqual(opened, ["First failure", "Third failure"])
+
+    def test_error_after_the_dialog_closes_shows_again(self):
+        app = DollyApp.__new__(DollyApp)
+        app.closed = False
+        app._error_dialog_open = False
+        app._log = Mock()
+        app.status_text = Mock()
+        app.root = object()
+        opened = []
+        with patch("dolly.gui.dialogs.show_error",
+                   lambda _root, title, text: opened.append(title)):
+            app._error("First failure", RuntimeError("first"))
+            app._error("Later failure", RuntimeError("later"))
+        self.assertEqual(opened, ["First failure", "Later failure"])
+
+    def test_operation_error_routes_through_the_single_dialog_guard(self):
+        app = DollyApp.__new__(DollyApp)
+        app.closed = False
+        app._error_dialog_open = False
+        app._log = Mock()
+        app.status_text = Mock()
+        app.root = object()
+        opened = []
+        with patch("dolly.gui.dialogs.show_error",
+                   lambda _root, title, text: opened.append(title)):
+            app._report_operation_error("First failure", RuntimeError("first"))
+            app._report_operation_error("Second failure", RuntimeError("second"))
+        self.assertEqual(opened, ["First failure", "Second failure"])
 

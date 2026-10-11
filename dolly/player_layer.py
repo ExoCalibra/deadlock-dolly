@@ -155,11 +155,14 @@ def check_capture_space(deployment: Path, width: int, height: int, frames: int) 
     reserve = 1024 ** 3
     free = shutil.disk_usage(deployment).free
     if free < required + reserve:
+        shortfall = required + reserve - free
         raise RuntimeError(
-            "Players capture needs approximately %.1f GiB of temporary space on the game drive "
-            "plus 1 GiB free; only %.1f GiB is available. Shorten the path, lower FPS or "
-            "resolution, or free space before exporting. The MOV also needs output-drive space."
-            % (required / 1024 ** 3, free / 1024 ** 3))
+            "Players layer capture needs about %.1f GiB of raw temporary space on the game drive "
+            "(plus 1 GiB free); only %.1f GiB is available, so it is short by about %.1f GiB. "
+            "The Players layer stores every frame as an uncompressed image during capture. "
+            "Free space on that drive, shorten the camera path, or lower the FPS or resolution, "
+            "then try again. The final MOV also needs space on its output drive."
+            % (required / 1024 ** 3, free / 1024 ** 3, shortfall / 1024 ** 3))
     return required
 
 

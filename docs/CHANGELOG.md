@@ -1,5 +1,11 @@
 # Changes
 
+## 0.6.41-alpha
+
+- **You can see Dolly updating.** *Before:* installing an update closed the editor and replaced files with no window, then the relaunch briefly painted a window, which looked like random flashing. *After:* one steady "Updating Dolly" window stays on screen through install, verification and relaunch, and shows the failure inline instead of a separate pop-up.
+- **A failed Players/Depth export no longer freezes Dolly.** *Before:* requesting a Players and a Depth layer together with too little disk space could leave the main window unresponsive and the error behind the game. *After:* one dialog, a clickable window, and a clean state; a preflight failure no longer runs recording recovery.
+- **Clearer Players disk-space message.** Now names the shortfall and that the Players layer stores every frame uncompressed.
+
 ## 0.6.40-alpha
 
 - **The replay intro before you edit is much shorter.** *Before:* after loading a replay, Dolly waited for the recording's own match-intro camera at normal speed, about ten seconds every time you prepared a shot. *After:* that intro plays at speed through the ordinary replay path and normal speed is restored before the editor opens. Nothing is seeked or skipped.

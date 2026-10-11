@@ -149,7 +149,7 @@ def main(argv=None, *, target=None):
         return update_worker.main(["--self-test", *args[args.index("--updater-self-test")+1:]])
     target = Path(sys.executable).resolve().parent if target is None else Path(target).resolve()
     # Installation health checks run while a journal is intentionally pending.
-    if any(flag in args for flag in ("--self-test", "--cleanup-session", "--help")):
+    if any(flag in args for flag in ("--self-test", "--self-test-hidden", "--cleanup-session", "--help")):
         return open_editor(target, args, wait=True)
     pending = update_worker.pending_work(target)
     if pending is not None:

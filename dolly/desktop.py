@@ -30,8 +30,12 @@ def _message(text: str, *, error: bool = False) -> None:
         print(text, file=sys.stderr)
 
 
-def bundle_self_test(report_path: Path) -> int:
-    """Exercise the actual frozen GUI/runtime without starting or editing a game."""
+def bundle_self_test(report_path: Path, *, hidden: bool = False) -> int:
+    """Exercise the actual frozen GUI/runtime without starting or editing a game.
+
+    ``hidden`` keeps the smoke-test window off the screen (withdrawn) so the
+    updater's post-install check never flashes a window over the update progress.
+    """
     report = {"version": __version__, "frozen": is_frozen(), "platform": sys.platform,
               "pointer_bits": struct.calcsize("P") * 8, "checks": {}, "game_launched": False}
     root = None
@@ -54,6 +58,8 @@ def bundle_self_test(report_path: Path) -> int:
         # camera editor, creates its widgets, exercises its icon and closes it.
         branding.set_taskbar_identity()
         root = tk.Tk()
+        if hidden:
+            root.withdraw()
         app_ui = gui.DollyApp(root)
         from .update_ui import UpdateUI
         app_ui.update_manager = UpdateUI(app_ui, skip_startup=True)
@@ -67,6 +73,12 @@ def bundle_self_test(report_path: Path) -> int:
         def visible(name):
             widget = getattr(app_ui, name)
             root.update_idletasks()
+            if hidden:
+                # Geometry is still laid out while withdrawn; the mapped flag is
+                # not meaningful off-screen, so only the size checks apply.
+                if widget.winfo_width() <= 1 or widget.winfo_height() <= 1:
+                    raise RuntimeError(f"Layout collapses {name} at the minimum window size")
+                return
             x = widget.winfo_rootx() - root.winfo_rootx()
             y = widget.winfo_rooty() - root.winfo_rooty()
             if (not widget.winfo_ismapped() or x < 0 or y < 0
@@ -135,6 +147,8 @@ def _run(argv: list[str]) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--recover", action="store_true", help="Restore pending game configuration; close Deadlock first")
     group.add_argument("--self-test", metavar="REPORT_JSON", type=Path, help="Check this bundle without launching a game")
+    group.add_argument("--self-test-hidden", metavar="REPORT_JSON", type=Path,
+                       help=argparse.SUPPRESS)
     group.add_argument("--cleanup-session", nargs=2, metavar=("SESSION", "HANDLE"), help=argparse.SUPPRESS)
     group.add_argument("--updated", action="store_true", help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
@@ -144,6 +158,8 @@ def _run(argv: list[str]) -> int:
         return wait_and_cleanup(Path(directory), int(handle))
     if options.self_test:
         return bundle_self_test(options.self_test)
+    if options.self_test_hidden:
+        return bundle_self_test(options.self_test_hidden, hidden=True)
     if options.recover:
         from .launcher import recover_pending
         restored = recover_pending()

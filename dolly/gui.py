@@ -2496,9 +2496,23 @@ class DollyApp:
         self.operations.run(self._operation_failure_kind)
 
     def _operation_failure_kind(self):
-        if getattr(self, "_base_capture", None) is not None:
+        layered = getattr(self, "_base_capture", None) is not None
+        if not layered:
+            return "error"
+        # Only run recording recovery when a capture actually engaged. A layered
+        # run can fail in its preflight (for example the Players disk-space
+        # check) before any recorder or replay work, and there is nothing to
+        # recover then; doing so only delays the error and can confuse state.
+        exporter = getattr(self, "video_export", None)
+        controller = getattr(self, "controller", None)
+        engaged = ((exporter is not None and exporter.status().get("state") in ACTIVE_STATES)
+                   or (controller is not None and controller.status().get("playing"))
+                   or (controller is not None
+                       and getattr(controller, "_recording_replay", None) is not None))
+        if engaged:
             self._recover_export_failure()
             return "export_error"
+        self._clear_layer_pipeline()
         return "error"
 
     def _recover_game_config(self):
@@ -2775,17 +2789,10 @@ class DollyApp:
         on every slider move) would stack modal dialogs and leave the window
         disabled behind them, forcing a hard close.
         """
-        if getattr(self, "_error_dialog_open", False):
-            self._log(f"{title}: {exc}")
-            return
-        self._error_dialog_open = True
-        try:
-            if isinstance(exc, PreloadUnavailableError) and not self.closed:
-                self._offer_unverified_replay(title, exc)
-            else:
-                self._error(title, exc)
-        finally:
-            self._error_dialog_open = False
+        if isinstance(exc, PreloadUnavailableError) and not self.closed:
+            self._error(title, exc, offer_unverified_replay=True)
+        else:
+            self._error(title, exc)
 
     def _offer_unverified_replay(self, title, exc):
         text = str(exc) or type(exc).__name__
@@ -2796,11 +2803,32 @@ class DollyApp:
                                parent=self.root):
             self._load_replay()
 
-    def _error(self, title, exc):
+    def _error(self, title, exc, *, offer_unverified_replay=False):
+        """Show one error dialog at a time; further errors are logged only.
+
+        Every error path funnels through here, so two modal dialogs can never
+        stack. The native dialog disables the owner window while it is open; if a
+        second dialog ran at the same time, the two enable/disable cycles could
+        interleave and leave the main window permanently disabled (which reads as
+        an unclickable, "not responding" Dolly). The dialog is also topmost, so
+        it stays visible over a fullscreen game. When one is already open, or
+        Dolly is closing, the message is only logged and shown in the status.
+        """
         text = str(exc) or type(exc).__name__
         self.status_text.set(text[:240])
         self._log(f"{title}: {text}")
-        dialogs.show_error(self.root, title, text)
+        if self.closed:
+            return
+        if getattr(self, "_error_dialog_open", False):
+            return
+        self._error_dialog_open = True
+        try:
+            if offer_unverified_replay:
+                self._offer_unverified_replay(title, exc)
+            else:
+                dialogs.show_error(self.root, title, text)
+        finally:
+            self._error_dialog_open = False
 
     def _guard(self, title, function):
         if self.busy or self.playing:

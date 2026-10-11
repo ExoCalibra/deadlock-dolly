@@ -17,12 +17,12 @@ class LaunchRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.app = DollyApp.__new__(DollyApp)
         self.app.closed = False
+        self.app._error_dialog_open = False
         self.app.root = object()
         self.status = SimpleNamespace(set=Mock())
         self.app.status_text = self.status
         self.app._log = Mock()
         self.app._load_replay = Mock()
-        self.app._error = Mock()
 
     def error(self):
         return PreloadUnavailableError(
@@ -31,11 +31,12 @@ class LaunchRecoveryTests(unittest.TestCase):
             "selected replay from Startup controls to continue without preload verification.")
 
     def test_preload_unavailable_offers_and_runs_the_manual_load(self):
-        with patch("dolly.gui.messagebox.askyesno", return_value=True) as ask:
+        with patch("dolly.gui.messagebox.askyesno", return_value=True) as ask, \
+             patch("dolly.gui.dialogs.show_error") as dialog:
             self.app._report_operation_error("Starting replay editor", self.error())
         ask.assert_called_once()
         self.app._load_replay.assert_called_once()
-        self.app._error.assert_not_called()
+        dialog.assert_not_called()
         self.assertIn("never showed its hideout intro", self.status.set.call_args[0][0])
 
     def test_declining_the_offer_leaves_the_replay_unloaded(self):
@@ -43,19 +44,24 @@ class LaunchRecoveryTests(unittest.TestCase):
             self.app._report_operation_error("Starting replay editor", self.error())
         ask.assert_called_once()
         self.app._load_replay.assert_not_called()
-        self.app._error.assert_not_called()
 
     def test_other_startup_errors_keep_the_standard_dialog(self):
         failure = RuntimeError("The game console connection failed.")
-        self.app._report_operation_error("Starting replay editor", failure)
-        self.app._error.assert_called_once_with("Starting replay editor", failure)
+        with patch("dolly.gui.dialogs.show_error") as dialog:
+            self.app._report_operation_error("Starting replay editor", failure)
+        dialog.assert_called_once()
+        self.assertEqual(dialog.call_args[0][1], "Starting replay editor")
+        self.assertIn("game console connection failed", dialog.call_args[0][2])
         self.app._load_replay.assert_not_called()
 
-    def test_closed_window_falls_back_to_the_standard_error(self):
+    def test_closed_window_shows_no_dialog_and_does_not_raise(self):
         self.app.closed = True
         failure = self.error()
-        self.app._report_operation_error("Starting replay editor", failure)
-        self.app._error.assert_called_once_with("Starting replay editor", failure)
+        with patch("dolly.gui.dialogs.show_error") as dialog, \
+             patch("dolly.gui.messagebox.askyesno") as ask:
+            self.app._report_operation_error("Starting replay editor", failure)
+        dialog.assert_not_called()
+        ask.assert_not_called()
         self.app._load_replay.assert_not_called()
 
 

@@ -641,3 +641,5 @@ docs/RELEASE_NOTES_0.6.38-alpha.md
 docs/RELEASE_NOTES_0.6.39-alpha.md
 
 docs/RELEASE_NOTES_0.6.40-alpha.md
+
+docs/RELEASE_NOTES_0.6.41-alpha.md

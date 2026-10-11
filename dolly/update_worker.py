@@ -10,10 +10,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import tkinter as tk
+from tkinter import ttk
 from .updater import MANIFEST, digest_file, read_manifest, version_key, owned_name
 
 PENDING = "DOLLY_UPDATE_PENDING.json"
+# The update helper keeps one branded window on screen for the whole handoff so
+# users never see the editor close and reopen with nothing in between. Even a
+# fast install stays visible for at least this long so it never just flashes.
+MIN_PROGRESS_SECONDS = 2.0
 
 
 def atomic_json(path, value):
@@ -210,7 +217,8 @@ def wait_parent(pid):
 def smoke(target, work):
     report = work / "installed-smoke.json"
     report.unlink(missing_ok=True)
-    result = subprocess.run([str(target / "Dolly.exe"), "--self-test", str(report)], cwd=work, timeout=60)
+    # Hidden: the check must not paint a window over the update progress window.
+    result = subprocess.run([str(target / "Dolly.exe"), "--self-test-hidden", str(report)], cwd=work, timeout=60)
     data = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {}
     if result.returncode or data.get("passed") is not True or data.get("frozen") is not True or data.get("game_launched") is not False:
         raise RuntimeError("Updated Dolly failed its startup check")
@@ -218,6 +226,140 @@ def smoke(target, work):
 
 def notify(text):
     ctypes.windll.user32.MessageBoxW(None, text, "Dolly update", 0x40)
+
+
+class UpdateWindow:
+    """One branded window shown while an update installs, verifies and relaunches.
+
+    The helper copies Dolly.exe and re-runs it as DollyUpdater.exe; without this
+    window the editor closes, files are replaced with no visible owner, and the
+    relaunch smoke test briefly paints a window, which reads as random flashing.
+    This keeps a single steady window on screen across the whole handoff.
+    """
+
+    def __init__(self):
+        from . import ui_theme
+        self.root = tk.Tk()
+        self.root.title("Deadlock Dolly - Updating")
+        self.root.resizable(False, False)
+        self.root.configure(background=ui_theme.TOKENS["bg"])
+        icon = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "assets/dolly.ico"
+        if icon.is_file():
+            try:
+                self.root.iconbitmap(str(icon))
+            except tk.TclError:
+                pass
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("Update.TFrame", background=ui_theme.TOKENS["bg"])
+        style.configure("Update.TLabel", background=ui_theme.TOKENS["bg"],
+                        foreground=ui_theme.TOKENS["text"], font=(ui_theme.FONT_FAMILY, ui_theme.FONT_SIZES["body"]))
+        style.configure("Title.Update.TLabel", font=(ui_theme.FONT_FAMILY, 16, "bold"))
+        style.configure("Update.Horizontal.TProgressbar", background=ui_theme.TOKENS["accent"],
+                        troughcolor=ui_theme.TOKENS["button"], bordercolor=ui_theme.TOKENS["button"],
+                        lightcolor=ui_theme.TOKENS["accent"], darkcolor=ui_theme.TOKENS["accent"], borderwidth=0)
+        style.configure("Update.TButton", padding=(12, 7), background=ui_theme.TOKENS["button"],
+                        foreground=ui_theme.TOKENS["text"], font=(ui_theme.FONT_FAMILY, ui_theme.FONT_SIZES["body"]),
+                        borderwidth=0)
+        body = ttk.Frame(self.root, style="Update.TFrame", padding=24)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="DEADLOCK DOLLY", style="Title.Update.TLabel").pack(anchor="w")
+        self.status = tk.StringVar(value="Updating Dolly...")
+        self.message = ttk.Label(body, textvariable=self.status, style="Update.TLabel", wraplength=390)
+        self.message.pack(anchor="w", pady=(18, 14))
+        self.progress = ttk.Progressbar(body, mode="indeterminate", length=390, style="Update.Horizontal.TProgressbar")
+        self.progress.pack(fill="x")
+        self.progress.start(15)
+        self.close_button = ttk.Button(body, text="Close", style="Update.TButton", command=self._close)
+        # The window is not cancellable during install; the Close button appears
+        # only if the update fails, so a stuck window can still be dismissed.
+        self.closed = False
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self.root.update_idletasks()
+        width, height = self.root.winfo_reqwidth(), self.root.winfo_reqheight()
+        self.root.geometry(f"+{max(0, (self.root.winfo_screenwidth()-width)//2)}"
+                           f"+{max(0, (self.root.winfo_screenheight()-height)//2)}")
+
+    def set_status(self, text):
+        self.status.set(str(text))
+
+    def show_failure(self, text):
+        self.progress.stop()
+        self.progress.pack_forget()
+        self.status.set(str(text))
+        self.close_button.pack(anchor="e", pady=(20, 0))
+
+    def _close(self):
+        if not self.closed:
+            self.closed = True
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
+
+
+def _progress_helper_window(work, target, *, recover, parent_pid):
+    """Run the install/verify/relaunch on a worker while one window stays up.
+
+    Returns the same exit semantics as the non-GUI path. Worker results arrive
+    through a queue drained on the UI thread (Tk is not touched off it). Any
+    failure is shown in the window instead of a separate message box, and the
+    window stays until the user closes it so the reason is never lost in a flash.
+    """
+    import queue
+    window = UpdateWindow()
+    events = queue.Queue()
+    result = {}
+    started = time.monotonic()
+
+    def worker():
+        try:
+            if parent_pid:
+                wait_parent(parent_pid)
+            _apply_plan({"work": str(work), "target": str(target)}, work, target, recover,
+                        on_status=lambda text: events.put(("status", text)))
+            result["passed"] = True
+            events.put(("passed", None))
+        except Exception as error:
+            result["passed"] = False
+            result["error"] = error
+            try:
+                atomic_json(work / "result.json", {"passed": False, "error": str(error)})
+            except OSError:
+                pass
+            events.put(("failed", _install_error_message(error, work)))
+
+    def poll():
+        if window.closed:
+            return
+        try:
+            while True:
+                kind, value = events.get_nowait()
+                if kind == "status":
+                    window.set_status(value)
+                elif kind == "failed":
+                    window.show_failure(value)
+                elif kind == "passed":
+                    window.set_status("Update installed. Opening Dolly...")
+                    launch_program([str(target / "Dolly.exe"), "--updated"], target)
+                    hold_then_close()
+        except queue.Empty:
+            pass
+        window.root.after(100, poll)
+
+    def hold_then_close():
+        # Keep the window at least MIN_PROGRESS_SECONDS so a fast update is still
+        # visible rather than a flash.
+        remaining = MIN_PROGRESS_SECONDS - (time.monotonic() - started)
+        if remaining > 0:
+            window.root.after(int(remaining * 1000), window._close)
+        else:
+            window._close()
+
+    threading.Thread(target=worker, name="Dolly update install", daemon=True).start()
+    window.root.after(100, poll)
+    window.root.mainloop()
+    return 0 if result.get("passed") else 1
 
 
 def check_processes(target, exclude_pid=0):
@@ -291,6 +433,10 @@ def launch_worker(target, work, *, recover=False, parent_pid=None):
                str(os.getpid() if parent_pid is None else parent_pid)]
     if recover:
         command.append("--recover")
+    # Show the update window for a normal install so the user sees progress
+    # instead of the editor closing and file replacement happening invisibly.
+    if not recover:
+        command.append("--progress")
     return launch_program(command, work)
 
 
@@ -408,12 +554,47 @@ def self_test(report):
     return 0 if result["passed"] else 1
 
 
+def _install_error_message(error, work):
+    message = ("Dolly could not finish updating. Your previous files were retained or restored."
+               "\n\n" + str(error))
+    if isinstance(error, PermissionError) or getattr(error, "winerror", None) in (5, 32):
+        message += ("\n\nWindows blocked writing to the Dolly folder. Close any other Dolly "
+                    "window, and if a security tool or a protected location (for example "
+                    "Downloads with Controlled Folder Access) is holding the files, move Dolly "
+                    "to another folder or allow it there, then open Dolly.exe again to finish "
+                    "the update.")
+    return message + "\n\nUpdate details: " + str(work)
+
+
+def _apply_plan(plan, work, target, recover, *, on_status=None):
+    """Shared install/recover body for the headless and windowed paths.
+
+    Returns the exit code; raises on failure so the caller can report it. A
+    failure before the parent exits must not launch a duplicate instance, so an
+    incomplete-pending failure returns 1.
+    """
+    if on_status:
+        on_status("Restoring your previous Dolly files..." if recover
+                  else "Replacing application files...")
+    with install_lock(target):
+        check_processes(target)
+        if recover:
+            if (target / PENDING).exists():
+                rollback(plan)
+        else:
+            install(plan, lambda path: smoke(path, work))
+    atomic_json(work / "result.json", {"passed": True, "recovered": recover})
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--parent", type=int, default=0)
     parser.add_argument("--recover", action="store_true")
     parser.add_argument("--self-test", type=Path)
+    parser.add_argument("--progress", action="store_true",
+                        help="Keep one window on screen through install and relaunch")
     parser.add_argument("--no-relaunch", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.self_test:
@@ -433,27 +614,15 @@ def main(argv=None):
     work, target = Path(plan["work"]).resolve(), Path(plan["target"]).resolve()
     if args.plan.resolve().parent != work or not work.name.startswith(".dolly-update-") or work.parent != target:
         raise ValueError("Unexpected update workspace")
+    if args.progress and not args.no_relaunch:
+        return _progress_helper_window(work, target, recover=args.recover, parent_pid=args.parent)
     try:
         if args.parent:
             wait_parent(args.parent)
-        with install_lock(target):
-            check_processes(target)
-            if args.recover:
-                if (target / PENDING).exists():
-                    rollback(plan)
-            else:
-                install(plan, lambda path: smoke(path, work))
+        _apply_plan(plan, work, target, args.recover)
     except Exception as error:
         atomic_json(work / "result.json", {"passed": False, "error": str(error)})
-        message = ("Dolly could not finish updating. Your previous files were retained or restored."
-                   "\n\n" + str(error))
-        if isinstance(error, PermissionError) or getattr(error, "winerror", None) in (5, 32):
-            message += ("\n\nWindows blocked writing to the Dolly folder. Close any other Dolly "
-                        "window, and if a security tool or a protected location (for example "
-                        "Downloads with Controlled Folder Access) is holding the files, move Dolly "
-                        "to another folder or allow it there, then open Dolly.exe again to finish "
-                        "the update.")
-        notify(message + "\n\nUpdate details: " + str(work))
+        notify(_install_error_message(error, work))
         # A failure before the parent exits must not launch a duplicate instance.
         if (target / PENDING).exists():
             return 1
@@ -461,8 +630,6 @@ def main(argv=None):
             check_processes(target)
         except Exception:
             return 1
-    else:
-        atomic_json(work / "result.json", {"passed": True, "recovered": args.recover})
     if not args.no_relaunch:
         launch_program([str(target / "Dolly.exe"), "--updated"], target)
     return 0

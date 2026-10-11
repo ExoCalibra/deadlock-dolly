@@ -369,3 +369,80 @@ class UpdateUITests(unittest.TestCase):
             m.restart()
         m.app._on_close.assert_not_called()
         self.assertFalse(m.restarting)
+
+
+class UpdateProgressWindowTests(unittest.TestCase):
+    def test_launch_worker_requests_the_progress_window_for_a_normal_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory); work = target / ".dolly-update-abc"; work.mkdir()
+            (target / "Dolly.exe").write_bytes(b"helper")
+            with patch.object(w, "launch_program") as launch:
+                w.launch_worker(target, work, parent_pid=4321)
+            command = launch.call_args.args[0]
+            self.assertIn("--progress", command)
+            self.assertNotIn("--recover", command)
+
+    def test_recovery_does_not_request_the_progress_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory); work = target / ".dolly-update-abc"; work.mkdir()
+            (target / "Dolly.exe").write_bytes(b"helper")
+            (work / "DollyUpdater.exe").write_bytes(b"helper")
+            with patch.object(w, "launch_program") as launch:
+                w.launch_worker(target, work, recover=True)
+            command = launch.call_args.args[0]
+            self.assertIn("--recover", command)
+            self.assertNotIn("--progress", command)
+
+    def test_install_smoke_check_hides_its_window(self):
+        # The post-install check must not paint a window over the progress window.
+        import inspect
+        source = inspect.getsource(w.smoke)
+        self.assertIn("--self-test-hidden", source)
+
+    def test_progress_window_keeps_failure_on_screen(self):
+        # A failure is shown inline and the window stays until the user closes it.
+        from unittest.mock import Mock
+        window = w.UpdateWindow.__new__(w.UpdateWindow)
+        window.closed = False
+        window.status = Mock()
+        window.progress = Mock()
+        window.close_button = Mock()
+        window.show_failure("Dolly could not finish updating.")
+        window.status.set.assert_called_once_with("Dolly could not finish updating.")
+        window.progress.stop.assert_called_once()
+        window.progress.pack_forget.assert_called_once()
+        window.close_button.pack.assert_called_once()
+        self.assertFalse(window.closed)
+
+    def test_main_ignores_progress_for_a_self_test(self):
+        # --self-test is a hidden startup gate; --progress must not change it.
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "self.json"
+            with patch.object(w, "self_test", return_value=0) as self_test:
+                self.assertEqual(w.main(["--self-test", str(report), "--progress"]), 0)
+            self_test.assert_called_once_with(report)
+
+    def test_main_routes_progress_install_to_the_windowed_helper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory); work = target / ".dolly-update-abc"; work.mkdir()
+            plan = work / "plan.json"
+            plan.write_text(json.dumps({"work": str(work), "target": str(target)}))
+            with patch.object(w, "_progress_helper_window", return_value=0) as windowed, \
+                 patch.object(w, "install") as install:
+                code = w.main(["--plan", str(plan), "--progress", "--parent", "0"])
+            self.assertEqual(code, 0)
+            windowed.assert_called_once()
+            install.assert_not_called()
+
+    def test_main_without_progress_installs_headless(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory); work = target / ".dolly-update-abc"; work.mkdir()
+            plan = work / "plan.json"
+            plan.write_text(json.dumps({"work": str(work), "target": str(target)}))
+            with patch.object(w, "_progress_helper_window") as windowed, \
+                 patch.object(w, "_apply_plan", return_value=0) as apply, \
+                 patch.object(w, "wait_parent"):
+                code = w.main(["--plan", str(plan), "--no-relaunch", "--parent", "0"])
+            self.assertEqual(code, 0)
+            windowed.assert_not_called()
+            apply.assert_called_once()
