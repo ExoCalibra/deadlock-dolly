@@ -1662,6 +1662,29 @@ class ControllerTests(unittest.TestCase):
                 self.assertFalse(any("original.gameinfo.gi" in name for name in archive.namelist()))
                 self.assertFalse(any("previous_sessions/" + current.name in name for name in archive.namelist()))
 
+    def test_diagnostics_export_skips_an_existing_or_locked_archive(self):
+        # A prefilled dolly-diagnostics.zip in Downloads must not be overwritten:
+        # Windows raises PermissionError when it is still held open, which used
+        # to surface as a raw [Errno 13]. The export must pick a free name.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "dolly-diagnostics.zip"
+            existing.write_bytes(b"previous archive the user still has open")
+            output = self.controller.export_diagnostics(existing)
+            self.assertNotEqual(output, existing)
+            self.assertEqual(output.name, "dolly-diagnostics_2.zip")
+            self.assertTrue(output.is_file())
+            self.assertEqual(existing.read_bytes(), b"previous archive the user still has open")
+
+    def test_diagnostics_export_suffixless_path_gets_a_timestamped_zip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = self.controller.export_diagnostics(root)
+            self.assertEqual(output.suffix.lower(), ".zip")
+            self.assertTrue(output.is_file())
+            with zipfile.ZipFile(output) as archive:
+                self.assertIn("diagnostics.json", archive.namelist())
+
 
 class CameraParsingTests(unittest.TestCase):
     def test_current_cvar_value_ignores_default(self):

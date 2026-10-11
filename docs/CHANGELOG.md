@@ -1,5 +1,10 @@
 # Changes
 
+## 0.6.39-alpha
+
+- **Large exports wait as long as the encoder does.** *Before:* the desktop wait for finalization gave up after 30 seconds, so a big or drop-heavy take could report "The video recorder is still finishing" while the MP4 was still being written. *After:* the wait matches the native encoder's own 120-second finalization budget.
+- **Export diagnostics no longer fails on an existing archive.** *Before:* reusing the prefilled `dolly-diagnostics.zip` name while the previous archive was still open raised a raw `[Errno 13] Permission denied`. *After:* Dolly picks a free numbered filename and never overwrites an archive you still have open.
+
 ## 0.6.38-alpha
 
 - **Startup survives the developer console flood.** *Before:* on a `-dev` build the engine's hidden-cvar dump could delay the `hideconsole` check past its window, and Dolly aborted with "This game build did not confirm hideconsole" before the replay opened. *After:* an unconfirmed console check is treated as unknown, not rejected, so startup continues.

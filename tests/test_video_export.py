@@ -564,6 +564,24 @@ class VideoExportTests(unittest.TestCase):
         self.assertEqual(self.export.stop(cancel=True)["state"], "cancelled")
         self.bridge.stop_video.assert_called_once_with(cancel=True)
 
+    def test_finish_waits_as_long_as_the_native_finalizer(self):
+        # The native encoder waits up to 120 s for FFmpeg to finalize a large
+        # take; the desktop wait must not report "still finishing" sooner.
+        import inspect
+        default = inspect.signature(self.export.stop).parameters["timeout"].default
+        self.assertGreaterEqual(default, 120.0)
+        self.export.start(VideoOptions(self.path))
+        clock = {"now": 0.0}
+        self.bridge.stop_video.side_effect = lambda **_: self.state.update(state="finalizing")
+
+        def status():
+            clock["now"] += 60.0  # Two +60 s polls is under the native budget.
+            return {"state": "finalizing"} if clock["now"] < 130.0 else {"state": "completed"}
+        self.bridge.video_status.side_effect = status
+        with patch("dolly.video_export.time.monotonic", side_effect=lambda: clock["now"]), \
+             patch("dolly.video_export.time.sleep"):
+            self.assertEqual(self.export.stop()["state"], "completed")
+
     def test_encoder_failure_is_reported_on_finish(self):
         self.export.start(VideoOptions(self.path))
         self.bridge.stop_video.side_effect = lambda **_: self.state.update(state="failed", error="Disk full")

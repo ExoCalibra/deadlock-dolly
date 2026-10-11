@@ -13,6 +13,7 @@ from dataclasses import asdict
 import json
 import logging
 import math
+import os
 from pathlib import Path
 import re
 import threading
@@ -87,6 +88,88 @@ def _dof_shader_compile_failed(text):
     compact = re.sub(r"[^a-z0-9]+", "", str(text or "").casefold())
     return any(re.sub(r"[^a-z0-9]+", "", marker) in compact
                for marker in DOF_SHADER_COMPILE_ERRORS)
+
+
+def _diagnostics_destination(destination):
+    """Resolve a writable .zip path without clobbering an existing archive.
+
+    The Export dialog pre-fills ``dolly-diagnostics.zip`` in the user's Downloads
+    folder. On Windows an existing name is not overwritten by ``ZipFile(path, "w")``
+    when the file is still held open (a browser "keep" prompt, antivirus scan, or
+    the user opening the previous archive); that raised a raw
+    ``PermissionError [Errno 13]``. Pick a free numbered name instead, and if the
+    requested name itself is locked fall back in the same directory.
+    """
+    destination = Path(destination)
+    if destination.suffix.lower() != ".zip":
+        destination = destination / ("Dolly_diagnostics_" + time.strftime("%Y%m%d_%H%M%S") + ".zip")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    stem, suffix = destination.stem, destination.suffix
+    candidate, sequence = destination, 2
+    while candidate.exists() or candidate.is_symlink():
+        candidate = destination.with_name(f"{stem}_{sequence}{suffix}")
+        sequence += 1
+    if _writable(candidate):
+        return candidate
+    for sequence in range(2, 1000):
+        alternative = destination.with_name(f"{stem}_{sequence}{suffix}")
+        if alternative.exists() or alternative.is_symlink():
+            continue
+        if _writable(alternative):
+            return alternative
+    return candidate
+
+
+def _writable(path):
+    """True when a new archive can be created at ``path`` (probe then remove)."""
+    try:
+        with open(path, "xb"):
+            pass
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return True
+
+
+def _write_diagnostics_archive(destination, report, history, session_files, session, dumps):
+    """Write the diagnostics ZIP, preferring a free name over a locked one."""
+    destination = _diagnostics_destination(destination)
+    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("diagnostics.json", json.dumps(report, indent=2, ensure_ascii=False))
+        if history is not None:
+            archive.writestr("logs/recent_console.txt", history)
+        for path in (ROOT / "logs").glob("*.log"):
+            if path.is_file():
+                archive.writestr("logs/" + path.name, _tail_file(path))
+        if session:
+            for name in session_files:
+                file = session.session_dir / name
+                if file.is_file():
+                    archive.writestr("session/" + name, _tail_file(file))
+        # A successful retry must not hide the previous crashed launch.
+        journals = sorted((ROOT / "logs").glob("*/session.json"), key=lambda p: p.parent.name, reverse=True)[:8]
+        for journal in journals:
+            folder = journal.parent
+            if session and folder.resolve() == session.session_dir.resolve():
+                continue
+            for name in session_files:
+                file = folder / name
+                if file.is_file():
+                    archive.writestr("previous_sessions/" + folder.name + "/" + name, _tail_file(file, 512_000))
+        for path in dumps:
+            try:
+                archive.write(path, "crashes/" + path.name)
+            except OSError:
+                continue
+    return destination
 
 
 CAMERA_AXES = ("x", "y", "z")
@@ -4231,9 +4314,6 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         session_files = ("session.json", "launch.log", "game_stdout.log",
                          "native_diagnostics.json", "graphics-session.json", "graphics-runtime.json") + DIAGNOSTIC_NAMES
         destination = Path(destination)
-        if destination.suffix.lower() != ".zip":
-            destination = destination / ("Dolly_diagnostics_" + time.strftime("%Y%m%d_%H%M%S") + ".zip")
-        destination.parent.mkdir(parents=True, exist_ok=True)
         report = {"version": __version__, "state": self.status(), "protocol": self._protocol,
                   "motion_clock": motion_clock_info(),
                   "launch_attempt": self._launch_attempt,
@@ -4289,33 +4369,8 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
             except OSError:
                 continue
         report["crash_dumps"] = [{"name": path.name, "bytes": path.stat().st_size} for path in dumps]
-        with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("diagnostics.json", json.dumps(report, indent=2, ensure_ascii=False))
-            if history is not None:
-                archive.writestr("logs/recent_console.txt", history)
-            for path in (ROOT / "logs").glob("*.log"):
-                if path.is_file():
-                    archive.writestr("logs/" + path.name, _tail_file(path))
-            if self._session:
-                for name in session_files:
-                    file = self._session.session_dir / name
-                    if file.is_file():
-                        archive.writestr("session/" + name, _tail_file(file))
-            # A successful retry must not hide the previous crashed launch.
-            journals = sorted((ROOT / "logs").glob("*/session.json"), key=lambda p: p.parent.name, reverse=True)[:8]
-            for journal in journals:
-                folder = journal.parent
-                if self._session and folder.resolve() == self._session.session_dir.resolve():
-                    continue
-                for name in session_files:
-                    file = folder / name
-                    if file.is_file():
-                        archive.writestr("previous_sessions/" + folder.name + "/" + name, _tail_file(file, 512_000))
-            for path in dumps:
-                try:
-                    archive.write(path, "crashes/" + path.name)
-                except OSError:
-                    continue
+        destination = _write_diagnostics_archive(destination, report, history, session_files,
+                                                 self._session, dumps)
         self._message("Diagnostics exported to " + str(destination))
         return destination
 

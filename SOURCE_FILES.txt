@@ -637,3 +637,5 @@ third_party/cvar_unlocker/unlocker-build-6774.patch
 docs/RELEASE_NOTES_0.6.37-alpha.md
 
 docs/RELEASE_NOTES_0.6.38-alpha.md
+
+docs/RELEASE_NOTES_0.6.39-alpha.md

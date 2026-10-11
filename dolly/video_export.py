@@ -522,8 +522,14 @@ class VideoExport:
             self._start_pending = False
         return self.status()
 
-    def stop(self, *, cancel: bool = False, timeout: float = 30.0) -> dict:
-        """Request shutdown and wait on the operation worker, never on Tk."""
+    def stop(self, *, cancel: bool = False, timeout: float = 120.0) -> dict:
+        """Request shutdown and wait on the operation worker, never on Tk.
+
+        The native encoder itself waits up to 120 s for FFmpeg to finalize a
+        large take before it reports a terminal state, so the desktop wait must
+        not give up sooner: a shorter window reported "still finishing" on big
+        or drop-heavy takes while finalization was still progressing normally.
+        """
         try:
             with self._lock:
                 bridge = self._bridge
