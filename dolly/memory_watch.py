@@ -20,6 +20,10 @@ _GIB = 1024 ** 3
 _DEFAULT_THRESHOLD_BYTES = 2 * _GIB
 _DEFAULT_WINDOW_SECONDS = 60.0
 _DEFAULT_MIN_SAMPLES = 3
+# The UI poll runs several times a second; each sample opens a process handle.
+# Growth is judged over a 60s window, so sampling every few seconds is enough
+# and removes a per-poll handle open from the idle path.
+_DEFAULT_SAMPLE_INTERVAL_SECONDS = 3.0
 
 
 class _ProcessMemoryCounters(ctypes.Structure):
@@ -90,9 +94,11 @@ class PausedMemoryWatch:
     def __init__(self, *, sample=private_bytes, clock=time.monotonic,
                  threshold_bytes: float = _DEFAULT_THRESHOLD_BYTES,
                  window_seconds: float = _DEFAULT_WINDOW_SECONDS,
-                 min_samples: int = _DEFAULT_MIN_SAMPLES) -> None:
+                 min_samples: int = _DEFAULT_MIN_SAMPLES,
+                 sample_interval_seconds: float = _DEFAULT_SAMPLE_INTERVAL_SECONDS) -> None:
         for value, name in ((threshold_bytes, "threshold"), (window_seconds, "window"),
-                            (min_samples, "minimum samples")):
+                            (min_samples, "minimum samples"),
+                            (sample_interval_seconds, "sample interval")):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
                 raise ValueError(f"Paused-memory {name} must be positive")
         self._sample = sample
@@ -100,15 +106,18 @@ class PausedMemoryWatch:
         self._threshold = float(threshold_bytes)
         self._window = float(window_seconds)
         self._min_samples = int(min_samples)
+        self._sample_interval = float(sample_interval_seconds)
         self._pid: int | None = None
         self._tick = None
         self._samples: list[tuple[float, int]] = []
         self._warned = False
+        self._last_sample_at: float | None = None
 
     def _reset(self, pid: int | None = None, tick=None) -> None:
         self._pid, self._tick = pid, tick
         self._samples.clear()
         self._warned = False
+        self._last_sample_at = None
 
     def observe(self, pid, *, paused: bool, tick=None) -> str | None:
         """Return a one-time warning string for this paused episode, or None."""
@@ -120,9 +129,17 @@ class PausedMemoryWatch:
         if tick is not None:
             self._tick = tick
         now = self._clock()
+        # The paused/replayed-episode gate and the warning depend on this sample;
+        # always take the first sample of an episode, then throttle the rest.
+        if not self._warned and self._last_sample_at is not None \
+                and now - self._last_sample_at < self._sample_interval:
+            return None
         value = self._sample(pid)
         if value is None:
+            # An unreadable process is a failed observation, not a throttling
+            # anchor: retry promptly rather than suppressing the next read.
             return None
+        self._last_sample_at = now
         self._samples.append((now, int(value)))
         cutoff = now - self._window
         while self._samples and self._samples[0][0] < cutoff:

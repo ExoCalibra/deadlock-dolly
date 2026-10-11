@@ -20,6 +20,48 @@ class PreloadError(RuntimeError):
     """Verification unavailable; never permission to dispatch a replay."""
 
 
+# Reviewed game files are large (client.dll is ~59 MB) and several independent
+# monitors re-read and re-hash the same ones on startup and on every shot
+# preparation. Cache the bytes and digest keyed by (path, size, mtime_ns) so a
+# changed file is always re-read and re-hashed; the expected-hash comparison
+# downstream still fails closed on any mismatch. This removes repeated 59 MB
+# reads without weakening the verification.
+_FILE_CACHE = {}
+_FILE_CACHE_BUDGET = 128 * 1024 * 1024
+
+
+def game_file(path):
+    """Return (data, sha256_hexdigest) for a reviewed game file, memoized.
+
+    Keyed on the resolved path plus size and modification time, so editing or
+    replacing the file forces a fresh read and hash. The caller still compares
+    the digest against its expected reviewed value.
+    """
+    path = Path(path)
+    key = str(path.resolve())
+    size = mtime = None
+    try:
+        stat = path.stat()
+        size, mtime = stat.st_size, stat.st_mtime_ns
+    except OSError:
+        pass
+    if size is not None:
+        cached = _FILE_CACHE.get(key)
+        if cached is not None and cached[0] == size and cached[1] == mtime:
+            return cached[2], cached[3]
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise PreloadError(f'Cannot read reviewed game file {path.name}.') from exc
+    digest = hashlib.sha256(data).hexdigest()
+    if size is not None:
+        total = sum(len(entry[2]) for entry in _FILE_CACHE.values())
+        if total + len(data) > _FILE_CACHE_BUDGET:
+            _FILE_CACHE.clear()
+        _FILE_CACHE[key] = (size, mtime, data, digest)
+    return data, digest
+
+
 class _ReviewedBuildMismatch(PreloadError):
     """A successful read disagreed with the reviewed build; never retried away."""
 
@@ -205,10 +247,9 @@ class PreloadMonitor:
         images = []
         for path, expected in zip(paths, (CLIENT_SHA256, RESOURCE_SHA256)):
             try:
-                data = path.read_bytes()
-            except OSError as exc:
+                data, observed = game_file(path)
+            except PreloadError as exc:
                 raise PreloadError('Cannot verify installed preload modules.') from exc
-            observed = hashlib.sha256(data).hexdigest()
             if observed != expected:
                 raise PreloadError(f'Preload verification is not supported for this game build '
                                    f'({path.name}: {observed}). Update Dolly or use manual startup; '

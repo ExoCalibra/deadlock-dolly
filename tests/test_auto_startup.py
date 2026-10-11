@@ -4,7 +4,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from dolly.controller import Controller, PreloadUnavailableError
 from tests.test_native_flight_controller import configured_controller
@@ -395,7 +395,57 @@ class AutoStartupTests(unittest.TestCase):
         self.camera_monitor.sample_startup.side_effect = sample
         self.start()
         self.assertEqual(self.camera_monitor.sample_startup.call_count, 4)
+        # A successful handoff keeps the reviewed monitor open for the next shot
+        # preparation; it is closed on disconnect, not after every wait.
+        self.camera_monitor.close.assert_not_called()
+        self.controller.disconnect()
         self.camera_monitor.close.assert_called_once()
+
+    def test_replay_camera_monitor_is_reused_across_shot_preparation(self):
+        def make(*_args, **_kwargs):
+            built = MagicMock()
+            built.identity = {'method': 'test_camera_handoff'}
+            built.memory = object()  # Look like an open monitor.
+            built.sample_startup.return_value = {'coherent': True, 'ready': True}
+            return built
+        with patch('dolly.controller.ReplayCameraMonitor', side_effect=make) as factory:
+            first = self.controller._replay_camera()
+            second = self.controller._replay_camera()
+            self.assertIs(first, second)
+            self.assertEqual(factory.call_count, 1)
+            # A new session must never reuse a monitor bound to the old process.
+            self.controller._session = object()
+            third = self.controller._replay_camera()
+            self.assertIsNot(third, first)
+            self.assertEqual(factory.call_count, 2)
+            first.close.assert_called()
+
+    def test_preshow_accelerates_then_restores_normal_speed_before_pausing(self):
+        # The recorded match intro is played faster through the ordinary packet
+        # path, but the speed is restored to 1x before the caller pauses so the
+        # editor opens at the normal rate. A seek is never used.
+        with patch('dolly.controller.REPLAY_PRESHOW_TIMESCALE', 4.0):
+            self.start()
+        scales = [event for event in self.console.events if event.startswith('demo_timescale ')]
+        self.assertEqual(scales[0], 'demo_timescale 4')
+        self.assertEqual(scales[-1], 'demo_timescale 1')
+        # Speed is raised for the intro, then restored to 1x before the pause so
+        # the editor opens at the normal rate.
+        self.assertLess(self.console.events.index(scales[0]), self.console.events.index(scales[-1]))
+        self.assertLess(self.console.events.index(scales[-1]), self.console.events.index('demo_pause'))
+        self.assertNotIn('demo_gototick', self.console.events)
+
+    def test_preshow_acceleration_is_optional_when_timescale_is_rejected(self):
+        original = self.console.request
+
+        def request(command, *args, **kwargs):
+            if command.startswith('demo_timescale '):
+                raise RuntimeError('timescale rejected')
+            return original(command, *args, **kwargs)
+        self.console.request = request
+        with patch('dolly.controller.REPLAY_PRESHOW_TIMESCALE', 4.0):
+            self.start()  # Must still succeed without the accelerator.
+        self.assertEqual(self.controller.status()['startup_stage'], 'editing_ready')
 
     def test_camera_ready_does_not_pause_before_stock_hud_takeover_ends(self):
         counts = iter((1, 0, 1, 0, 0))

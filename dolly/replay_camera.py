@@ -5,11 +5,10 @@ camera manager actually consumed by the main view, without skipping replay
 packets, changing spectator mode, or invoking game functions.
 """
 from pathlib import Path
-import hashlib
 import math
 import struct
 
-from .preload import _Memory, _image_bytes, PreloadError
+from .preload import _Memory, _image_bytes, PreloadError, game_file
 
 from ._runtime_generated import ReplayCamera as _profile
 
@@ -30,8 +29,11 @@ class ReplayCameraMonitor:
         self._owned()
         executable = Path(self.command[0]).resolve()
         path = executable.parents[2] / 'citadel/bin/win64/client.dll'
-        data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != CLIENT_SHA256:
+        try:
+            data, observed = game_file(path)
+        except PreloadError as exc:
+            raise PreloadError('Replay camera verification requires the installed client.') from exc
+        if observed != CLIENT_SHA256:
             raise PreloadError('Automatic replay camera handoff is unsupported for this game build. '
                                'Use manual startup or update Dolly.')
         try:

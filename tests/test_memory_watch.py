@@ -21,7 +21,8 @@ class PausedMemoryWatchTests(unittest.TestCase):
         self.values = {}
         self.watch = PausedMemoryWatch(sample=lambda pid: self.values.get(pid),
                                        clock=self.clock, threshold_bytes=1024,
-                                       window_seconds=10.0, min_samples=3)
+                                       window_seconds=10.0, min_samples=3,
+                                       sample_interval_seconds=1.0)
 
     def observe(self, *values, pid=100, tick=7):
         results = []
@@ -69,9 +70,26 @@ class PausedMemoryWatchTests(unittest.TestCase):
 
     def test_invalid_configuration_is_rejected(self):
         for kwargs in ({"threshold_bytes": 0}, {"window_seconds": -1},
-                       {"min_samples": True}, {"min_samples": 0}):
+                       {"min_samples": True}, {"min_samples": 0},
+                       {"sample_interval_seconds": 0}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 PausedMemoryWatch(**kwargs)
+
+    def test_samples_are_throttled_between_the_configured_interval(self):
+        # The UI polls several times a second; a paused process must not open a
+        # handle on every poll. Inside the interval the sample is skipped.
+        opened = []
+        watch = PausedMemoryWatch(sample=lambda pid: (opened.append(pid), 1000)[1],
+                                  clock=self.clock, threshold_bytes=1024,
+                                  window_seconds=10.0, min_samples=3,
+                                  sample_interval_seconds=3.0)
+        self.assertIsNone(watch.observe(100, paused=True, tick=7))
+        for _ in range(20):  # 20 rapid polls inside the same interval.
+            self.assertIsNone(watch.observe(100, paused=True, tick=7))
+        self.assertEqual(opened, [100])  # One sample for the whole interval.
+        self.clock.advance(3.0)
+        watch.observe(100, paused=True, tick=7)
+        self.assertEqual(opened, [100, 100])
 
 
 if __name__ == "__main__":

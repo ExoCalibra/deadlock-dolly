@@ -1,10 +1,9 @@
 """Exact-build, read-only type/flag checks for the stock follow-camera rig."""
 from pathlib import Path
-import hashlib
 import struct
 
 from .follow_camera import ENABLED, FOLLOW_AIM, PREFIX, validate_value
-from .preload import PreloadError, _image_bytes
+from .preload import PreloadError, _image_bytes, game_file
 from .replay_camera import CLIENT_SHA256, ReplayCameraMonitor
 
 from ._runtime_generated import FollowCapabilities as _profile
@@ -29,11 +28,11 @@ class FollowCapabilityMonitor(ReplayCameraMonitor):
             executable = Path(self.command[0]).resolve()
             client_path = executable.parents[2] / 'citadel/bin/win64/client.dll'
             tier0_path = executable.parent / 'tier0.dll'
-            client_data = client_path.read_bytes()
-            tier0_data = tier0_path.read_bytes()
-            if hashlib.sha256(client_data).hexdigest() != CLIENT_SHA256:
+            client_data, client_digest = game_file(client_path)
+            tier0_data, tier0_digest = game_file(tier0_path)
+            if client_digest != CLIENT_SHA256:
                 raise PreloadError('Game Follow client build is unsupported.')
-            if hashlib.sha256(tier0_data).hexdigest() != TIER0_SHA256:
+            if tier0_digest != TIER0_SHA256:
                 raise PreloadError('Game Follow tier0 build is unsupported.')
             module = self.memory.modules.get('tier0.dll')
             if not module or module[1] != tier0_path.resolve():

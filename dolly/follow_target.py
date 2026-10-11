@@ -1,11 +1,10 @@
 """Read-only verification of the stock spectator's exact player target."""
 import struct
-import hashlib
 
 from .follow_capabilities import FollowCapabilityMonitor
 from .preload import PreloadError
 from .replay_camera import CLIENT_SHA256
-from .preload import _image_bytes
+from .preload import _image_bytes, game_file
 from .replay_camera import ReplayCameraMonitor
 
 from ._runtime_generated import FollowTarget as _profile
@@ -40,8 +39,8 @@ class FollowTargetMonitor(FollowCapabilityMonitor):
         super().__init__(session)
         try:
             path = Path(self.command[0]).resolve().parents[2] / 'citadel/bin/win64/client.dll'
-            data = path.read_bytes()
-            if hashlib.sha256(data).hexdigest() != CLIENT_SHA256:
+            data, digest = game_file(path)
+            if digest != CLIENT_SHA256:
                 raise PreloadError('Game Follow observer build is unsupported.')
             for rva, size in TARGET_SPANS:
                 if self.memory.read(self.base + rva, size) != _image_bytes(data, rva, size):

@@ -1,5 +1,12 @@
 # Changes
 
+## 0.6.40-alpha
+
+- **The replay intro before you edit is much shorter.** *Before:* after loading a replay, Dolly waited for the recording's own match-intro camera at normal speed, about ten seconds every time you prepared a shot. *After:* that intro plays at speed through the ordinary replay path and normal speed is restored before the editor opens. Nothing is seeked or skipped.
+- **Less repeated work when opening and preparing a session.** *Before:* the large game module was re-read and re-verified for every check, and the replay-camera check was rebuilt each time. *After:* verification is cached and the replay-camera check is reused for the session.
+- **Clearer startup timeouts.** *Before:* a timed-out startup step said only that it timed out. *After:* the message names how long it waited and points at diagnostics.
+- **Lighter idle while paused.** *Before:* the paused-replay memory watchdog sampled the game several times a second. *After:* it samples every few seconds.
+
 ## 0.6.39-alpha
 
 - **Large exports wait as long as the encoder does.** *Before:* the desktop wait for finalization gave up after 30 seconds, so a big or drop-heavy take could report "The video recorder is still finishing" while the MP4 was still being written. *After:* the wait matches the native encoder's own 120-second finalization budget.

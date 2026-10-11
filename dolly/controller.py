@@ -192,6 +192,12 @@ NATIVE_PAUSE_TIMEOUT = 8.0
 # the preload gate, so waiting the full timeout only delays the manual path.
 # After this window the controller stops early and offers that manual load.
 PRELOAD_INTRO_STALL_SECONDS = 45.0
+# A replay's recorded match intro (client game state MatchIntro -> GameInProgress)
+# plays before the stock gameplay camera takes over, at normal 1x. That segment
+# is part of the demo timeline, so ordinary packet-ordered playback at a higher
+# demo_timescale shortens it without a seek, a faked game state or any guard
+# bypass. Dolly restores 1x before pausing for the editor. 1.0 disables it.
+REPLAY_PRESHOW_TIMESCALE = 4.0
 # Live-verified switches for the in-game health-bar toggle. Disabling
 # citadel_unit_status_enabled or citadel_hud_objective_health_enabled while a
 # replay renders hangs the game with a DX11 device error, so those master
@@ -239,6 +245,12 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         self._native_last_status = {}
         self._native_handoff_details = {}
         self._console = None
+        # Reused across the startup and per-shot replay-camera handoff checks.
+        # The reviewed monitor opens a read-only process handle and re-verifies
+        # the installed client on construction; reusing it for the same live
+        # session removes that repeated work without changing any gate.
+        self._replay_camera_monitor = None
+        self._replay_camera_session = None
         self._protocol = "netcon"
         self._port = 29090
         self._demo = None
@@ -626,7 +638,10 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
             if result is not None and result is not False:
                 return result
             if time.perf_counter() >= deadline:
-                raise RuntimeError("Timed out " + label + ". The replay was not marked ready. Use the manual startup controls or export diagnostics.")
+                raise RuntimeError(
+                    f"Timed out after {timeout:g}s " + label
+                    + ". The replay was not marked ready. Use the manual startup controls, or export "
+                      "diagnostics to inspect the last recorded startup stage.")
             waiter.wait(.25)
 
     def _console_command_available(self, name, timeout=2.0):
@@ -830,14 +845,63 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         self._message("Map and shader preload complete. Opening your selected replay…",
                       startup_stage="preload_ready")
 
+    def _replay_camera(self):
+        """Reused replay-camera monitor for the current owned session.
+
+        The monitor is read-only and bound to one session process; reusing it
+        avoids reopening a process handle and re-verifying the installed client
+        on every shot preparation. A new session (or a closed monitor) builds a
+        fresh one, so a stale handle can never be used.
+        """
+        session = self._session
+        monitor = self._replay_camera_monitor
+        if (monitor is not None and self._replay_camera_session is session
+                and getattr(monitor, "memory", None) is not None):
+            return monitor
+        if monitor is not None:
+            try:
+                monitor.close()
+            except Exception:  # noqa: BLE001 - a stale monitor must never block a fresh one
+                LOG.warning("Could not close the previous replay-camera monitor", exc_info=True)
+        monitor = ReplayCameraMonitor(session)
+        self._replay_camera_monitor = monitor
+        self._replay_camera_session = session
+        return monitor
+
+    def _release_replay_camera(self):
+        monitor, self._replay_camera_monitor = self._replay_camera_monitor, None
+        self._replay_camera_session = None
+        if monitor is not None:
+            try:
+                monitor.close()
+            except Exception:  # noqa: BLE001 - teardown must not raise
+                LOG.warning("Could not close the replay-camera monitor", exc_info=True)
+
     def _wait_replay_camera(self, bridge, cancel_event):
-        """Wait for the stock camera and HUD after the first full replay packet."""
-        monitor = ReplayCameraMonitor(self._session)
+        """Wait for the stock camera and HUD after the first full replay packet.
+
+        While the recorded match intro is still playing, Dolly raises the demo
+        timescale so the ordinary packet-ordered playback reaches gameplay
+        sooner. This is not a seek or a faked state; the same frames play in the
+        same order. The speed is always restored to 1x before returning, so the
+        caller pauses for the editor at the normal rate.
+        """
+        monitor = self._replay_camera()
         previous_ready = None
+        accelerated = False
         try:
             self._startup_evidence['replay_camera_identity'] = monitor.identity
             self._message("Waiting for the replay intro and HUD to finish…",
                           startup_stage="waiting_replay_camera")
+            if REPLAY_PRESHOW_TIMESCALE > 1.0:
+                request = getattr(self, "_request", None)
+                if callable(request):
+                    try:
+                        request("demo_timescale " + numeric(REPLAY_PRESHOW_TIMESCALE))
+                        accelerated = True
+                        self._startup_evidence["preshow_timescale"] = REPLAY_PRESHOW_TIMESCALE
+                    except Exception:  # noqa: BLE001 - the accelerator is optional
+                        LOG.info("Replay pre-show acceleration was unavailable", exc_info=True)
 
             def ready():
                 nonlocal previous_ready
@@ -858,8 +922,17 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
 
             self._startup_wait(ready, "waiting for the replay intro and HUD to finish",
                                cancel_event, timeout=90)
+        except BaseException:
+            # A failed handoff must not leave a half-initialized monitor for the
+            # next attempt; a successful wait keeps it for the next shot prep.
+            self._release_replay_camera()
+            raise
         finally:
-            monitor.close()
+            if accelerated:
+                try:
+                    self._request("demo_timescale 1")
+                except Exception:  # noqa: BLE001 - a stopped replay has nothing to reset
+                    LOG.info("Could not restore the replay timescale after the pre-show", exc_info=True)
 
     def start_editing(self, game_path, demo_path, protocol="netcon", native=True,
                       launch_options="", cancel_event=None, graphics_profile=""):
@@ -4246,6 +4319,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
     def disconnect(self):
         self._recording_replay = None
         self._recording_pending = False
+        self._release_replay_camera()
         bridge = self._native_bridge()
         close_media = getattr(bridge, "_close_media", None)
         if callable(close_media):

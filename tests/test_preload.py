@@ -234,8 +234,43 @@ class PreloadTests(unittest.TestCase):
         api.PostMessageW.assert_not_called()
 
 
-if __name__ == '__main__':
-    unittest.main()
+class GameFileCacheTests(unittest.TestCase):
+    def setUp(self):
+        preload._FILE_CACHE.clear()
+
+    def tearDown(self):
+        preload._FILE_CACHE.clear()
+
+    def test_repeat_reads_are_served_from_cache_until_the_file_changes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'client.dll'
+            target.write_bytes(b'reviewed build')
+            first, first_digest = preload.game_file(target)
+            self.assertEqual(first, b'reviewed build')
+            calls = []
+            original = Path.read_bytes
+
+            def counting_read_bytes(self):
+                calls.append(self)
+                return original(self)
+            with patch.object(Path, 'read_bytes', counting_read_bytes):
+                second, second_digest = preload.game_file(target)
+            self.assertEqual(first, second)
+            self.assertEqual(first_digest, second_digest)
+            self.assertEqual(calls, [])  # Unchanged file: no re-read.
+            # A content/length change invalidates the key and forces a fresh read.
+            target.write_bytes(b'a different, longer reviewed build')
+            third, third_digest = preload.game_file(target)
+            self.assertNotEqual(third_digest, first_digest)
+            self.assertEqual(third, b'a different, longer reviewed build')
+
+    def test_unreadable_file_fails_closed(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / 'client.dll'
+            with self.assertRaisesRegex(preload.PreloadError, 'Cannot read'):
+                preload.game_file(missing)
 
 
 class ModuleSnapshotTests(unittest.TestCase):
