@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from dolly.console import (ConsoleClient, ConsoleError, ConsoleTimeout,
                            VConsoleDecoder, encode_command, error_text,
-                           parse_demo_info, parse_demo_tick)
+                           parse_demo_info, parse_demo_tick, parse_game_build)
 
 
 def print_packet(text):
@@ -542,6 +542,23 @@ class ParsingTests(unittest.TestCase):
         data = parse_demo_tick(output + output.replace('playing 50', 'playing 51'))
         self.assertEqual(data["tick"], 51)
         self.assertIsNone(data["paused"])
+
+    def test_installed_game_build_reads_the_console_banner(self):
+        banner = ('Game: "Deadlock"\r\nMap: "dl_hideout"\r\n'
+                  'Players: 1 (0 bots) / 31 humans\r\n'
+                  'Build: 10931 (revision 11112755)\r\n')
+        self.assertEqual(parse_game_build(banner), 10931)
+        # A later banner (client reconnected) supersedes the earlier one.
+        self.assertEqual(parse_game_build(banner + 'Build: 11000 (revision 1)\n'), 11000)
+        # ANSI colour codes around the banner do not hide it.
+        self.assertEqual(parse_game_build('\x1b[32mBuild: 10931 (revision 11112755)\x1b[0m\n'), 10931)
+
+    def test_game_build_is_unknown_without_a_complete_banner(self):
+        for output in ("Build: 10931\n", "Build: (revision 5)\n",
+                       "revision 11112755\n", "no build banner here\n", ""):
+            with self.subTest(output=output):
+                self.assertIsNone(parse_game_build(output))
+        self.assertIsNone(parse_game_build(None))
 
     def test_source_backed_demo_formats(self):
         data = parse_demo_info("[Engine] Playing back demo: 'replays/match.dem' at tick 555\n")

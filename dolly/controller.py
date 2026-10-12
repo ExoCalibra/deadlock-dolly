@@ -33,7 +33,8 @@ from .export_timing import ExportTimingMixin
 from .layer_modes import LayerModesMixin
 from .game_ui_handoff import GameUiHandoffMixin, OWN_HEALTH_HUD
 from .paused_flight import PausedFlightMixin, CAMERA_READBACK_INTERVAL
-from .console import ConsoleClient, ConsoleError, ConsoleTimeout, error_text, parse_demo_info, parse_demo_tick
+from .console import (ConsoleClient, ConsoleError, ConsoleTimeout, error_text,
+                      parse_demo_info, parse_demo_tick, parse_game_build)
 from .replays import same_replay_name
 from .demo_packets import packet_index, replay_header
 from .playback import ReplayClock
@@ -293,6 +294,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         self._replay_recovery_active = False
         self._replay_recovery = {}
         self._replay_header = {}
+        self._game_build = None
         self._recording_replay = None
         self._recording_pending = False
         self._stop_event = threading.Event()
@@ -363,8 +365,11 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         The console socket is closed by the operating system when Deadlock
         crashes, so a raw WinError 10054 hides the real event. A replay that
         cannot be reconstructed by the installed build fatals the game during
-        demo load; report the crash and the likely cause instead. The recorded
-        map/build from the replay header is included when it was read.
+        demo load; report the crash and the likely cause instead. When the
+        replay was recorded on the installed build (verifiable from the game's
+        console banner) the file itself is the problem, so the wording does not
+        suggest a build mismatch. The recorded map/build from the replay header
+        is included when it was read.
         """
         exit_code = self._session.process.poll() if self._session else None
         if exit_code is None:
@@ -376,13 +381,21 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         if context == "waiting for the game console" and not self._replay_requested:
             return (f"{reason} while {context}. The game exited before the selected replay "
                     "was loaded. Inspect the startup error or game dump before retrying.")
-        message = (f"{reason} while {context}. A replay that this game build cannot "
-                   "reconstruct (for example an incompatible or incomplete .dem) can fatal Deadlock as soon as "
-                   "it starts playing. Try the latest replay recorded on this build, then launch again through Dolly.")
         header = self._replay_header
+        recorded_build = header.get("build_num")
+        if (recorded_build is not None and self._game_build is not None
+                and recorded_build == self._game_build):
+            message = (f"{reason} while {context}. The selected replay was recorded on this build "
+                       f"({self._game_build}), so the .dem itself is likely incomplete or from a match whose "
+                       "content this build does not include (for example a private or experimental recording). "
+                       "Try another replay, or re-record it on this install, then launch again through Dolly.")
+        else:
+            message = (f"{reason} while {context}. A replay that this game build cannot "
+                       "reconstruct (for example an incompatible or incomplete .dem) can fatal Deadlock as soon as "
+                       "it starts playing. Try the latest replay recorded on this build, then launch again through Dolly.")
         details = ", ".join(str(part) for part in (
             header.get("name"),
-            f"recorded on game build {header['build_num']}" if header.get("build_num") is not None else None,
+            f"recorded on game build {recorded_build}" if recorded_build is not None else None,
             f"map {header['map_name']}" if header.get("map_name") else None) if part)
         if details:
             message += f" Selected replay: {details}."
@@ -577,6 +590,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
             self._startup_evidence = {}
             self._replay_requested = False
             self._replay_header = {}
+            self._game_build = None
             with self._state_lock:
                 self._state.update(time=0.0, tick=None)
             self._message("Deadlock launched with -dev -insecure. Wait until the hideout is fully loaded, then Connect and Initialize unlocker. The replay has not been loaded.", startup_stage="waiting_hideout")
@@ -599,6 +613,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                 console.connect(host="127.0.0.1", port=self._port, timeout=3)
                 self._console = console
                 self._request("echo DOLLY_CONNECTION_READY")
+                self._capture_game_build()
             except Exception:
                 console.close()
                 self._console = None
@@ -666,6 +681,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         loading. Require settled engine status as well as rendered frames;
         neither an open socket nor an early view callback proves readiness.
         """
+        self._capture_game_build()
         output = self._request("demo_info", allow_error=True, allow_truncated=True)
         try:
             demo = parse_demo_info(output)
@@ -1124,6 +1140,25 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
             LOG.info("Replay header: %s", header)
         return header
 
+    def _capture_game_build(self):
+        """Record the installed build the engine announced on its console.
+
+        The engine prints ``Build: <n> (revision <n>)`` when the client joins its
+        local server, and a replay header stores that same number. Captured
+        once, read-only, from the console history; never changes game state.
+        """
+        if self._game_build is not None or not self._console:
+            return
+        try:
+            history = self._console.recent_output(limit_bytes=1 << 20)
+        except Exception as exc:  # noqa: BLE001 - best-effort support context
+            LOG.debug("Could not read console history for the game build: %s", exc)
+            return
+        build = parse_game_build(history)
+        if build is not None:
+            self._game_build = build
+            self._startup_evidence["game_build"] = build
+
     def load_replay(self):
         with self._op_lock:
             self._require_unlocker()
@@ -1132,6 +1167,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
             path = launcher._validate_demo(self._demo)
             if path is None:
                 raise RuntimeError("No replay was selected for this launch.")
+            self._capture_game_build()
             self._remember_replay_header(path)
             # Source commands use forward slashes; _validate_demo rejects quotes,
             # separators and line breaks before this trusted quoted argument.
@@ -4438,6 +4474,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                   "paused_camera": deepcopy(self._paused_details),
                   "local_demo_name": self._demo.name if self._demo else None,
                   "replay_header": dict(self._replay_header),
+                  "game_build": self._game_build,
                   "replay_tick_rate": self.replay_tick_rate(),
                   "runtime_verified_in_Deadlock": False}
         bridge = self._native_bridge()

@@ -1,5 +1,9 @@
 # Changes
 
+## 0.6.43-alpha
+
+- **Correct crash guidance for unplayable replays.** *Before:* a replay that fataled Deadlock while it loaded always got "Try the latest replay recorded on this build", even when it was recorded on the installed build. *After:* Dolly compares the replay's recorded build with the installed build (read from the game console) and only blames a build mismatch when there is one; otherwise it points at the recording itself. The installed build is also recorded in diagnostics.
+
 ## 0.6.42-alpha
 
 - **Dolly can be closed after the game is closed.** *Before:* closing Deadlock from its own window and then closing Dolly showed "Launch the local replay from Dolly first" and left Dolly stuck open. *After:* Dolly closes cleanly, while still restoring its temporary game changes and removing its temporary plugin files.

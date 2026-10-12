@@ -151,6 +151,24 @@ def parse_demo_tick(output: str) -> dict:
             "name": name or None, "paused": None}
 
 
+_GAME_BUILD = re.compile(r"^\s*Build:\s*(\d+)\s*\(revision\s+\d+\)\s*$", re.MULTILINE)
+
+
+def parse_game_build(output: str) -> int | None:
+    """Read the installed game's internal build from its console banner.
+
+    The engine prints ``Build: <n> (revision <n>)`` once the client joins its
+    local server (the hideout or a replay). A replay header records that same
+    number in ``build_num``, so this distinguishes a replay recorded on a
+    different build from one this build simply cannot reconstruct. Returns the
+    last observed build, or None when the banner is absent.
+    """
+    if not isinstance(output, str):
+        return None
+    builds = _GAME_BUILD.findall(_ANSI.sub("", output))
+    return int(builds[-1]) if builds else None
+
+
 def encode_command(command: str, version: int = VCONSOLE_VERSION) -> bytes:
     """Encode a single trusted console command or semicolon command batch."""
     if not isinstance(command, str) or not command.strip():
