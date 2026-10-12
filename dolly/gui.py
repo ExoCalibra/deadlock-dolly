@@ -282,6 +282,7 @@ class DollyApp:
         self._take_audit_seen: set[str] = set()
         self._take_audit_reported = False
         self.closed = False
+        self._closing = False
         self.busy = False
         self._error_dialog_open = False
         self.dirty = False
@@ -2573,6 +2574,15 @@ class DollyApp:
             elif kind in ("error", "export_error"):
                 self.busy = False
                 self.busy_text.set("")
+                if getattr(self, "_closing", False):
+                    # The user asked to close Dolly and a teardown step (such as
+                    # Stop) failed, often because the game was already closed
+                    # from its own window. Still run the file-level close and
+                    # exit rather than leaving the window open behind an error.
+                    LOG.warning("Close-time failure; finishing the close anyway: %s", payload)
+                    self._log(f"{label}: {payload}")
+                    self._close_after_failure()
+                    return
                 if kind == "export_error":
                     self._clear_layer_pipeline()
                 cancelled = self.startup_cancel is not None and self.startup_cancel.is_set()
@@ -4332,6 +4342,10 @@ class DollyApp:
         if self.busy:
             messagebox.showinfo("Operation in progress", "Wait for the current operation to finish before closing Dolly.", parent=self.root)
             return
+        # Record the user's intent to close now, so a failure in any teardown
+        # step (for example the game already exited) still closes the window
+        # instead of stacking an error dialog behind an unclosable app.
+        self._closing = True
         if self.playing:
             self._submit("Stopping before closing", self.controller.stop, lambda _result: self._finish_close())
         else:
@@ -4340,9 +4354,30 @@ class DollyApp:
     def _finish_close(self):
         self.playing = False
         if not self._allow_discard():
+            # The user chose to keep editing; cancel the pending close intent.
+            self._closing = False
             return
         editor_session.close(self)
         self._submit("Closing replay connection", self.controller.close, lambda _result: self._destroy())
+
+    def _close_after_failure(self):
+        """Finish a requested close after a teardown step failed.
+
+        The controller close restores gameinfo and hands off deployment cleanup;
+        it must still run, but even if it reports a problem the window closes.
+        Run it on the worker when possible and fall back to a direct close so the
+        window can never be left open.
+        """
+        self.playing = False
+        self.busy = False
+        if self._submit("Closing replay connection", self.controller.close,
+                        lambda _result: self._destroy()):
+            return
+        try:
+            self.controller.close()
+        except Exception:  # noqa: BLE001 - the window must close regardless
+            LOG.exception("Ignoring controller close failure while closing the window")
+        self._destroy()
 
     def _destroy(self):
         editor_session.close(self)

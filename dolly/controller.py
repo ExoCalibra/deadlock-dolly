@@ -4317,16 +4317,35 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
             self._message(restoration_error, playing=False)
 
     def disconnect(self):
+        """Tear the session down; never let a closed game block the disconnect.
+
+        Deadlock can be closed from its own window at any time. In-console
+        restores are impossible once the process is gone, and the previous
+        implementation raised "Launch the local replay from Dolly first" from the
+        Stop/restore helpers, which aborted the whole disconnect. That left Dolly
+        unclosable after the game had already exited. The file-level restoration
+        and deployment cleanup are owned by ``close()``; here every in-console
+        step is best-effort so the editor can always return to a clean state.
+        """
         self._recording_replay = None
         self._recording_pending = False
         self._release_replay_camera()
         bridge = self._native_bridge()
         close_media = getattr(bridge, "_close_media", None)
         if callable(close_media):
-            close_media()
+            try:
+                close_media()
+            except Exception:  # noqa: BLE001 - media cleanup is best-effort on disconnect
+                LOG.warning("Could not close native media during disconnect", exc_info=True)
         if self._healthbar_restore and self._console and self._console.is_connected and self._alive():
-            self._restore_healthbar_values()
-        self.stop()
+            try:
+                self._restore_healthbar_values()
+            except Exception:  # noqa: BLE001 - the game may have closed mid-restore
+                LOG.warning("Could not restore healthbar values during disconnect", exc_info=True)
+        try:
+            self.stop()
+        except Exception as exc:  # noqa: BLE001 - a closed game must not block disconnect
+            LOG.warning("Stop/restore during disconnect remains pending: %s", exc)
         self.clear_export_resolution()
         dof_error = self._restore_dof_shader_settings()
         if self._console:

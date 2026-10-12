@@ -1,5 +1,9 @@
 # Changes
 
+## 0.6.42-alpha
+
+- **Dolly can be closed after the game is closed.** *Before:* closing Deadlock from its own window and then closing Dolly showed "Launch the local replay from Dolly first" and left Dolly stuck open. *After:* Dolly closes cleanly, while still restoring its temporary game changes and removing its temporary plugin files.
+
 ## 0.6.41-alpha
 
 - **You can see Dolly updating.** *Before:* installing an update closed the editor and replaced files with no window, then the relaunch briefly painted a window, which looked like random flashing. *After:* one steady "Updating Dolly" window stays on screen through install, verification and relaunch, and shows the failure inline instead of a separate pop-up.

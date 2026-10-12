@@ -173,5 +173,57 @@ class Stage1GuiTests(unittest.TestCase):
         self.assertEqual(_binding_event_key(SimpleNamespace(keysym='k', num='??')), 'K')
 
 
+class CloseAfterGameExitTests(unittest.TestCase):
+    """Closing Dolly must work after the user already closed Deadlock."""
+
+    def app(self):
+        from dolly.ui.operations import OperationQueue
+        app = DollyApp.__new__(DollyApp)
+        app._operations = OperationQueue()
+        app.closed = False
+        app._closing = False
+        app.busy = False
+        app.playing = False
+        app._error_dialog_open = False
+        app._log = Mock()
+        app.status_text = Mock()
+        app.busy_text = Mock()
+        app.root = SimpleNamespace(my_id=lambda: 1)
+        app.controller = Mock()
+        app._destroy = Mock()
+        app._clear_layer_pipeline = Mock()
+        app._report_operation_error = Mock()
+        app.startup_cancel = None
+        return app
+
+    def test_close_after_failure_still_runs_controller_close_and_destroys(self):
+        app = self.app()
+        app.controller.close.side_effect = RuntimeError("game already exited")
+        # A direct (worker-unavailable) close must still tear the window down.
+        app._submit = lambda *a, **k: False
+        app._close_after_failure()
+        app.controller.close.assert_called_once()
+        app._destroy.assert_called_once()
+
+    def test_close_after_failure_uses_the_worker_when_available(self):
+        app = self.app()
+        calls = []
+        app._submit = lambda label, fn, cb=None: calls.append((label, fn, cb)) or True
+        app._close_after_failure()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "Closing replay connection")
+
+    def test_closing_error_event_destroys_the_window(self):
+        # A stop/close step failing after the game exited must not re-open an
+        # error dialog or block the close; the poll throws the event away.
+        app = self.app()
+        app._submit = lambda *a, **k: False
+        app.events.put(("error", "Stopping before closing", RuntimeError("game exited")))
+        app._closing = True
+        app._poll_once()  # Must not raise and must destroy.
+        app._destroy.assert_called_once()
+        app._report_operation_error.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
