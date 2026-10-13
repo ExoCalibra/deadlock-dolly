@@ -649,3 +649,5 @@ docs/RELEASE_NOTES_0.6.42-alpha.md
 docs/RELEASE_NOTES_0.6.43-alpha.md
 
 docs/RELEASE_NOTES_0.6.44-alpha.md
+
+docs/RELEASE_NOTES_0.6.45-alpha.md

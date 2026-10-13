@@ -758,8 +758,8 @@ class DollyApp:
         controller = getattr(self, "controller", None)
         game_pid = getattr(controller, "game_pid", None)
         if callable(game_pid):
-            # The recorder's first frame is focus-gated. A desktop Start would
-            # otherwise leave focus on Dolly and time out with no game frame.
+            # Bring the game into view for recording. Capture also works if Windows
+            # refuses this request or desktop controls take focus during setup.
             focus_window(game_pid())
         game_audio = self.video_game_audio.get()
         reconstructed = self.video_reconstructed_audio.get()
