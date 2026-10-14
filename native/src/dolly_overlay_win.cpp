@@ -978,6 +978,12 @@ bool discover_swapchain_methods(void*& present, void*& resize) noexcept {
         auto table = *reinterpret_cast<void***>(dummy);
         present = table[8];
         resize = table[13];
+        // The reviewed startup worker has already configured Players support.
+        // Observe shader creation now: waiting for the game's first Present
+        // misses shaders loaded beforehand, leaving valid player draws unknown.
+        // This only records resource metadata; no capture or game draw is armed.
+        if (player_capture::layout_hook_requested())
+            player_capture::install_layout_hook(dummy_device);
     }
     release(dummy_context);
     release(dummy_device);

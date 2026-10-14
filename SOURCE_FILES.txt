@@ -655,3 +655,13 @@ docs/RELEASE_NOTES_0.6.43-alpha.md
 docs/RELEASE_NOTES_0.6.44-alpha.md
 
 docs/RELEASE_NOTES_0.6.45-alpha.md
+
+dolly/player_encode.py
+dolly/player_pixels.py
+tests/test_player_processing.py
+
+dolly/player_scratch.py
+native/include/dolly_player_scratch.hpp
+native/tests/player_scratch_tests.cpp
+tests/test_player_scratch.py
+docs/RELEASE_NOTES_0.6.46-alpha.md
