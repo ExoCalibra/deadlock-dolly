@@ -150,6 +150,7 @@ def build_export(app):
         use_bundled_ffmpeg=app._use_bundled_ffmpeg,
         video_source_changed=app._video_source_changed,
         discard_recording=lambda: app._stop_video_recording(cancel=True),
+        export_ae_camera=app._export_ae_camera,
     )
     view = ExportPage(app.export_tab, state, commands)
     app.export_view = view

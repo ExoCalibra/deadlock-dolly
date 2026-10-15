@@ -49,6 +49,7 @@ class ExportActions:
     use_bundled_ffmpeg: Callable[..., object]
     video_source_changed: Callable[..., object]
     discard_recording: Callable[..., object]
+    export_ae_camera: Callable[..., object]
 
 
 class ExportPage:
@@ -85,6 +86,9 @@ class ExportPage:
             audio_options, style="Card.TCheckbutton", text="Include reconstructed audio",
             variable=state.video_reconstructed_audio)
         self.video_reconstructed_audio_check.pack(side="left")
+        after_effects = card(body, "After Effects camera")
+        ttk.Label(after_effects, text="Exports a .jsx script that creates a comp with this shot's camera", style="CardMuted.TLabel", wraplength=320).pack(anchor="w", pady=(0, GAP))
+        self.ae_camera_button = actions(after_effects, (("Export camera (.jsx)...", commands.export_ae_camera),), 1)[0]
         options = ttk.Frame(body)
         options.pack(fill="x", pady=(0, GAP))
         for i in (0, 1):

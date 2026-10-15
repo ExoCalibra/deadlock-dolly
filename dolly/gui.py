@@ -625,6 +625,33 @@ class DollyApp:
             self.video_path.set(path)
             self._remember_export_folder()
 
+    def _export_ae_camera(self):
+        def export():
+            from .ae_export import export_jsx
+
+            self._sync_options()
+            if not self.project.keyframes:
+                raise ValueError("Add a camera keyframe before exporting the camera.")
+
+            fps = _finite(self.video_fps.get(), "Video FPS")
+            current = Path(self.video_path.get())
+            filename = "".join(character if character.isalnum() or character in "-_ " else "_" for character in self.project.name).strip() or "shot"
+            path = filedialog.asksaveasfilename(
+                parent=self.root, title="Export After Effects camera", defaultextension=".jsx",
+                initialdir=str(current.parent) if current.parent.is_dir() else None,
+                initialfile=filename + "_camera.jsx", filetypes=(("After Effects script", "*.jsx"),)
+            )
+            
+            if not path:
+                return
+ 
+            warnings = export_jsx(self.project, path, fps)
+            self.status_text.set(f"Exported the After Effects camera to {Path(path).name}.")
+            if warnings:
+                messagebox.showwarning("After Effects camera", "\n\n".join(warnings), parent=self.root)
+
+        self._guard("Export After Effects camera", export)
+
     def _remember_export_folder(self, _event=None):
         """Persist explicit destination edits, never generated per-layer paths."""
         settings = getattr(self, "app_settings", None)
