@@ -703,3 +703,5 @@ tools/test-lite-policy.cmd
 
 docs/RELEASE_NOTES_0.6.49-alpha.md
 docs/VIDEO_SCRIPT_0.6.49-alpha.md
+native/profiles/deadlock-2026-10-15-6785-complete.json
+third_party/cvar_unlocker/unlocker-build-6785.patch

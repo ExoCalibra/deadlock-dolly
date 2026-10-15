@@ -2,6 +2,8 @@
 
 ## 0.6.49-alpha
 
+- **Deadlock build 6785 support.** *Before:* the October 14 game update was outside the reviewed compatibility profiles. *After:* Dolly recognizes the updated game.
+- **Replay preparation tolerates a brief pause delay.** *Before:* effect settling could be rejected while the replay pause was still reaching the camera view. *After:* Dolly waits within the existing time limit for a stable view at the exact shot start, then checks it again before recording. Incorrect starting ticks and cancelled preparation still block recording.
 - **Refreshed in-game UI, contributed by [@tbhtho](https://github.com/tbhtho).** *Before:* the editor used its older panel layout. *After:* dedicated Camera, Follow, Bone Picker, Look and Export tabs sit alongside a compact Campaths list and replay timeline with player kill/death markers.
 - **Saved layouts and complete F8 hiding.** *Before:* hiding Dolly could leave panels on screen. *After:* F8 hides/restores all three panels while keeping guides and the grid available. Main and Campaths headers are always draggable; **Layout > Arrange panels** enables resizing and timeline placement.
 - **Optional pause after capture.** *Before:* Capture paused playback. *After:* in-game Capture keeps it running by default, with a remembered **Pause after capture** checkbox beside Resume/Pause for the previous behavior.

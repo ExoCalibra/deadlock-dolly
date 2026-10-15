@@ -18,6 +18,7 @@ class SimulatedWarmup(ReplayWarmupMixin):
         self._stop_event = threading.Event()
         self.events = []
         self.tick = 500
+        self.frame_count = 100
         self.paused = True
         self.goal = None
         self.changed_replay = False
@@ -30,6 +31,7 @@ class SimulatedWarmup(ReplayWarmupMixin):
         self.bridge.status.side_effect = self.status
         self.bridge.prepare.side_effect = lambda *args: self.events.append(("prepare", args))
     def _supports_native_flight(self): return True
+    def _require_connection(self): pass
     def _console_command_available(self, name): return not self.unavailable
     def _native_bridge(self): return self.bridge
     def _recorder_active(self): return self.active_recorder
@@ -55,10 +57,11 @@ class SimulatedWarmup(ReplayWarmupMixin):
             if self.cancel_after_resume: self._stop_event.set()
         elif command == "demo_resume; demo_pause": self.goal = None;self.paused = True
     def status(self):
+        self.frame_count += 1
         if not self.paused and not self.stalled:
             self.tick = min(self.goal, self.tick + 64)
             self.paused = self.tick == self.goal
-        return {"tick": self.tick, "paused": self.paused, "frame_count": 100}
+        return {"tick": self.tick, "paused": self.paused, "frame_count": self.frame_count}
     def _wait_paused_native_view(self, bridge, before, *, expected_tick):
         status = self.status()
         if status["tick"] != expected_tick: raise RuntimeError("Wrong tick")
@@ -166,6 +169,235 @@ class WarmupTests(unittest.TestCase):
         for changed in (dict(native, tick=501), dict(native, paused=False),
                         dict(native, applied_pose=[float("nan")] + native["applied_pose"][1:])):
             with self.assertRaises(RuntimeError): self.c._check_warmed_native_view(changed, frame, 500)
+
+
+class WarmupBoundaryTests(unittest.TestCase):
+    """Exercise real seek, console parsing and native pause guards together."""
+
+    def setUp(self):
+        from test_controller import CountedEvent
+        from test_native_controller import NativeControllerTests
+        NativeControllerTests.setUp(self)
+        self.bridge.start_flight = Mock()
+        self.project.start_tick = 72108
+        self.console.tick = 72108
+        self.console.values["demo_usefastgoto"] = 1
+        self.controller._stop_event = CountedEvent(self.clock, 100000)
+        self.controller._last_seek_details = dict(
+            target_tick=72108, verified=True, game_tick_offset=6726)
+        self.armed = False
+        self.samples = []
+        self.current = None
+        self.status_reads = []
+        self.on_status = None
+        self.on_console = None
+        request_item = self.console._request_item
+
+        def item(command):
+            if command.startswith("demo_gototick "):
+                target = int(command.split()[1])
+                self.console.goto_seek_output = (
+                    f"Demo Skipping: skipping to demo tick {target} "
+                    f"(game tick {target + 6726}) from full packet 69121")
+            if command.startswith("demo_pauseatservertick "):
+                self.armed = True
+            if command == "demo_goto":
+                if self.on_console is not None and self.armed:
+                    self.on_console()
+                return (f"Currently playing {self.console.tick} of 112173 ticks. "
+                        f"Minutes:29.21 File:{self.console.demo_name}")
+            return request_item(command)
+
+        self.console._request_item = item
+        status = self.bridge.status
+
+        def render():
+            if self.armed:
+                if self.samples:
+                    self.current = self.samples.pop(0)
+                if self.current is not None:
+                    self.console.tick, self.console.paused, fresh = self.current
+                    self.bridge.freeze_frames = not fresh
+                if self.on_status is not None:
+                    self.on_status()
+            result = status()
+            if self.armed:
+                self.status_reads.append(dict(result))
+            return result
+
+        self.bridge.status = render
+        self.stack.enter_context(patch("dolly.replay_warmup.packet_index", return_value=None))
+        self.stack.enter_context(patch("dolly.controller.time.sleep", self.clock.advance))
+        # Spectator/HUD handoff has separate transaction coverage; keep this
+        # regression on replay pause timing and the actual transport guards.
+        self.stack.enter_context(patch.object(self.controller, "_detach_spectator_view"))
+
+    def warm(self):
+        return self.controller._warm_replay_for_shot(self.project, 0, {"tick": 72108})
+
+    def assert_no_corrective_seek_or_recording(self):
+        self.assertEqual([r for r in self.console.requests if r.startswith("demo_gototick ")],
+                         ["demo_gototick 71980 0 1"])
+        self.assertNotIn("native.play", self.bridge.events)
+        self.assertIsNone(self.controller._recording_warmup)
+        self.assertIsNone(self.controller._recording_replay)
+
+    def test_transient_running_tick_ahead_waits_for_two_fresh_exact_paused_frames(self):
+        self.samples = [(72109, False, True), (72108, True, True)]
+        original = self.project.to_dict()
+        result = self.warm()
+        self.assertTrue(result["replay_warmup"]["verified"])
+        exact = [r for r in self.status_reads if r["paused"] and r["tick"] == 72108]
+        self.assertGreaterEqual(len({r["frame_count"] for r in exact}), 2)
+        confirmation = result["replay_warmup"]["pause_confirmation"]
+        self.assertEqual(confirmation["fresh_frames"], 2)
+        self.assertGreater(confirmation["last_frame"], confirmation["first_frame"])
+        self.assertEqual(confirmation["tick"], 72108)
+        observation = result["replay_warmup"]["pause_observation"]
+        self.assertEqual(observation["first_ahead"]["tick"], 72109)
+        self.assertEqual(observation["last_ahead"]["tick"], 72109)
+        self.assertEqual(observation["console_tick"], 72108)
+        self.assertEqual(self.console.tick, 72108)
+        self.assertEqual(self.project.to_dict(), original)
+        self.assertNotIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_transient_paused_tick_ahead_does_not_relax_the_exact_endpoint(self):
+        self.samples = [(72109, True, True), (72108, True, True)]
+        result = self.warm()
+        self.assertEqual(result["replay_warmup"]["paused_tick"], 72108)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_persistent_wrong_tick_is_rejected_and_owned_goal_is_disarmed(self):
+        self.samples = [(72109, True, True)]
+        with self.assertRaises(RuntimeError):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assertFalse(self.controller._replay_warmup_active)
+        self.assertLess(self.clock.now, 9)
+        self.assert_no_corrective_seek_or_recording()
+
+    def check_interrupted_confirmation(self, interrupt):
+        self.samples = [(72108, True, True), interrupt,
+                        (72108, True, True), (72108, True, True)]
+        result = self.warm()
+        exact = [r for r in self.status_reads if r["paused"] and r["tick"] == 72108]
+        confirmation = result["replay_warmup"]["pause_confirmation"]
+        self.assertEqual(confirmation["first_frame"], exact[1]["frame_count"])
+        self.assertEqual(confirmation["last_frame"], exact[2]["frame_count"])
+
+    def test_running_sample_between_exact_frames_resets_confirmation(self):
+        self.check_interrupted_confirmation((72108, False, True))
+
+    def test_wrong_tick_between_exact_frames_resets_confirmation(self):
+        self.check_interrupted_confirmation((72109, True, True))
+
+    def test_repeated_same_frame_at_exact_tick_does_not_prove_a_settled_view(self):
+        self.samples = [(72108, True, False)]
+        with self.assertRaises(RuntimeError):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_console_tick_mismatch_rejects_otherwise_exact_native_endpoint(self):
+        self.samples = [(72108, True, True)]
+        self.on_console = lambda: setattr(self.console, "tick", 72109)
+        with self.assertRaisesRegex(RuntimeError, "missed the shot start"):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_cancel_during_endpoint_observation_disarms_goal_without_recording(self):
+        self.samples = [(72109, False, True)]
+        self.on_status = self.controller._stop_event.set
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_replay_change_does_not_send_cleanup_commands_to_the_other_replay(self):
+        self.samples = [(72109, False, True)]
+        self.on_status = lambda: setattr(self.console, "demo_name", "different.dem")
+        with self.assertRaisesRegex(RuntimeError, "identity changed|different"):
+            self.warm()
+        self.assertNotIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_process_exit_prevents_later_native_reads_and_console_cleanup_writes(self):
+        self.samples = [(72109, False, True)]
+        self.on_status = lambda: setattr(self.process, "poll", lambda: 0)
+        with self.assertRaises(RuntimeError):
+            self.warm()
+        self.assertEqual(len(self.status_reads), 1)
+        self.assertNotIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_invalid_native_state_is_guarded_before_missing_telemetry_fields_are_read(self):
+        self.samples = [(72109, False, True)]
+        status = self.bridge.status
+        def fault():
+            current = status()
+            if self.armed:
+                return {"state": "fault", "demo_name": self.console.demo_name,
+                        "message": "Simulated guarded native fault"}
+            return current
+        self.bridge.status = fault
+        with self.assertRaisesRegex(RuntimeError, "guarded native fault"):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_changed_session_prevents_following_console_or_cleanup_writes(self):
+        from types import SimpleNamespace
+        self.samples = [(72108, True, True)]
+        self.on_status = lambda: setattr(self.controller, "_session", SimpleNamespace(
+            process=self.process, native=self.bridge, pid=1234))
+        with self.assertRaisesRegex(RuntimeError, "session changed"):
+            self.warm()
+        self.assertNotIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_session_change_during_final_console_read_is_rejected_without_cleanup_writes(self):
+        from types import SimpleNamespace
+        self.samples = [(72108, True, True)]
+        self.on_console = lambda: setattr(self.controller, "_session", SimpleNamespace(
+            process=self.process, native=self.bridge, pid=1234))
+        with self.assertRaisesRegex(RuntimeError, "session changed"):
+            self.warm()
+        self.assertNotIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_cancel_during_final_console_read_keeps_recording_unprepared(self):
+        self.samples = [(72108, True, True)]
+        self.on_console = self.controller._stop_event.set
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_native_movement_during_console_confirmation_is_rejected(self):
+        self.samples = [(72108, True, True)]
+        self.on_console = lambda: setattr(self, "current", (72109, True, True))
+        with self.assertRaisesRegex(RuntimeError, "moved after"):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_active_recorder_at_final_handoff_is_rejected(self):
+        self.samples = [(72108, True, True)]
+        self.on_console = lambda: setattr(self.controller, "_recording_pending", True)
+        with self.assertRaisesRegex(RuntimeError, "before recording"):
+            self.warm()
+        self.assertIn("demo_resume; demo_pause", self.console.requests)
+        self.assert_no_corrective_seek_or_recording()
+
+    def test_goal_cleanup_failure_is_not_silently_swallowed(self):
+        self.samples = [(72109, False, True)]
+        self.on_status = self.controller._stop_event.set
+        self.console.fail_commands.add("demo_resume; demo_pause")
+        with self.assertRaisesRegex(RuntimeError, "console failure"):
+            self.warm()
+        self.assert_no_corrective_seek_or_recording()
 
 
 class WarmRecordingHandoffTests(unittest.TestCase):

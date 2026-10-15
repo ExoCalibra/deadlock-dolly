@@ -1,11 +1,11 @@
 {
   "format": 1,
-  "description": "Build6782 reviewed offline. Retained editing baseline: core game identity, schema/engine interfaces, relevant HUD CSS and complete hero data verified; renderer/scene/particle support code is identical to6779. Local mod-manager performance settings are excluded. Journaled exact restoration and approved addon mounts remain. Live acceptance is recorded separately.",
+  "description": "Build6785 reviewed offline. Retained editing baseline: complete camera/startup/observer consumers and named schema, relevant HUD CSS, hero identity/model/selectability and portraits verified. Engine/tier0/scene/renderer/audio/particle/schema modules are identical to6782. Local mod-manager settings are excluded. Journaled exact restoration remains; live acceptance is separate.",
   "gameinfo_sha256": "1037523d910f8ff277538175fbbd09fae73346e3e511989886ad6ce13a677424",
   "modules": {
-    "citadel/bin/win64/client.dll": "b7deb2d934614b2b9a4e3edf6cf7bfb954b9f1436aadb0bf07b24f07bb7d5515",
+    "citadel/bin/win64/client.dll": "fadaf78301af6d47d286de6199d1fd0aba7053f6ab597afa3de55369f72424c6",
     "bin/win64/engine2.dll": "34901dc81a2135bb5a7932b47278b2b21550d01513924a3072b244a89bf74110",
     "bin/win64/tier0.dll": "5c9fc2b512afeb3b523c3e2093102300e28119035b32b6a12f12bdab38a3f17d"
   },
-  "unlocker_server_sha256": "a0a92d06d5f4ffca7f5d604fac4a8b76c5eac3f288e0cdd8d2e7dcd43787a5e8"
+  "unlocker_server_sha256": "d81b26bb1301866db23aed2866bfb2ae57acfaad8932e964b0b33d0bec562b15"
 }

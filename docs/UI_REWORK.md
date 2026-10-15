@@ -1,45 +1,66 @@
-# In-game UI rework
+# In-game editor
 
-The standard editor opens the reworked native interface with Camera, Follow,
-Bone Picker, Look and Export tabs. Each tab uses one continuous surface.
-The established Dolly launch, Steam checks and replay startup sequence are
-retained.
+The main panel has five tabs: **Camera**, **Follow**, **Bone Picker**, **Look**
+and **Export**. Your saved cameras are in **Campaths** on the left, with the
+timeline and playback controls below.
 
-F8 opens or closes the main menu, campaths sidebar and timeline together. Opening
-them again restores their positions and sizes. Camera path guides and the framing
-grid remain available while flying with the panels closed. F9 still returns to
-Deadlock's own replay controls.
+The UI rework and saved layouts were contributed by
+[@tbhtho](https://github.com/tbhtho).
 
-Starting a cinematic uses the existing flight handoff and hides the workspace;
-F8 can show all three panels again during playback without interrupting the
-shot. The separate, temporary Hide UI checkbox is no longer needed.
+## Show or hide the panels
 
-Drag the main menu or campaths header at any time; both show the four-arrow move
-cursor when hovered or dragged. Layout > Arrange panels enables timeline
-movement, section placement, and width/height resizing. Changes
-persist separately from camera projects. Classic arrangement restores campaths
-left, the menu in the middle and the timeline at the bottom. Reduce motion
-disables optional transitions.
+Press **F8** to hide the main panel, Campaths and the timeline together. Press it
+again to bring them back in the same positions and sizes. Path guides and the
+framing grid can stay visible with the panels hidden; path guides hide during
+playback.
 
-Campaths use the compact Camera / Arrive / Aspect / Bank table. Previous and
-Forward select and view saved cameras around Seek here. Play cinematic prepares
-the shot and starts automatically, with no extra keypress. The current official
-replay-effect settling and recording preparation remain intact.
+Starting **Play cinematic** hides the panels automatically. You can press F8 to
+bring them back while the shot keeps playing. **F9** opens Deadlock's own replay
+controls.
 
-The timeline's **Pause after capture** checkbox sits beside Resume/Pause. Leave
-it off to keep the replay running when capturing cameras, or turn it on to pause
-after each capture. The choice is remembered between sessions and applies to
-the in-game Capture/Replace buttons and capture shortcut.
+## Arrange your workspace
 
-The replay timeline starts at full range for a newly loaded replay. It shows
-only the selected player's kills in blue and deaths in red; hovering the name
-shows full-replay totals. Selecting a player moves independent native freecam
-near that player's current position without resuming, seeking or reloading the
-replay. Unavailable targets are rejected. The bundled replay reader indexes the
-recorded events in the background.
-If a hero is absent or their view is still settling, Dolly keeps the camera and
-replay unchanged and shows a status notice.
+Drag the main panel or Campaths by its header. The four-arrow cursor shows where
+you can grab it; you do not need to turn on an arrangement mode first.
 
-When an owned game session exits, the launcher returns and clears dead runtime
-state while preserving the open shot and history. Compatibility contracts and
-the official backend are based on 0.6.48-alpha (6b09617).
+Open **Layout** for the other layout controls:
+
+- **Arrange panels** lets you move the timeline, resize panels and rearrange
+  sections within a tab.
+- **Classic arrangement** puts Campaths on the left, the main panel in the
+  middle and the timeline at the bottom.
+- **Reset sections in this tab** restores the section order for the current tab.
+- **Reduce motion** turns off optional UI transitions.
+
+Layout changes save automatically, separately from your camera projects.
+
+## Capture and view cameras
+
+In-game **Capture** keeps the replay running by default. To pause after each
+capture, check **Pause after capture** beside **Resume/Pause** on the timeline.
+Dolly remembers your choice between sessions. It also applies to in-game
+**Replace** and the capture shortcut.
+
+Campaths lists each saved camera's arrival time, aspect ratio and bank. While
+paused, use **Previous** and **Forward** to view the cameras on either side of
+the current selection. **Seek here** applies the selected point on the Campaths
+timeline, or seeks to the selected tick when the timeline is in Replay mode.
+
+**Play cinematic** prepares and starts the shot. You do not need to press Play
+again when preparation finishes.
+
+## Find a player or a replay moment
+
+A newly loaded replay starts with the full timeline in view. Dolly reads the
+replay events in the background, then shows the selected player's kills in blue
+and deaths in red. Hover their name for full-replay totals. Click an event marker
+to seek to it; zoom in to separate markers that are close together.
+
+To move the free camera near a player, pause the replay and use the arrows beside
+their name, or click the name to return to that player. Detach a Bone Picker
+camera first if one is active. This moves the free camera without changing the
+replay tick or resuming playback. If the hero is absent or their view is still
+settling, Dolly leaves the camera where it is and shows a status message.
+
+When you close the game, Dolly returns to the launcher and keeps your open shot
+and editing history.
