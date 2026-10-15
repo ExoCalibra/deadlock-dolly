@@ -10,6 +10,8 @@ from . import editor_view
 
 
 def _bridge(app):
+    if app.controller.status().get('game_running') is False:
+        return None
     return app.controller._native_bridge()
 
 
@@ -136,9 +138,11 @@ def configure(app):
     if callable(publish_cameras) and history is not None:
         from .editor_wire import CAMERA_LIST_COUNT
         first = getattr(app, "_native_camera_page", 0)
-        first = min(first, max(0, (count - 1) // CAMERA_LIST_COUNT) * CAMERA_LIST_COUNT)
-        if selected != getattr(app, "_native_camera_selected", selected) and not first <= selected < first + CAMERA_LIST_COUNT:
-            first = selected // CAMERA_LIST_COUNT * CAMERA_LIST_COUNT
+        first = min(first, max(0, count - CAMERA_LIST_COUNT))
+        if first % CAMERA_LIST_COUNT:
+            first = max(0, count - CAMERA_LIST_COUNT)
+        if selected != getattr(app, "_native_camera_selected", None) and not first <= selected < first + CAMERA_LIST_COUNT:
+            first = min(selected // CAMERA_LIST_COUNT * CAMERA_LIST_COUNT, max(0, count - CAMERA_LIST_COUNT))
         app._native_camera_selected = selected
         app._native_camera_page = first
         camera_values = (history.revision, first, history.can_undo, history.can_redo)
@@ -147,7 +151,25 @@ def configure(app):
             publish_cameras(app.project, history.revision, first,
                             can_undo=history.can_undo, can_redo=history.can_redo)
             app._native_cameras_bridge, app._native_cameras_cache = bridge, camera_values
+    publish_lite = getattr(bridge, "configure_lite_replay", None)
+    if callable(publish_lite) and history is not None:
+        signature = (history.revision, app._native_camera_page, app.project.start_tick,
+                     app.project.tick_rate, status.get("total_ticks"))
+        if getattr(app, "_lite_replay_cache", None) != signature or getattr(app, "_lite_replay_bridge", None) is not bridge:
+            publish_lite(app.project, history.revision, app._native_camera_page, status.get("total_ticks"))
+            app._lite_replay_cache, app._lite_replay_bridge = signature, bridge
     publish_grid = getattr(bridge, "configure_framing_grid", None)
+    publish_events = getattr(bridge, 'configure_replay_events', None)
+    if callable(publish_events) and active:
+        from .replay_events import ReplayEventReader
+        reader = getattr(app, '_replay_event_reader', None)
+        if reader is None:
+            reader = app._replay_event_reader = ReplayEventReader()
+        index = reader.snapshot(getattr(app.controller, '_demo', None))
+        if (getattr(app, '_replay_events_cache', None) != index
+                or getattr(app, '_replay_events_bridge', None) is not bridge):
+            publish_events(index)
+            app._replay_events_cache, app._replay_events_bridge = index, bridge
     if callable(publish_grid):
         grid_binding = settings.action_bindings.get("framing_grid")
         grid = (active, bool(settings.framing_grid_enabled), grid_binding)

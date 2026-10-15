@@ -1292,7 +1292,8 @@ class DollyApp:
         self._advance_layer_pipeline()
 
     def _refresh_reshade(self, controller_status, video_active=False):
-        bridge = self.controller._native_bridge()
+        bridge = (None if controller_status.get('game_running') is False
+                  else self.controller._native_bridge())
         ready = recording_ready(controller_status)
         try:
             shade = bridge.media_status().get("reshade", {}) if bridge is not None else {}
@@ -1850,12 +1851,15 @@ class DollyApp:
             game, demo = self.game_path.get().strip(), self.demo_path.get().strip()
             if not game or not demo:
                 raise ValueError("Choose your Deadlock executable and a .dem replay first.")
-            options = self.launch_options.get().strip()
+            from .lite_mode import launch_options_for_mode
+            # Discard the retired UI flag from older preferences. Our rebuilt
+            # helper uses the same editor for every normal native launch.
+            options = launch_options_for_mode(self.launch_options.get().strip(), False)
             parse_launch_options(options)
             from .graphics_profiles_ui import launch_options as graphics_launch_options
             graphics_options = graphics_launch_options(self)
             settings = replace(self.app_settings, game_path=game, demo_path=demo,
-                               replay_folder=self.replay_folder.get().strip(), launch_options=options)
+                               replay_folder=self.replay_folder.get().strip(), launch_options=self.launch_options.get().strip())
             cancel = threading.Event()
             protocol = "vconsole" if self.protocol.get() == "VConsole" else "netcon"
             native = self.camera_driver.get() == "Native (experimental)"
@@ -1869,12 +1873,16 @@ class DollyApp:
                 self.app_settings = settings
                 self._editing_started(result)
             if self._submit("Starting replay editor", start, complete):
+                if native:
+                    self._launch_minimized = True
+                    self.root.iconify()
                 self.startup_cancel = cancel
                 self.startup_progress.set("Launching Deadlock and preparing the hideout…")
                 self.startup_bar.start(15)
         self._guard("Start replay editor", operation)
 
     def _editing_started(self, result):
+        self._launch_minimized = False
         self.startup_cancel = None
         self.startup_bar.stop()
         # Keep the driver the user selected; the live indicator reports which
@@ -2690,6 +2698,7 @@ class DollyApp:
                     return
         try:
             status = self.controller.status()
+            self._handle_game_exit(status)
             self.playing = bool(status.get("playing"))
             connected = bool(status.get("connected"))
             self._poll_connected = connected
@@ -2850,6 +2859,33 @@ class DollyApp:
             f"Renderer buffer queue near capacity ({pending:,}/{capacity:,}). "
             "Dolly paused its in-game drawing; stop replay skipping or playback to recover.")
 
+    def _handle_game_exit(self, status):
+        session = getattr(self.controller,'_session',None)
+        if status.get('game_running'):
+            self._last_game_session = session
+            return
+        if session is None or getattr(self,'_last_game_session',None) is not session:
+            return
+        if getattr(self,'_game_exit_shown',None) is not session:
+            self._game_exit_shown = session
+            self.playing = False
+            self.preview_attach = False
+            self._bone_picker_context = None
+            self._attach_snap_pending = False
+            self.native_editor_active = False
+            self._native_editor_bridge = self._native_visualization_bridge = None
+            self._native_visualization_cache = None
+            self._launch_minimized = False
+            if self.root.state() == 'iconic':
+                self.root.deiconify()
+            if self.startup_cancel is not None:
+                self.startup_cancel.set()
+        if not self.busy and getattr(self,'_game_exit_cleanup',None) is not session:
+            if getattr(self,'_base_capture',None) is not None:
+                self._clear_layer_pipeline()
+            if self._submit('Clearing closed game session',self.controller.recover_dead_session):
+                self._game_exit_cleanup = session
+
     def _set_driver_indicator(self, backend, running):
         """Show the camera driver actually in use, live once a session runs."""
         indicator = getattr(self, "driver_indicator", None)
@@ -2880,6 +2916,9 @@ class DollyApp:
         on every slider move) would stack modal dialogs and leave the window
         disabled behind them, forcing a hard close.
         """
+        if getattr(self, "_launch_minimized", False) and not self.closed:
+            self._launch_minimized = False
+            self.root.deiconify()
         if isinstance(exc, PreloadUnavailableError) and not self.closed:
             self._error(title, exc, offer_unverified_replay=True)
         else:

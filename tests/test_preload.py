@@ -233,6 +233,25 @@ class PreloadTests(unittest.TestCase):
                 preload._post_intro_escape(SimpleNamespace(pid=42, running=True))
         api.PostMessageW.assert_not_called()
 
+    def test_focus_restores_only_the_owned_game_without_sending_keys(self):
+        api = Mock()
+        session = SimpleNamespace(pid=42, running=True)
+        api.GetWindowTextW.side_effect = lambda hwnd, text, size: setattr(text, 'value', 'Deadlock') or 8
+        api.GetWindowThreadProcessId.side_effect = lambda hwnd, owner: setattr(owner._obj, 'value',
+                                                                              42 if hwnd == 100 else 77) or 1
+        api.IsWindowVisible.return_value = True
+        api.IsIconic.return_value = True
+        api.GetForegroundWindow.return_value = 999
+        api.SetForegroundWindow.return_value = True
+        api.EnumWindows.side_effect = lambda visit, _: visit(200, 0) and visit(100, 0)
+        decorator = lambda *args: lambda function: function
+        with patch('dolly.preload.ctypes.WinDLL', return_value=api, create=True), \
+                patch('dolly.preload.ctypes.WINFUNCTYPE', side_effect=decorator, create=True):
+            self.assertTrue(preload._focus_owned_game_window(session))
+        api.ShowWindow.assert_called_once_with(100, 9)
+        api.SetForegroundWindow.assert_called_once_with(100)
+        api.PostMessageW.assert_not_called()
+
 
 class GameFileCacheTests(unittest.TestCase):
     def setUp(self):

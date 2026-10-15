@@ -68,6 +68,8 @@ class Stage1GuiTests(unittest.TestCase):
         app.startup_progress = Var('')
         app.startup_cancel = None
         app.cancel_startup_button = Mock()
+        app.root.iconify = Mock()
+        app.root.deiconify = Mock()
         app._disable_external_input = Mock()
         app.controller.start_editing = Mock(return_value={'startup_stage': 'editing_ready'})
         app._editing_started = Mock()
@@ -89,6 +91,7 @@ class Stage1GuiTests(unittest.TestCase):
         self.assertFalse(kwargs['cancel_event'].is_set())
         self.assertEqual(save.call_args.args[0].demo_path, args[1])
         app._disable_external_input.assert_called_once()
+        app.root.iconify.assert_called_once_with()
         app._editing_started.assert_called_once()
         self.assertEqual(h.errors, [])
 

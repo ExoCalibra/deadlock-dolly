@@ -49,6 +49,13 @@ EXTRA_ACTIONS += ("take_screenshot",)
 # action-ID ABI is unchanged. Ids 99+ are reserved for this feature.
 EXTRA_ACTIONS += ("object_picker_open", "object_picker_cancel", "object_place",
                   "object_select", "object_delete", "object_transform")
+EXTRA_ACTIONS += ("save_shot", "seek_replay_tick", "clear_camera_path")
+EXTRA_ACTIONS += ("focus_replay_player",)
+EXTRA_ACTIONS += ("prepare_cinematic",)
+
+# Optional completion signal in the unused mapping tail; existing offsets stay fixed.
+CINEMATIC_OFFSET = 2 * 1024 * 1024 + 60000
+CINEMATIC_STATUS = struct.Struct("<8s5I")
 
 CAMERA_LIST_OFFSET = 2 * 1024 * 1024 + 23360
 CAMERA_LIST_COUNT = 32
@@ -121,7 +128,8 @@ def pack_camera_list(sequence, project, revision, first=0, *, can_undo=False, ca
     revision = _uint(revision, 'camera list revision')
     first = _uint(first, 'camera list page')
     total = len(project.keyframes)
-    if not revision or first % CAMERA_LIST_COUNT or first > max(0, total - 1):
+    if (not revision or first > max(0, total - 1)
+            or first % CAMERA_LIST_COUNT and first != max(0, total - CAMERA_LIST_COUNT)):
         raise ValueError('Invalid camera list page or revision')
     keys = project.keyframes[first:first + CAMERA_LIST_COUNT]
     flags = int(bool(can_undo)) | int(bool(can_redo)) << 1

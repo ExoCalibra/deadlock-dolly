@@ -82,6 +82,8 @@ _VALUES = {"-w": ("-w", 320, 16384), "-width": ("-w", 320, 16384),
 LAUNCH_OPTIONS_HELP = "Additional options: -windowed, -fullscreen, -noborder, -w WIDTH, -h HEIGHT, -refresh HZ. Dolly always adds -dev -insecure -console."
 
 
+_SWITCHES["-dolly-lite"] = "-dolly-lite"
+
 def parse_launch_options(value: str) -> list[str]:
     """Return validated argv additions; never evaluate a shell or game command.
 

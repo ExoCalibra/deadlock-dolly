@@ -33,6 +33,7 @@ from .launch_errors import LaunchError
 from .file_ops import _atomic_write
 from .keyvalues import _Token, _Entry, _tokens, _parse, _named
 from .runtime import application_root, resource_root, external_program_environment
+from .steam_client import prepare_steam_client
 from .native_bridge import NativeBridge, ABI as NATIVE_ABI
 from . import __version__ as DOLLY_VERSION
 from .compatibility import (
@@ -780,6 +781,7 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
     recover_pending(paths.root)
     if "steam.exe" not in processes:
         raise LaunchError("Open Steam and sign in before launching Deadlock through Dolly.")
+    steam_readiness = prepare_steam_client(paths.game_dir)
     try:
         original_data = paths.gameinfo.read_bytes()
         original_text = original_data.decode("utf-8")  # Validate before preparing any replacement.
@@ -830,6 +832,7 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         command = build_command(paths, overlay, port, demo, protocol, launch_options, native=native)
         metadata = {**marker, "command": command, "selected_demo": str(demo) if demo is not None else None, "port": port, "protocol": protocol, "dolly_version": DOLLY_VERSION, "overlay_dir": str(overlay), "unlocker_version": "v0.5.2-dolly-build-6782", "unlocker_sha256": UNLOCKER_SHA256, "validation": "Windows game startup and selected console protocol require a local probe.", "backup_name": "original.gameinfo.gi", "patched_sha256": hashlib.sha256(patched_data).hexdigest(), "original_mode": stat.S_IMODE(paths.gameinfo.stat().st_mode), "config_state": "prepared"}
         metadata["editing_gameinfo_sha256"] = hashlib.sha256(editing.encode("utf-8")).hexdigest()
+        metadata["steam_client"] = steam_readiness
         metadata["carried_addon_mounts"] = [{"key": key, "path": path} for key, path in addon_mounts]
         if native:
             metadata["native_camera"] = {"abi": NATIVE_ABI, "game_sha256": NATIVE_GAME_SHA256,
@@ -863,6 +866,8 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
                 if native:
                     from .settings import reshade_config_path
                     environment = dict(os.environ if environment is None else environment)
+                    environment["SteamAppId"] = str(STEAM_APP_ID)
+                    environment["SteamGameId"] = str(STEAM_APP_ID)
                     environment["RESHADE_DISABLE_GRAPHICS_HOOK"] = "1"
                     environment["RESHADE_BASE_PATH_OVERRIDE"] = str(reshade_config_path().parent)
                     environment["RESHADE_DISABLE_LOADING_CHECK"] = "1"

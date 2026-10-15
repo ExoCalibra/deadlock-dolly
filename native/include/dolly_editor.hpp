@@ -133,7 +133,12 @@ enum class EditorAction : std::uint32_t {
     ObjectPlace,
     ObjectSelect,
     ObjectDelete,
-    ObjectTransform
+    ObjectTransform,
+    SaveShot,
+    SeekReplayTick,
+    ClearCameraPath,
+    FocusReplayPlayer,
+    PrepareCinematic
 };
 static_assert(static_cast<std::uint32_t>(EditorAction::TakeScreenshot) == 98,
               "Stable screenshot action ID");
@@ -303,6 +308,15 @@ struct EditorFollowConfig {
     double distance, shoulder, height;
 };
 constexpr std::size_t kEditorCameraListOffset = 2 * 1024 * 1024 + 23360;
+constexpr std::size_t kEditorCinematicOffset = 2 * 1024 * 1024 + 60000;
+struct EditorCinematicStatus {
+    char magic[8];
+    std::uint32_t sequence, abi, token, revision, state;
+};
+static_assert(sizeof(EditorCinematicStatus) == 28, "Python cinematic completion layout");
+static_assert(kEditorCinematicOffset + sizeof(EditorCinematicStatus) <= 2 * 1024 * 1024 + 61440,
+              "Cinematic completion fits the existing mapping");
+bool editor_cinematic_status(EditorCinematicStatus& out) noexcept;
 constexpr std::size_t kEditorCameraListCount = 32;
 struct EditorCameraRow {
     double time, aspect, roll;
@@ -430,7 +444,8 @@ inline bool valid_editor_object_config(const EditorObjectConfig& c) noexcept {
 inline bool valid_editor_camera_list(const EditorCameraList& list) noexcept {
     if (std::memcmp(list.magic, "DLYCAMS1", 8) || list.abi != 1 || !list.revision ||
         list.reserved || (list.flags & ~3u) || list.count > kEditorCameraListCount ||
-        list.first % kEditorCameraListCount || list.first > list.total ||
+        (list.first % kEditorCameraListCount && list.first !=
+            (list.total > kEditorCameraListCount ? list.total - kEditorCameraListCount : 0)) || list.first > list.total ||
         (list.total && list.first == list.total) ||
         list.count != std::min<std::uint32_t>(list.total - list.first, kEditorCameraListCount))
         return false;
@@ -451,7 +466,8 @@ inline bool valid_editor_camera_action(const EditorCameraList& list, EditorActio
         return value == 0 && (list.flags & (action == EditorAction::UndoShot ? 1u : 2u));
     if (action == EditorAction::CameraPage)
         return value >= 0 && value < list.total &&
-               std::fmod(value, double(kEditorCameraListCount)) == 0;
+               (std::fmod(value, double(kEditorCameraListCount)) == 0 ||
+                value == (list.total > kEditorCameraListCount ? list.total - kEditorCameraListCount : 0));
     if (action == EditorAction::SetCameraTime || action == EditorAction::SetCameraRoll)
         return value >= list.first && value < list.first + list.count;
     return (action == EditorAction::SelectCamera || action == EditorAction::ViewCamera ||

@@ -32,6 +32,30 @@ class Memory(bytearray):
 
 
 class NativeBridgeTests(unittest.TestCase):
+    def test_cinematic_completion_uses_reserved_tail_and_even_sequence(self):
+        from dolly import editor_wire as wire
+        self.assertLessEqual(wire.CINEMATIC_OFFSET + wire.CINEMATIC_STATUS.size, nb.MAPPING_BYTES)
+        prefix = bytes(self.memory[:wire.CINEMATIC_OFFSET])
+        for sequence, state in [(2, 1), (4, 2), (6, 3)]:
+            self.bridge.configure_editor_cinematic(42, 7, state)
+            block = wire.CINEMATIC_STATUS.unpack_from(self.memory, wire.CINEMATIC_OFFSET)
+            self.assertEqual(block, (b'DLYCIN01', sequence, 1, 42, 7, state))
+            self.assertEqual(bytes(self.memory[:wire.CINEMATIC_OFFSET]), prefix)
+        with self.assertRaises(ValueError):
+            self.bridge.configure_editor_cinematic(0, 7, 2)
+
+    def test_shader_notice_survives_metadata_refresh_and_clears(self):
+        from dolly.lite_mode import REPLAY_INFO, REPLAY_INFO_OFFSET
+        self.bridge.configure_shader_loading(True)
+        def flags():
+            return REPLAY_INFO.unpack(self.memory[REPLAY_INFO_OFFSET:REPLAY_INFO_OFFSET+REPLAY_INFO.size])[6]
+        self.assertEqual(flags() & 4, 4)
+        self.bridge.configure_lite_replay(self.project, 7, total_ticks=10000)
+        self.assertEqual(flags() & 4, 4)
+        self.bridge.configure_shader_loading(False)
+        self.assertEqual(flags() & 4, 0)
+        self.assertEqual(flags() & 2, 2)
+
     def test_optional_follow_anchor_diagnostics_and_protocol_refusal(self):
         self.publish_status()
         self.assertIsNone(self.bridge.status()["follow_anchor_diagnostics"])

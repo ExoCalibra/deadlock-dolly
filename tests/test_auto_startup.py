@@ -52,6 +52,55 @@ class AutoStartupTests(unittest.TestCase):
              patch("dolly.controller.ConsoleClient", return_value=self.console):
             return self.controller.start_editing("installation", self.demo, **kwargs)
 
+    def test_known_steam_startup_failure_retries_once(self):
+        original_wait = self.controller._startup_wait
+        console_waits = 0
+        def wait(check, label, cancelled, **kw):
+            nonlocal console_waits
+            if label == 'waiting for the game console':
+                console_waits += 1
+                if console_waits == 1:
+                    self.session.process = SimpleNamespace(poll=lambda:0)
+                    raise RuntimeError('Deadlock closed during Steam startup')
+                self.session.process = SimpleNamespace(poll=lambda:None)
+            return original_wait(check,label,cancelled,**kw)
+        with patch.object(self.controller,'_startup_wait',side_effect=wait),              patch.object(self.controller,'_steam_startup_failure',return_value='Steam HTML startup failed'):
+            self.assertEqual(self.start()['startup_stage'],'editing_ready')
+        self.assertEqual(console_waits,2)
+        self.assertEqual(sum(c.startswith('playdemo ') for c in self.console.sent),1)
+
+    def test_known_steam_failure_does_not_loop_or_retry_an_active_replay(self):
+        self.controller._session=self.session
+        self.session.process=SimpleNamespace(poll=lambda:0)
+        self.session.session_dir=Path(self.temp.name)
+        (self.session.session_dir/'game_stdout.log').write_text('CSteamHTMLSurface::Init - failing, no Steam process')
+        self.controller._state['startup_stage']='waiting_hideout'
+        self.controller._replay_requested=False
+        self.assertIn('Steam',self.controller._steam_startup_failure())
+        self.controller._replay_requested=True
+        self.assertIsNone(self.controller._steam_startup_failure())
+        with patch.object(self.controller,'_startup_wait',side_effect=RuntimeError('closed')),              patch.object(self.controller,'_steam_startup_failure',return_value='Steam failed'):
+            with self.assertRaisesRegex(RuntimeError,'closed'):
+                self.start()
+        self.assertFalse(any(c.startswith('playdemo ') for c in self.console.sent))
+
+    def test_startup_exit_does_not_blame_a_queued_replay(self):
+        self.controller._session = self.session
+        self.session.process = SimpleNamespace(poll=lambda: 1)
+        self.controller._replay_requested = True
+        for context in ('waiting for the game console', 'waiting for hideout readiness'):
+            message = self.controller._game_death_message(context)
+            self.assertIn('before the selected replay was loaded', message)
+            self.assertNotIn('incompatible or incomplete', message)
+
+    def test_shader_notice_tracks_preload_stage_only(self):
+        self.controller._session = self.session
+        self.bridge.configure_shader_loading = MagicMock()
+        self.controller._message('loading', startup_stage='preloading')
+        self.bridge.configure_shader_loading.assert_called_with(True)
+        self.controller._message('ready', startup_stage='preload_ready')
+        self.bridge.configure_shader_loading.assert_called_with(False)
+
     def test_one_click_waits_for_hideout_then_unlocks_once_before_replay(self):
         result = self.start()
         events = self.console.events
@@ -68,6 +117,36 @@ class AutoStartupTests(unittest.TestCase):
         evidence = self.controller._startup_evidence["automatic_readiness"]
         self.assertGreater(evidence["rendered_frame"], evidence["initial_frame"])
         self.assertIn("renderer", self.controller._startup_evidence)
+
+    def test_hideout_console_replacement_reconnects_without_repeating_unlocker(self):
+        original = self.controller._automatic_hideout_check
+        attempts = []
+        def check(frame):
+            attempts.append(frame)
+            if len(attempts)==1:
+                self.console.is_connected=False
+                raise RuntimeError("The console is disconnected")
+            return original(frame)
+        with patch.object(self.controller,'_automatic_hideout_check',side_effect=check), patch.object(self.console,'connect',wraps=self.console.connect) as connect:
+            result=self.start()
+        self.assertEqual(result['startup_stage'],'editing_ready')
+        self.assertEqual(connect.call_count,2)
+        self.assertEqual(self.console.requests.count('cvar_unhide'),1)
+
+    def test_pre_replay_crash_after_console_loss_reports_actual_exit(self):
+        code={'value':None}
+        self.session.process.poll=lambda:code['value']
+        self.controller._alive=lambda:bool(self.controller._session and code['value'] is None)
+        def crash(frame):
+            self.console.is_connected=False
+            code['value']=3221225477
+            raise RuntimeError("The console is disconnected")
+        with patch.object(self.controller,'_automatic_hideout_check',side_effect=crash):
+            with self.assertRaises(RuntimeError) as caught:self.start()
+        self.assertIn('0xC0000005',str(caught.exception))
+        self.assertIn('before the selected replay was loaded',str(caught.exception))
+        self.assertNotIn('incompatible',str(caught.exception))
+        self.assertNotIn('cvar_unhide',self.console.requests)
 
     def test_native_renderer_evidence_records_engine_answers(self):
         self.controller._startup_evidence = {}
@@ -317,6 +396,7 @@ class AutoStartupTests(unittest.TestCase):
     def test_crashed_game_during_startup_reports_exit_code_and_replay_identity(self):
         self.controller._session = self.session
         self.session.process = SimpleNamespace(poll=lambda: 3221225477)
+        self.controller._replay_requested = True
         self.controller._replay_header = {"name": "9-21Routers2.dem", "build_num": 10725,
                                           "map_name": "dl_midtown"}
         with self.assertRaises(RuntimeError) as caught:
@@ -346,6 +426,7 @@ class AutoStartupTests(unittest.TestCase):
     def test_replay_recorded_on_this_build_reports_the_file_not_a_mismatch(self):
         self.controller._session = self.session
         self.session.process = SimpleNamespace(poll=lambda: 3221225477)
+        self.controller._replay_requested = True
         self.controller._replay_header = {"name": "cines.dem", "build_num": 10931,
                                           "map_name": "dl_midtown"}
         self.controller._game_build = 10931
@@ -361,6 +442,7 @@ class AutoStartupTests(unittest.TestCase):
     def test_replay_from_a_different_build_keeps_the_mismatch_guidance(self):
         self.controller._session = self.session
         self.session.process = SimpleNamespace(poll=lambda: 3221225477)
+        self.controller._replay_requested = True
         self.controller._replay_header = {"name": "old.dem", "build_num": 10725,
                                           "map_name": "dl_midtown"}
         self.controller._game_build = 10931

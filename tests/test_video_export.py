@@ -1343,6 +1343,16 @@ class VideoGuiTests(unittest.TestCase):
 
 
 class ReShadeGuiTests(unittest.TestCase):
+    def test_closed_game_refresh_does_not_read_the_stale_native_mapping(self):
+        self.app.controller = Mock()
+        self.app.controller._native_bridge.side_effect = RuntimeError('closed native mapping')
+        self.app.app_settings = AppSettings()
+        self.app.reshade_status_text = Var('')
+        self.app.reshade_disable_button = Mock()
+        self.app.reshade_configure_button = Mock()
+        self.app._refresh_reshade({'game_running': False})
+        self.app.controller._native_bridge.assert_not_called()
+
     def test_library_is_prepared_before_loading_the_selected_runtime(self):
         self.app.controller = Mock()
         self.app.controller.status.return_value = READY

@@ -83,6 +83,44 @@ INTRO_VTABLE = _profile.INTRO_VTABLE
 CLIENT_CODE_SPANS = _profile.CLIENT_CODE_SPANS
 
 
+def _focus_owned_game_window(session):
+    """Activate the game opened by the launch button so its intro can render."""
+    api = ctypes.WinDLL('user32', use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    api.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    api.EnumWindows.restype = wintypes.BOOL
+    api.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    api.GetWindowThreadProcessId.restype = wintypes.DWORD
+    api.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    api.IsWindowVisible.argtypes = [wintypes.HWND]
+    api.IsIconic.argtypes = [wintypes.HWND]
+    api.GetForegroundWindow.restype = wintypes.HWND
+    api.SetForegroundWindow.argtypes = [wintypes.HWND]
+    api.SetForegroundWindow.restype = wintypes.BOOL
+    api.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    windows = []
+
+    def owned(hwnd):
+        pid = wintypes.DWORD()
+        title = ctypes.create_unicode_buffer(256)
+        api.GetWindowTextW(hwnd, title, len(title))
+        return (session.running and api.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                and pid.value == session.pid and title.value == 'Deadlock')
+
+    @callback_type
+    def visit(hwnd, _):
+        if owned(hwnd) and api.IsWindowVisible(hwnd):
+            windows.append(hwnd)
+        return True
+
+    if not api.EnumWindows(visit, 0) or len(windows) != 1 or not owned(windows[0]):
+        return False
+    hwnd = windows[0]
+    if api.IsIconic(hwnd):
+        api.ShowWindow(hwnd, 9)  # Restore only this owned game.
+    return api.GetForegroundWindow() == hwnd or bool(api.SetForegroundWindow(hwnd))
+
+
 def _post_intro_escape(session):
     """Queue one Escape pair to the owned game window, never global input."""
     api = ctypes.WinDLL('user32', use_last_error=True)
@@ -360,6 +398,9 @@ class PreloadMonitor:
         self.intro_sent = True
         _post_intro_escape(self.session)
         return True
+
+    def focus_game_window(self):
+        return _focus_owned_game_window(self.session)
 
     def close(self):
         if self.memory is not None:

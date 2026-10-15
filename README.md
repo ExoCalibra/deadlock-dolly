@@ -4,6 +4,8 @@
 
 # Deadlock Dolly
 
+[In-game UI controls and saved layouts](docs/UI_REWORK.md).
+
 **A camera-path editor for local Deadlock replays.**
 
 [![Download](https://img.shields.io/badge/Download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/cravvnn/deadlock-dolly/releases)

@@ -24,6 +24,7 @@ constexpr unsigned PANEL = 0x1b2126;
 constexpr unsigned PANEL_ALT = 0x232a30;
 constexpr unsigned SCROLL_HOVER = 0x43525c;
 constexpr unsigned SELECTED = 0x2b403f;
+constexpr unsigned SELECTED_BLUE = 0x357cbb;
 constexpr unsigned SELECTED_INK = 0xdff0ed;
 constexpr unsigned STRONG = 0xe6ecee;
 constexpr unsigned TAB_DIM = 0x181d21;

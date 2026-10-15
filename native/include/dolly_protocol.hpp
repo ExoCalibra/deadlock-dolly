@@ -9,8 +9,9 @@ constexpr std::size_t kControlBytes = 2 * 1024 * 1024;
 // (native -> editor) follows at +4096 inside a second 4 KiB page. The Object
 // Picker block occupies one appended 4 KiB page after the legacy tail. Keep
 // this in step with dolly/native_bridge.py MAPPING_BYTES and
-// dolly/object_wire.OBJECT_MAPPING_BYTES.
-constexpr std::size_t kMappingBytes = kControlBytes + 24576 + 4096;
+// dolly/object_wire.OBJECT_MAPPING_BYTES. Replay kill events occupy the final
+// optional 32 KiB block; all prior offsets and the camera payload are unchanged.
+constexpr std::size_t kMappingBytes = kControlBytes + 24576 + 4096 + 32768;
 constexpr std::size_t kPayloadOffset = 1024;
 constexpr std::size_t kMaxPayloadBytes = kControlBytes - kPayloadOffset;
 constexpr char kControlMagic[8] = {'D', 'L', 'Y', 'C', 'A', 'M', '0', '1'};
