@@ -13,6 +13,27 @@ from test_gui_capture import CaptureHarness, Var
 
 
 class Stage1GuiTests(unittest.TestCase):
+    def test_native_capture_and_replace_share_the_saved_pause_preference(self):
+        from dataclasses import replace
+        from dolly.editor_session import dispatch
+        for action in ('capture', 'replace'):
+            for pause in (False, True):
+                with self.subTest(action=action, pause=pause):
+                    h = CaptureHarness()
+                    app = h.app
+                    app.app_settings = replace(app.app_settings, pause_after_capture=pause)
+                    if action == 'replace':
+                        app.project.keyframes = [Keyframe(0, 1, 2, 3, 4, 5, 6)]
+                        h.selected = 0
+                    key = Keyframe(0, 10, 20, 30, 4, 5, 6, aspect_ratio=1.5)
+                    app.controller.capture_native_snapshot = Mock(return_value=(key, 512))
+                    event = {'action': action, 'value': 0,
+                             'pose': [10, 20, 30, 4, 5, 6, 1.5], 'tick': 512, 'paused': False}
+                    dispatch(app, event, Mock())
+                    h.finish()
+                    app.controller.capture_native_snapshot.assert_called_once_with(event, time=0.0, pause=pause)
+                    self.assertEqual(h.errors, [])
+
     def test_confirmed_native_reset_replaces_path_without_desktop_dialog(self):
         from copy import deepcopy
         from dolly.editor_session import dispatch
@@ -68,6 +89,8 @@ class Stage1GuiTests(unittest.TestCase):
         app.startup_progress = Var('')
         app.startup_cancel = None
         app.cancel_startup_button = Mock()
+        app.root.iconify = Mock()
+        app.root.deiconify = Mock()
         app._disable_external_input = Mock()
         app.controller.start_editing = Mock(return_value={'startup_stage': 'editing_ready'})
         app._editing_started = Mock()
@@ -89,6 +112,8 @@ class Stage1GuiTests(unittest.TestCase):
         self.assertFalse(kwargs['cancel_event'].is_set())
         self.assertEqual(save.call_args.args[0].demo_path, args[1])
         app._disable_external_input.assert_called_once()
+        app.root.iconify.assert_not_called()
+        app.root.deiconify.assert_not_called()
         app._editing_started.assert_called_once()
         self.assertEqual(h.errors, [])
 
@@ -117,7 +142,7 @@ class Stage1GuiTests(unittest.TestCase):
         app.controller.capture_native_snapshot = Mock(return_value=(Keyframe(0, 10, 20, 30, 4, 5, 6, aspect_ratio=1.5), 512))
         app._capture_view('append', native_snapshot=snapshot)
         h.finish()
-        app.controller.capture_native_snapshot.assert_called_once_with(snapshot, time=0.0)
+        app.controller.capture_native_snapshot.assert_called_once_with(snapshot, time=0.0, pause=False)
         self.assertEqual(app.project.start_tick, 512)
         self.assertEqual(app.project.keyframes[0].z, 30)
         self.assertEqual(app.project.keyframes[0].aspect_ratio, 1.5)

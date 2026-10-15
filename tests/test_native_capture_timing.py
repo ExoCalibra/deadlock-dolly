@@ -78,8 +78,19 @@ class NativeCaptureTimingTests(unittest.TestCase):
         self.assertEqual((key.x, key.time, tick), (11, 1.5, 100))
         self.assertEqual(self.controller.status()["tick"], 104)
         self.assertEqual(self.controller.status()["captured_tick"], 100)
+        self.assertFalse(self.console.paused)
+        self.assertFalse(self.controller.status()["replay_paused"])
+        self.assertNotIn("demo_pause", self.console.events)
+
+    def test_enabled_pause_option_preserves_press_snapshot_and_waits_for_paused_view(self):
+        self.console.paused = False
+        self.console.tick = 104
+        snapshot = {"pose": [11, 22, 33, 4, 5, 0, 1.2], "tick": 100, "paused": False}
+        key, tick = self.controller.capture_native_snapshot(snapshot, 1.5, pause=True)
+        self.assertEqual((key.x, key.time, tick), (11, 1.5, 100))
         self.assertTrue(self.console.paused)
         self.assertTrue(self.controller.status()["replay_paused"])
+        self.assertEqual(self.console.events.count("demo_pause"), 1)
 
     def test_paused_snapshot_rejects_a_seek_while_pause_is_being_processed(self):
         self.delayed([
@@ -87,8 +98,16 @@ class NativeCaptureTimingTests(unittest.TestCase):
             {"tick": 300, "paused": True},
         ])
         with self.assertRaisesRegex(RuntimeError, "replay moved"):
-            self.controller.capture_native_snapshot({"pose": self.bridge.pose, "tick": 100, "paused": True})
+            self.controller.capture_native_snapshot({"pose": self.bridge.pose, "tick": 100, "paused": True}, pause=True)
         self.assertEqual(self.console.camera_writes, [])
+
+    def test_paused_snapshot_rejects_current_tick_or_pause_mismatch_with_pause_disabled(self):
+        for tick, paused, reason in ((300, True, "replay moved"), (100, False, "resumed")):
+            with self.subTest(tick=tick, paused=paused):
+                self.console.tick, self.console.paused = tick, paused
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    self.controller.capture_native_snapshot({"pose": self.bridge.pose, "tick": 100, "paused": True})
+        self.assertNotIn("demo_pause", self.console.events)
 
     def test_playing_snapshot_rejects_rewind_before_capture(self):
         self.console.tick = 99

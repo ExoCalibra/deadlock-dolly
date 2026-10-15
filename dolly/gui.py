@@ -1319,7 +1319,8 @@ class DollyApp:
         self._advance_layer_pipeline()
 
     def _refresh_reshade(self, controller_status, video_active=False):
-        bridge = self.controller._native_bridge()
+        bridge = (None if controller_status.get('game_running') is False
+                  else self.controller._native_bridge())
         ready = recording_ready(controller_status)
         try:
             shade = bridge.media_status().get("reshade", {}) if bridge is not None else {}
@@ -1877,12 +1878,15 @@ class DollyApp:
             game, demo = self.game_path.get().strip(), self.demo_path.get().strip()
             if not game or not demo:
                 raise ValueError("Choose your Deadlock executable and a .dem replay first.")
-            options = self.launch_options.get().strip()
+            from .lite_mode import launch_options_for_mode
+            # Discard the retired UI flag from older preferences. Our rebuilt
+            # helper uses the same editor for every normal native launch.
+            options = launch_options_for_mode(self.launch_options.get().strip(), False)
             parse_launch_options(options)
             from .graphics_profiles_ui import launch_options as graphics_launch_options
             graphics_options = graphics_launch_options(self)
             settings = replace(self.app_settings, game_path=game, demo_path=demo,
-                               replay_folder=self.replay_folder.get().strip(), launch_options=options)
+                               replay_folder=self.replay_folder.get().strip(), launch_options=self.launch_options.get().strip())
             cancel = threading.Event()
             protocol = "vconsole" if self.protocol.get() == "VConsole" else "netcon"
             native = self.camera_driver.get() == "Native (experimental)"
@@ -2717,6 +2721,7 @@ class DollyApp:
                     return
         try:
             status = self.controller.status()
+            self._handle_game_exit(status)
             self.playing = bool(status.get("playing"))
             connected = bool(status.get("connected"))
             self._poll_connected = connected
@@ -2876,6 +2881,32 @@ class DollyApp:
         self.status_text.set(
             f"Renderer buffer queue near capacity ({pending:,}/{capacity:,}). "
             "Dolly paused its in-game drawing; stop replay skipping or playback to recover.")
+
+    def _handle_game_exit(self, status):
+        session = getattr(self.controller,'_session',None)
+        if status.get('game_running'):
+            self._last_game_session = session
+            return
+        if session is None or getattr(self,'_last_game_session',None) is not session:
+            return
+        if getattr(self,'_game_exit_shown',None) is not session:
+            self._game_exit_shown = session
+            self.playing = False
+            self.preview_attach = False
+            self._bone_picker_context = None
+            self._attach_snap_pending = False
+            self.native_editor_active = False
+            self._native_editor_bridge = self._native_visualization_bridge = None
+            self._native_visualization_cache = None
+            if self.root.state() == 'iconic':
+                self.root.deiconify()
+            if self.startup_cancel is not None:
+                self.startup_cancel.set()
+        if not self.busy and getattr(self,'_game_exit_cleanup',None) is not session:
+            if getattr(self,'_base_capture',None) is not None:
+                self._clear_layer_pipeline()
+            if self._submit('Clearing closed game session',self.controller.recover_dead_session):
+                self._game_exit_cleanup = session
 
     def _set_driver_indicator(self, backend, running):
         """Show the camera driver actually in use, live once a session runs."""
@@ -3773,6 +3804,7 @@ class DollyApp:
             if action == "replace" and selected is None:
                 raise ValueError("Select the view you want to replace, then frame its new position in the game.")
             capture_rate = candidate.tick_rate
+            pause_after_capture = self.app_settings.pause_after_capture
             if replay_timing and action != "replace":
                 capture_rate = self._resolve_replay_tick_rate(candidate, adopt=(action == "start"))
             if action == "start":
@@ -3787,7 +3819,8 @@ class DollyApp:
             def capture():
                 self.controller.standard_aspect = candidate.standard_aspect
                 if native_snapshot is not None:
-                    key, tick = self.controller.capture_native_snapshot(native_snapshot, time=time)
+                    key, tick = self.controller.capture_native_snapshot(
+                        native_snapshot, time=time, pause=pause_after_capture)
                     if replay_timing and action != "replace":
                         key.time = 0.0 if action == "start" else (tick - candidate.start_tick) / capture_rate
                     return key, tick

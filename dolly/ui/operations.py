@@ -48,7 +48,11 @@ class OperationQueue:
                 result = function()
             except Exception as exc:
                 LOG.exception('Operation failed: %s', label)
-                kind = failure_kind()
+                try:
+                    kind = failure_kind()
+                except Exception:
+                    LOG.exception('Operation failure recovery failed; retaining the worker')
+                    kind = 'error'
                 self.events.put((kind, label, exc))
             else:
                 self.events.put(('done', label, (result, callback)))

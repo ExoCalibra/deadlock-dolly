@@ -20,6 +20,7 @@ from generate_compatibility import check_generated
 BRIDGE_ABI = 4
 DLL_RELATIVE = Path("bin/win64/DollyNative.dll")
 AUDIO_RELATIVE = Path("bin/win64/DollyGameAudio.exe")
+REPLAY_INDEX_RELATIVE = Path("bin/win64/DollyReplayIndex.exe")
 REQUIRED_EXPORTS = {
     "CreateInterface", "DollyNativeProtocolVersion",
     "DollyAtomicExchange32", "DollyAtomicExchange64", "DollyAtomicCompareExchange32",
@@ -80,6 +81,17 @@ def runtime_files(root: Path) -> tuple[list[tuple[Path, Path]], dict]:
              (metadata, Path("build_info.json")),
              (confetti_pack, Path("assets/confetti/pak01_dir.vpk")),
              (ui_override_pack, Path("assets/ui/pak02_dir.vpk"))]
+    # Optional append-only capability: older validated packages still work,
+    # and new packages that declare the reader must ship its exact binary.
+    if info.get('replay_index_sha256'):
+        reader = native / REPLAY_INDEX_RELATIVE
+        if not reader.is_file() or reader.is_symlink() or sha256(reader) != info['replay_index_sha256']:
+            raise ValueError('Replay reader does not match its build metadata hash')
+        files.append((reader, REPLAY_INDEX_RELATIVE))
+        notice = native / 'replay_index/THIRD_PARTY_NOTICES.txt'
+        if not notice.is_file():
+            raise ValueError('Replay reader license notice is missing')
+        files.append((notice, Path('replay_index/THIRD_PARTY_NOTICES.txt')))
     for profile in sorted((native / "profiles").glob("*.json")):
         if not profile.is_file() or profile.is_symlink():
             raise ValueError("Unsafe native build profile")
@@ -186,6 +198,9 @@ def build_native(root: Path = ROOT) -> dict:
             "skipped_tests": skipped_tests, "full_suite_complete": not skipped_tests,
             "reshade_game_runtime_verified": False,
             "game_runtime_verified": False, "pe": report}
+    reader = native / REPLAY_INDEX_RELATIVE
+    if reader.is_file():
+        info['replay_index_sha256'] = sha256(reader)
     metadata.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     return info
 

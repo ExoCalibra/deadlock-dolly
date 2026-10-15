@@ -52,6 +52,45 @@ class AutoStartupTests(unittest.TestCase):
              patch("dolly.controller.ConsoleClient", return_value=self.console):
             return self.controller.start_editing("installation", self.demo, **kwargs)
 
+    def test_startup_exit_does_not_blame_a_queued_replay(self):
+        self.controller._session = self.session
+        self.session.process = SimpleNamespace(poll=lambda: 1)
+        self.controller._replay_requested = True
+        for context in ('waiting for the game console', 'waiting for hideout readiness'):
+            message = self.controller._game_death_message(context)
+            self.assertIn('before the selected replay was loaded', message)
+            self.assertNotIn('incompatible or incomplete', message)
+
+    def test_startup_failure_is_reported_without_an_automatic_second_launch(self):
+        self.session.session_dir = Path(self.temp.name)
+        (self.session.session_dir / 'game_stdout.log').write_text(
+            'CSteamHTMLSurface::Init - failing, no Steam process', encoding='utf-8')
+        with patch.object(self.controller, 'launch', wraps=self.controller.launch) as launch, \
+             patch.object(self.controller, '_startup_wait', side_effect=RuntimeError('startup stopped')):
+            with self.assertRaisesRegex(RuntimeError, 'startup stopped'):
+                self.start()
+        self.assertEqual(launch.call_count, 1)
+        self.assertEqual(self.controller.status()['startup_stage'], 'failed')
+        self.assertFalse(any(command.startswith('playdemo ') for command in self.console.sent))
+
+    def test_hideout_console_failure_stops_without_reconnecting_or_unlocking(self):
+        with patch.object(self.controller, '_automatic_hideout_check',
+                          side_effect=RuntimeError('The console is disconnected')), \
+             patch.object(self.console, 'connect', wraps=self.console.connect) as connect:
+            with self.assertRaisesRegex(RuntimeError, 'The console is disconnected'):
+                self.start()
+        self.assertEqual(connect.call_count, 1)
+        self.assertNotIn('cvar_unhide', self.console.requests)
+        self.assertFalse(any(command.startswith('playdemo ') for command in self.console.sent))
+
+    def test_shader_notice_tracks_preload_stage_only(self):
+        self.controller._session = self.session
+        self.bridge.configure_shader_loading = MagicMock()
+        self.controller._message('loading', startup_stage='preloading')
+        self.bridge.configure_shader_loading.assert_called_with(True)
+        self.controller._message('ready', startup_stage='preload_ready')
+        self.bridge.configure_shader_loading.assert_called_with(False)
+
     def test_one_click_waits_for_hideout_then_unlocks_once_before_replay(self):
         result = self.start()
         events = self.console.events
@@ -317,6 +356,7 @@ class AutoStartupTests(unittest.TestCase):
     def test_crashed_game_during_startup_reports_exit_code_and_replay_identity(self):
         self.controller._session = self.session
         self.session.process = SimpleNamespace(poll=lambda: 3221225477)
+        self.controller._replay_requested = True
         self.controller._replay_header = {"name": "9-21Routers2.dem", "build_num": 10725,
                                           "map_name": "dl_midtown"}
         with self.assertRaises(RuntimeError) as caught:
@@ -346,6 +386,7 @@ class AutoStartupTests(unittest.TestCase):
     def test_replay_recorded_on_this_build_reports_the_file_not_a_mismatch(self):
         self.controller._session = self.session
         self.session.process = SimpleNamespace(poll=lambda: 3221225477)
+        self.controller._replay_requested = True
         self.controller._replay_header = {"name": "cines.dem", "build_num": 10931,
                                           "map_name": "dl_midtown"}
         self.controller._game_build = 10931
@@ -361,6 +402,7 @@ class AutoStartupTests(unittest.TestCase):
     def test_replay_from_a_different_build_keeps_the_mismatch_guidance(self):
         self.controller._session = self.session
         self.session.process = SimpleNamespace(poll=lambda: 3221225477)
+        self.controller._replay_requested = True
         self.controller._replay_header = {"name": "old.dem", "build_num": 10725,
                                           "map_name": "dl_midtown"}
         self.controller._game_build = 10931

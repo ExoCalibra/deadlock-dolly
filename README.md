@@ -4,6 +4,8 @@
 
 # Deadlock Dolly
 
+[In-game UI controls and saved layouts](docs/UI_REWORK.md).
+
 **A camera-path editor for local Deadlock replays.**
 
 [![Download](https://img.shields.io/badge/Download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/cravvnn/deadlock-dolly/releases)
@@ -22,7 +24,7 @@
 Capture the free camera, shape a shot and play it back with animated framing and
 camera variables.
 
-**Current source: 0.6.35-alpha.** The portable Windows build opens through
+**Current source: 0.6.49-alpha.** The portable Windows build opens through
 `Dolly.exe`. Python and Tcl/Tk are bundled; no separate installation is needed.
 
 **THIS MOD INJECTS CODE INTO DEADLOCK — USE AT YOUR OWN RISK.**
@@ -123,10 +125,19 @@ in the hideout, load the replay and pause it for editing.
 
 Move to a view and press **Ctrl+Alt+K** to capture it. **Replay timing** is the
 default: advance the replay, frame the next view and capture again.
-**F8** opens the in-game panel, **F7** opens the console, and
+**F8** shows or hides all Dolly panels, **F7** opens the console, and
 **F9** switches to Deadlock's replay UI for hero selection. Bindings, movement
 speed and mouse sensitivity are saved from **Settings → Controls & keybinds**. Capture also works
-while the replay is playing and leaves it paused.
+while the replay is playing. **Pause after capture**, beside Resume in the timeline,
+chooses whether capture pauses playback; it is off by default and remembered.
+Drag the main panel or Campaths header to reposition it. Both show the same
+four-arrow move cursor; Arrange panels is only needed for resizing or moving
+the timeline.
+
+Selecting a player in the bottom timeline moves freecam near their current
+position without changing replay time. If they have no hero at that tick or
+their view is still settling, Dolly leaves the camera in place and shows a
+notice in the status bar.
 
 Returning from hero selection to Dolly's native camera keeps the chosen view
 and switches the underlying game camera to Free Cam. The native camera also
@@ -328,6 +339,12 @@ if something is not working as intended. Include the Dolly version and the
 ZIP from **Export diagnostics**. If the app does not open, include
 `logs/Dolly_startup.log` and `logs/Dolly.log` when available.
 
+## Contributors
+
+- [@tbhtho](https://github.com/tbhtho) — in-game UI rework and saved panel layouts.
+- [@s34532](https://github.com/s34532) — custom particle effects system, beginning with native confetti rain.
+- [@Hesykhia](https://github.com/Hesykhia) — high-resolution screenshot export with players-only mattes.
+
 ## License
 
 Dolly source uses the [MIT license](LICENSE.txt). Bundled components retain
@@ -339,6 +356,8 @@ separate terms in [assets/README.md](assets/README.md).
 Recent releases and the complete history live in the [changelog](docs/CHANGELOG.md)
 and the per-version [release notes](docs/).
 
+- **0.6.49-alpha** — refreshed in-game UI by @tbhtho, saved layouts, a pause-after-capture choice and complete F8 panel hiding.
+- **0.6.48-alpha** — replay-effect settling before camera-path playback and exports.
 - **0.6.35-alpha** — every FFmpeg output step (stills, Players layer, alpha combine, clip audio, depth preview) runs hidden in a clean environment.
 - **0.6.34-alpha** — Native Depth of Field works on installs that previously showed the black checkerboard.
 - **0.6.33-alpha** — October 8 hotfix (6766) support, and a Players layer export that no longer leaves a stuck command window.

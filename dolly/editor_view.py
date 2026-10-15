@@ -162,6 +162,7 @@ def editor_values(*, active, settings, project, selected, count, playhead, statu
                   duration=float(project.duration), playhead=max(0.0, playhead),
                   replay_tick=int(status.get("tick") or 0),
                   playing=bool(status.get("playing")), busy=bool(busy),
+                  pause_after_capture=settings.pause_after_capture,
                   playback_speed=playback_speed, playback_rate=playback_rate,
                   video_fps=video_fps, video_bitrate_mbps=video_bitrate,
                   video_encoder=video_encoder, video_fixed_step=video_fixed_step,

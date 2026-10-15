@@ -401,6 +401,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_dead_process_console_failure_reports_the_crash_not_the_socket(self):
         process = self.process
+        self.controller._replay_requested = True
 
         def die_then_raise(command, timeout=3, completion_patterns=None):
             process.poll = lambda: -1073741819

@@ -21,6 +21,30 @@ class Value:
 
 
 class EditorSessionTests(unittest.TestCase):
+    def test_pause_after_capture_preference_saves_before_publication(self):
+        from unittest.mock import patch
+        self.app.native_editor_active = True
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled), patch('dolly.editor_dispatch.save_settings') as save:
+                previous = self.app.app_settings
+                session.dispatch(self.app, {'action': 'set_pause_after_capture', 'value': int(enabled)}, self.bridge)
+                label, operation, complete = self.app._submit.call_args.args
+                self.assertIs(self.app.app_settings, previous)
+                result = operation()
+                save.assert_called_once()
+                self.assertEqual(save.call_args.args[0].pause_after_capture, enabled)
+                complete(result)
+                self.assertEqual(self.app.app_settings.pause_after_capture, enabled)
+                self.assertEqual(self.bridge.configure_editor.call_args.kwargs['pause_after_capture'], enabled)
+
+    def test_invalid_pause_after_capture_choices_do_not_save(self):
+        from unittest.mock import patch
+        for value in (-1, 2, .5, float('nan'), True, '1'):
+            with self.subTest(value=value), patch('dolly.editor_dispatch.save_settings') as save:
+                with self.assertRaisesRegex(ValueError, 'on or off'):
+                    session.dispatch(self.app, {'action': 'set_pause_after_capture', 'value': value}, self.bridge)
+                save.assert_not_called()
+
     def test_follow_capability_recovery_republishes_cached_controls(self):
         from dolly.replay_camera import CLIENT_SHA256
         self.controller.status.return_value['native_editor_active'] = True
@@ -88,6 +112,9 @@ class EditorSessionTests(unittest.TestCase):
         self.app.project = Project(keyframes=[Keyframe(0, 1, 2, 3, 4, 5, 6),
                                                Keyframe(2, 7, 8, 9, 10, 11, 12)])
         self.app.shot_history = ShotHistory(self.app.project)
+        self.app.playing = False
+        self.app._set_time = Mock()
+        self.app._play = Mock()
         self.app.camera_tree = Mock()
         self.app._select_key = Mock()
         self.app._snapshot = Mock(return_value=self.app.project)
@@ -102,6 +129,76 @@ class EditorSessionTests(unittest.TestCase):
         self.app.camera_tree.selection_set.assert_called_with('1')
         self.app._select_key.assert_called_once()
         self.app._submit.assert_not_called()
+
+    def test_cinematic_preparation_waits_for_seek_completion(self):
+        self.camera_list_app()
+        revision = self.app.shot_history.revision
+        session.dispatch(self.app, {'action': 'prepare_cinematic', 'value': 7,
+                                   'pose': (revision, 0, 0, 0, 0, 0, 0)}, self.bridge)
+        self.bridge.configure_editor_cinematic.assert_called_once_with(7, revision, 1)
+        _, operation, complete = self.app._submit.call_args.args
+        result = operation()
+        self.controller.seek.assert_called_once_with(self.app.project, 0)
+        self.bridge.configure_editor_cinematic.assert_called_once()
+        complete(result)
+        self.bridge.configure_editor_cinematic.assert_called_with(7, revision, 2)
+        self.app._play.assert_not_called()
+
+    def test_cinematic_preparation_failure_never_reports_ready(self):
+        self.camera_list_app()
+        revision = self.app.shot_history.revision
+        session.dispatch(self.app, {'action': 'prepare_cinematic', 'value': 7,
+                                   'pose': (revision, 0, 0, 0, 0, 0, 0)}, self.bridge)
+        self.controller.seek.side_effect = RuntimeError('seek failed')
+        with self.assertRaisesRegex(RuntimeError, 'seek failed'):
+            self.app._submit.call_args.args[1]()
+        self.bridge.configure_editor_cinematic.assert_called_with(7, revision, 3)
+
+    def test_cinematic_preparation_rejects_changed_path(self):
+        self.camera_list_app()
+        revision = self.app.shot_history.revision
+        session.dispatch(self.app, {'action': 'prepare_cinematic', 'value': 7,
+                                   'pose': (revision, 0, 0, 0, 0, 0, 0)}, self.bridge)
+        _, operation, complete = self.app._submit.call_args.args
+        result = operation()
+        self.app.project = Project()
+        complete(result)
+        self.bridge.configure_editor_cinematic.assert_called_with(7, revision, 3)
+
+    def test_previous_and_next_camera_select_and_view_saved_pose(self):
+        for action, initial, expected in [('previous_view', 1, 0), ('next_view', 0, 1)]:
+            with self.subTest(action=action):
+                self.camera_list_app()
+                self.app._selection_index = Mock(return_value=initial)
+                session.dispatch(self.app, {'action': action, 'value': 0}, self.bridge)
+                self.app.camera_tree.selection_set.assert_called_with(str(expected))
+                self.app._submit.call_args.args[1]()
+                self.controller.select_paused_camera.assert_called_with(
+                    self.app.project, self.app.project.keyframes[expected].time)
+
+    def test_stop_invalidates_cinematic_completion(self):
+        self.camera_list_app()
+        revision = self.app.shot_history.revision
+        session.dispatch(self.app, {'action': 'prepare_cinematic', 'value': 7,
+                                   'pose': (revision, 0, 0, 0, 0, 0, 0)}, self.bridge)
+        _, operation, complete = self.app._submit.call_args.args
+        result = operation()
+        session.dispatch(self.app, {'action': 'stop', 'value': 0}, self.bridge)
+        self.bridge.configure_editor_cinematic.assert_called_with(7, revision, 3)
+        complete(result)
+        self.bridge.configure_editor_cinematic.assert_called_with(7, revision, 3)
+
+    def test_camera_publication_backfills_the_last_wire_block(self):
+        from dolly.shot_history import ShotHistory
+        self.camera_list_app()
+        self.app.project = Project(keyframes=[Keyframe(i, 1, 2, 3, 4, 5, 6) for i in range(33)])
+        self.app.shot_history = ShotHistory(self.app.project)
+        self.app._selection_index = Mock(return_value=32)
+        self.app._native_camera_selected = 31
+        self.app.native_editor_active = True
+        session.configure(self.app)
+        self.assertEqual(self.bridge.configure_editor_cameras.call_args.args[2], 1)
+        self.assertEqual(self.bridge.configure_lite_replay.call_args.args[2], 1)
 
     def test_view_camera_uses_paused_view_and_delete_never_moves_it(self):
         for action in ('view_camera', 'delete_camera'):

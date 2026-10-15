@@ -1118,6 +1118,8 @@ void editor_input_checks() {
     const auto saved_view = editor_snapshot();
     auto configured = std::make_shared<EditorConfig>(*saved);
     configured->playback_flags = 0;
+    configured->bindings[0] = {'K', 0};
+    configured->bindings[2] = {'P', 0};
     configured->bindings[9] = {VK_F8, 0};
     configured->bindings[10] = {VK_F9, 0};
     std::atomic_store(&dolly::gConfig, std::shared_ptr<const EditorConfig>(configured));
@@ -1138,6 +1140,70 @@ void editor_input_checks() {
                 "Console shortcut queued the wrong requested visibility");
     };
 
+    dolly::gSpeed = 320;
+    const auto before_speed = event_count();
+    dolly::key_event(VK_OEM_PLUS, true);
+    require(dolly::gSpeed > 320 && event_count() == before_speed + 1,
+            "Plus did not increase camera movement speed");
+    const auto faster = dolly::gSpeed.load();
+    dolly::key_event(VK_OEM_PLUS, true);
+    require(dolly::gSpeed == faster, "Held plus repeatedly queued camera speed edits");
+    dolly::key_event(VK_OEM_PLUS, false);
+    dolly::key_event(VK_OEM_MINUS, true);
+    require(std::abs(dolly::gSpeed.load() - 320) < .001,
+            "Minus did not restore the preceding camera speed");
+    dolly::key_event(VK_OEM_MINUS, false);
+    editor_set_owner(EditorOwner::Panel);
+    dolly::gTextInput = true;
+    dolly::key_event(VK_OEM_MINUS, true);
+    require(dolly::gSpeed == 320, "Typing minus changed camera movement speed");
+    dolly::key_event(VK_OEM_MINUS, false);
+    dolly::gTextInput = false;
+    editor_set_owner(EditorOwner::Console);
+    dolly::key_event(VK_ADD, true);
+    require(dolly::gSpeed == 320, "Console plus changed camera speed");
+    dolly::key_event(VK_ADD, false);
+    editor_set_owner(EditorOwner::Flight);
+    dolly::key_event(VK_ADD, true);
+    require(dolly::gSpeed > 320, "Numpad plus did not increase camera speed");
+    dolly::key_event(VK_ADD, false);
+    dolly::key_event(VK_SUBTRACT, true);
+    require(std::abs(dolly::gSpeed.load() - 320) < .001, "Numpad minus did not decrease camera speed");
+    dolly::key_event(VK_SUBTRACT, false);
+    dolly::key_event(VK_CONTROL, true);
+    dolly::key_event(VK_OEM_PLUS, true);
+    require(dolly::gSpeed == 320, "Control-plus changed camera movement speed");
+    dolly::key_event(VK_OEM_PLUS, false);
+    dolly::key_event(VK_CONTROL, false);
+    dolly::gAcknowledged = dolly::gLastEvent;
+    const auto pause_key = configured->bindings[2].vk;
+    const auto capture_key = configured->bindings[0].vk;
+    editor_update_view(true,false,true,saved_view.pose);
+    dolly::key_event('W',true);
+    dolly::key_event(VK_SHIFT,true);
+    auto before_toggle = event_count();
+    dolly::key_event(pause_key,true);
+    require(event_count()==before_toggle+1 &&
+            dolly::gEvents[(dolly::gLastEvent-1)%kEditorEventCount].action==std::uint32_t(EditorAction::PlayPause),
+            "Pause/resume did not work while moving with Shift");
+    dolly::key_event(pause_key,false);
+    dolly::key_event(capture_key,true);
+    require(event_count()==before_toggle+2 &&
+            dolly::gEvents[(dolly::gLastEvent-1)%kEditorEventCount].action==std::uint32_t(EditorAction::Capture),
+            "Capture did not work while moving with Shift");
+    dolly::key_event(capture_key,false);
+    require(!dolly::gEvents[(dolly::gLastEvent-1)%kEditorEventCount].paused,
+            "Capture event lost the playing replay state");
+    dolly::key_event(VK_SHIFT,false);
+    dolly::key_event(VK_MENU,true);
+    before_toggle = event_count();
+    dolly::key_event(pause_key,true);
+    require(event_count()==before_toggle+1, "Pause/resume failed while holding the slow-movement modifier");
+    dolly::key_event(pause_key,false);
+    dolly::key_event(VK_MENU,false);
+    dolly::key_event('W',false);
+    editor_update_view(true,true,true,saved_view.pose);
+    dolly::gAcknowledged = dolly::gLastEvent;
     dolly::key_event(VK_F8, true);
     require(dolly::gOwner == EditorOwner::Panel, "F8 did not open the panel");
     // Raw + legacy copies and held-key repeat must not toggle the panel back.
@@ -1185,6 +1251,10 @@ void editor_input_checks() {
     dolly::key_event(VK_F8, true);
     require(dolly::gOwner == EditorOwner::Flight && event_count() == during_shot,
             "F8 interrupted a playing shot with a manual-flight request");
+    dolly::key_event(VK_F8, false);
+    dolly::key_event(VK_F8, true);
+    require(dolly::gOwner == EditorOwner::Panel && event_count() == during_shot,
+            "F8 could not reopen the workspace without interrupting a playing shot");
     dolly::key_event(VK_F8, false);
     editor_update_view(false, true, false, saved_view.pose);
     editor_set_owner(EditorOwner::Panel);
@@ -1329,11 +1399,14 @@ void editor_framing_checks() {
     auto config = std::make_shared<EditorConfig>(*saved);
     config->camera_count = 2;
     config->selected_camera = 1;
-    config->playback_flags = 0;
+    config->playback_flags = kEditorPauseAfterCapture;
     std::atomic_store(&dolly::gConfig, std::shared_ptr<const EditorConfig>(config));
     dolly::gAcknowledged = dolly::gLastEvent;
     CameraPose pose{1, 2, 3, 4, 5, 6, 16.0 / 9};
     editor_update_view(true, true, true, pose);
+    require(editor_snapshot().pause_after_capture && !editor_snapshot().playing &&
+                !editor_snapshot().busy,
+            "Capture pause preference changes playback state");
     // Optional desktop DOF publication is a separate bounded mapping block.
     std::vector<unsigned char> dof_memory(kMappingBytes);
     EditorDofConfig dof{};
@@ -1527,6 +1600,53 @@ void editor_framing_checks() {
     dolly::gFramingWheel = 120;
     editor_integrate_flight(pose, 1);
     require(dolly::gFramingWheel == 0, "Wheel suspension backlog was not discarded");
+    // Typed FOV must update the actual render pose while the panel owns input.
+    editor_set_owner(EditorOwner::Panel);
+    pose[6] = 1.8;
+    editor_update_view(true, true, true, pose);
+    dolly::gAcknowledged = dolly::gLastEvent;
+    require(editor_request_framing_factor(.8), "Typed FOV request was rejected");
+    const auto before_lens = dolly::gLastEvent;
+    dolly::apply_panel_framing(pose, .016, true);
+    close_to(pose[6], 1.44, "Typed FOV failed to change panel-owned live framing");
+    require(dolly::gLastEvent == before_lens + 1, "Typed FOV must enqueue exactly one saved-key edit");
+    dolly::apply_panel_framing(pose, .016, true);
+    close_to(pose[6], 1.44, "Typed FOV factor was applied twice");
+    editor_update_view(true, false, true, pose);
+    require(!editor_request_framing_factor(.8), "Typed FOV accepted during playback");
+    editor_update_view(true, true, true, pose);
+    config->camera_count = 2;
+    auto saved_list = std::atomic_load(&dolly::gCameraList);
+    auto list = std::make_shared<EditorCameraList>();
+    std::memcpy(list->magic,"DLYCAMS1",8);list->abi=1;list->revision=7;list->total=2;list->count=2;
+    std::atomic_store(&dolly::gCameraList,std::shared_ptr<const EditorCameraList>(list));
+    CameraPose request{};request[0]=7;
+    dolly::gAcknowledged = dolly::gLastEvent;
+    const auto preparation_serial = dolly::gLastEvent;
+    require(editor_enqueue(EditorAction::PrepareCinematic,42,&request),
+            "Cinematic preparation cannot enter the real event ring");
+    const auto preparation_event = dolly::gEvents[preparation_serial % kEditorEventCount];
+    require(preparation_event.action==109 && preparation_event.value==42 && preparation_event.pose[0]==7,
+            "Cinematic preparation token/revision differs from Python");
+    auto preparation = std::make_shared<EditorCinematicStatus>();
+    std::memcpy(preparation->magic,"DLYCIN01",8);preparation->abi=1;
+    preparation->token=42;preparation->revision=7;preparation->state=2;
+    std::atomic_store(&dolly::gCinematicStatus,std::shared_ptr<const EditorCinematicStatus>(preparation));
+    EditorCinematicStatus result{};
+    require(editor_cinematic_status(result) && result.state==2,"Completed cinematic is not ready");
+    dispatch(EditorAction::Stop);
+    require(editor_cinematic_status(result) && result.token==42 && result.state==3,
+            "Keyboard Stop does not invalidate cinematic readiness");
+    require(editor_enqueue(EditorAction::PrepareCinematic,43,&request),"A stopped preparation cannot retry");
+    request[0]=6;
+    require(!editor_enqueue(EditorAction::PrepareCinematic,44,&request),"Stale cinematic revision was accepted");
+    request[0]=7;
+    require(!editor_enqueue(EditorAction::PrepareCinematic,0,&request) &&
+            !editor_enqueue(EditorAction::PrepareCinematic,44),"Invalid cinematic request entered the ring");
+    require(editor_enqueue(EditorAction::ClearCameraPath,0,&request), "Confirmed Clear cannot enter event ring");
+    request[0]=6;
+    require(!editor_enqueue(EditorAction::ClearCameraPath,0,&request), "Stale Clear revision was accepted");
+    std::atomic_store(&dolly::gCameraList,saved_list);
     std::atomic_store(&dolly::gConfig, saved);
     editor_update_view(view.ready, view.paused, view.manual_active, view.pose);
     dolly::gAcknowledged = dolly::gLastEvent;
@@ -2099,6 +2219,58 @@ void run() {
         std::memcpy(f.mapping.data() + kEditorConfigOffset, &config, sizeof(config));
         editor_worker_tick(f.mapping.data(), true);
         editor_set_owner(EditorOwner::Flight);
+    }
+    {
+        const auto saved_config = config;
+        require(!editor_snapshot().pause_after_capture,
+                "Capture pause preference is enabled without its published flag");
+        config.sequence += 2;
+        config.playback_flags = kEditorPauseAfterCapture;
+        std::memcpy(f.mapping.data() + kEditorConfigOffset, &config, sizeof(config));
+        editor_worker_tick(f.mapping.data(), true);
+        editor_set_owner(EditorOwner::Panel);
+        require(editor_snapshot().pause_after_capture && !editor_snapshot().playing &&
+                    !editor_snapshot().busy,
+                "Published capture pause preference was rejected or changes playback state");
+        dolly::gAcknowledged = dolly::gLastEvent;
+        for (double value : {1., 0.}) {
+            const auto serial = dolly::gLastEvent;
+            require(editor_enqueue(EditorAction::SetPauseAfterCapture, value),
+                    "Valid capture pause preference cannot enter the event queue");
+            require(dolly::gEvents[serial % kEditorEventCount].action == 110 &&
+                        dolly::gEvents[serial % kEditorEventCount].value == value,
+                    "Capture pause preference action differs from Python");
+        }
+        require(!editor_enqueue(EditorAction::SetPauseAfterCapture, -1) &&
+                    !editor_enqueue(EditorAction::SetPauseAfterCapture, .5) &&
+                    !editor_enqueue(EditorAction::SetPauseAfterCapture, 2) &&
+                    !editor_enqueue(EditorAction::SetPauseAfterCapture,
+                                    std::numeric_limits<double>::quiet_NaN()) &&
+                    !editor_enqueue(EditorAction::SetPauseAfterCapture, 1, &first),
+                "Malformed capture pause preference entered the event queue");
+        editor_set_owner(EditorOwner::Flight);
+        require(!editor_enqueue(EditorAction::SetPauseAfterCapture, 1),
+                "Capture pause preference bypassed panel ownership");
+        editor_set_owner(EditorOwner::Panel);
+        config.sequence += 2;
+        config.playback_flags = kEditorPauseAfterCapture | 2;
+        std::memcpy(f.mapping.data() + kEditorConfigOffset, &config, sizeof(config));
+        editor_worker_tick(f.mapping.data(), true);
+        require(!editor_enqueue(EditorAction::SetPauseAfterCapture, 1),
+                "Busy editor changed capture pause preference");
+        config.sequence += 2;
+        config.playback_flags = 8;
+        std::memcpy(f.mapping.data() + kEditorConfigOffset, &config, sizeof(config));
+        editor_worker_tick(f.mapping.data(), true);
+        require(editor_snapshot().pause_after_capture && editor_snapshot().busy,
+                "Unknown playback flag replaced a valid publication");
+        const auto next_sequence = config.sequence + 2;
+        config = saved_config;
+        config.sequence = next_sequence;
+        std::memcpy(f.mapping.data() + kEditorConfigOffset, &config, sizeof(config));
+        editor_worker_tick(f.mapping.data(), true);
+        editor_set_owner(EditorOwner::Flight);
+        dolly::gAcknowledged = dolly::gLastEvent;
     }
     const auto before_settings = dolly::gLastEvent;
     require(editor_enqueue(EditorAction::DestroyRagdolls),

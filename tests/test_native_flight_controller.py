@@ -30,9 +30,10 @@ class FlightBridge:
                 "phase": self.phase, "applied_pose": list(self.pose), "original_pose": list(self.original),
                 "effect_count": 0}
 
-    def start_flight(self, demo_name, pose=None, timeout=3, *, cancelled=None, playback=None, owner="flight"):
+    def start_flight(self, demo_name, pose=None, timeout=3, *, cancelled=None, playback=None, owner="flight", phase=0.0):
         self.events.append("native.flight")
         self.playback = playback
+        self.phase = phase
         if pose is not None:
             self.pose = list(pose)
         elif self.state in ("stopped", "probe"):
@@ -79,6 +80,35 @@ def configured_controller():
 
 
 class NativeFlightControllerTests(unittest.TestCase):
+    def test_cinematic_endpoint_returns_to_movable_free_camera(self):
+        self.controller.enter_native_flight()
+        self.controller._native_manual = False
+        self.bridge.pose = [10,20,30,4,5,6,1.5]
+        self.bridge.phase = 2.5
+        self.bridge.events.clear()
+        error = self.controller._finish_native_playback(return_to_flight=True)
+        self.assertIsNone(error)
+        self.assertTrue(self.controller._native_manual)
+        self.assertTrue(self.controller.status()['paused_flight'])
+        self.assertEqual(self.bridge.pose,[10,20,30,4,5,6,1.5])
+        self.assertEqual(self.bridge.phase,2.5)
+        self.assertIn('native.flight', self.bridge.events)
+        self.assertNotIn('native.release', self.bridge.events)
+        self.controller.toggle_replay()
+        self.assertFalse(self.console.paused)
+        self.assertTrue(self.controller._native_manual)
+        self.controller.toggle_replay()
+        self.assertTrue(self.console.paused)
+        self.assertEqual(self.bridge.owner,'flight')
+
+    def test_cinematic_end_preserves_an_open_panel(self):
+        self.controller.enter_native_flight(owner='panel')
+        self.controller._native_manual=False
+        self.bridge.editor_status=MagicMock(return_value={'input_mode':'panel'})
+        self.assertIsNone(self.controller._finish_native_playback(return_to_flight=True))
+        self.assertEqual(self.bridge.owner,'panel')
+        self.assertTrue(self.controller._native_manual)
+
     def test_rejected_editor_return_preserves_camera_and_input_owner(self):
         self.controller.enter_native_flight()
         self.controller._probe_result = {}
@@ -328,6 +358,15 @@ class NativeFlightControllerTests(unittest.TestCase):
             self.assertEqual(self.bridge.last_start_owner, "panel")
             self.assertTrue(self.console.paused)
 
+    def test_absolute_tick_seek_retains_live_camera_and_panel(self):
+        self.controller.begin_paused_camera()
+        original=list(self.bridge.pose)
+        result=self.controller.seek_replay_tick(3470)
+        self.assertEqual(result['tick'],3470)
+        self.assertEqual(self.bridge.pose,original)
+        self.assertEqual(self.bridge.owner,'panel')
+        self.assertTrue(self.console.paused)
+
     def test_sparse_tick_steps_choose_packet_in_requested_direction(self):
         from array import array
         from dolly.demo_packets import PacketIndex
@@ -552,17 +591,18 @@ class NativeFlightControllerTests(unittest.TestCase):
         self.assertFalse(self.controller.status()["replay_paused"])
         self.assertEqual(self.controller.status()["paused_tick"], self.console.tick)
 
-    def test_capture_during_playback_pauses_at_new_tick_and_keeps_manual_camera(self):
+    def test_capture_during_playback_keeps_game_running_and_manual_camera(self):
         self.console.paused = False
         self.controller.enter_native_flight()
         self.bridge.pose = [11, 22, 33, 12, 123, 0, 1.1]
         self.console.tick = 105
+        self.console.requests.clear()
         snapshot = {"pose": [11, 22, 33, 12, 123, 0, 1.1], "tick": 104, "paused": False}
         frame, tick = self.controller.capture_native_snapshot(snapshot, 2)
         self.assertEqual((frame.x, frame.z, frame.aspect_ratio, tick), (11, 33, 1.1, 104))
-        self.assertTrue(self.console.paused)
+        self.assertFalse(self.console.paused)
         self.assertTrue(self.controller.status()["paused_flight"])
-        self.assertEqual(self.controller.status()["paused_tick"], 105)
+        self.assertNotIn("demo_pause", self.console.requests)
         self.assertNotIn("native.hold", self.console.events)
         self.assertNotIn("native.release", self.console.events)
         self.assertEqual(self.bridge.owner, "flight")

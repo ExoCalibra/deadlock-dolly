@@ -1,5 +1,6 @@
 """Age replay effects through normal simulation before an authored shot starts."""
 from copy import deepcopy
+import logging
 import math
 import re
 import time
@@ -7,6 +8,7 @@ import time
 from .demo_packets import packet_index
 
 WARMUP_SECONDS = 2.0
+LOG = logging.getLogger("dolly")
 _SEEK_CLOCK = re.compile(
     r"Demo Skipping:\s*skipping(?: forward)? to demo tick (\d+)\s+\(game tick (\d+)\)")
 
@@ -93,42 +95,96 @@ class ReplayWarmupMixin:
             self._require_native_demo(before)
             self._message("Letting replay effects settle before the shot…", playing=False)
             goal_owned = False
-            try:
+            observation = {"samples": 0, "first": None, "last": None, "ahead_samples": 0}
+            details["pause_observation"] = observation
+            self._last_seek_details["replay_warmup"] = details
+
+            def check_context():
                 self._check_position_cancelled()
+                if self._session is not session or self._demo != demo:
+                    raise RuntimeError("The game session changed during effect settling.")
+                self._require_connection()
+
+            try:
+                check_context()
                 self._demo_speed_changed = True
                 goal_owned = True
                 # resume CLEARS a previous goal. Arm the stock one-shot command last.
                 self._request(f"demo_timescale 1; demo_resume; demo_pauseatservertick {server_target}")
                 deadline = time.perf_counter() + 8.0
+                last_frame = int(before["frame_count"])
+                first_paused_frame = None
+                stable_frames = 0
                 while True:
-                    self._check_position_cancelled()
-                    if self._session is not session or self._demo != demo:
-                        raise RuntimeError("The game session changed during effect settling.")
+                    check_context()
                     current = bridge.status()
+                    check_context()
                     self._require_native_demo(current)
-                    if current["paused"] and current["tick"] > beginning["tick"]:
-                        break
-                    if current["tick"] > target or time.perf_counter() >= deadline:
+                    sample = {"tick": current["tick"], "paused": current["paused"],
+                              "frame": int(current["frame_count"])}
+                    observation["samples"] += 1
+                    if observation["first"] is None:
+                        observation["first"] = sample
+                    observation["last"] = sample
+                    if current["tick"] > target:
+                        observation.setdefault("first_ahead", sample)
+                        observation["last_ahead"] = sample
+                        observation["ahead_samples"] += 1
+                    if time.perf_counter() >= deadline:
                         raise RuntimeError("The replay did not pause at the shot start during effect settling.")
+                    # The running render tick can briefly lead the stock pause
+                    # endpoint. Wait inside the same budget, then require two
+                    # fresh exact paused views; a future tick is never accepted.
+                    if current["paused"] and current["tick"] == target:
+                        if sample["frame"] > last_frame:
+                            stable_frames += 1
+                            if first_paused_frame is None:
+                                first_paused_frame = sample["frame"]
+                    else:
+                        stable_frames = 0
+                        first_paused_frame = None
+                    last_frame = max(last_frame, sample["frame"])
+                    if stable_frames >= 2:
+                        paused = current
+                        break
                     self._stop_event.wait(.01)
-                paused = self._wait_paused_native_view(bridge, before["frame_count"], expected_tick=target)
-                checked = self._require_demo()
+                check_context()
+                checked = self._require_demo(timeout=max(.001, deadline - time.perf_counter()))
+                observation["console_tick"] = checked["tick"]
+                check_context()
+                final = bridge.status()
+                check_context()
+                self._require_native_demo(final)
+                observation["final"] = {"tick": final["tick"], "paused": final["paused"],
+                                        "frame": int(final["frame_count"])}
                 if checked["tick"] != target or paused["tick"] != target:
                     raise RuntimeError("The replay missed the shot start during effect settling.")
-                self._check_position_cancelled()
+                if (not final["paused"] or final["tick"] != target or
+                        time.perf_counter() >= deadline):
+                    raise RuntimeError("The replay moved after preparing the settled shot start.")
+                if self._recorder_active():
+                    raise RuntimeError("Replay effect settling must finish before recording starts.")
+                check_context()
                 goal_owned = False  # The one-shot goal reached its paused endpoint.
                 details.update(performed=True, verified=True, lead_tick=beginning["tick"],
                                simulated_seconds=(target - beginning["tick"]) / project.tick_rate,
                                paused_tick=target, server_pause_tick=server_target,
+                               pause_confirmation={"fresh_frames": stable_frames,
+                                   "first_frame": first_paused_frame, "last_frame": paused["frame_count"],
+                                   "tick": target},
                                no_final_seek=True, calibration=deepcopy(self._camera_calibration))
                 self._last_seek_details = dict(target_seek, replay_warmup=deepcopy(details))
                 return result
             finally:
+                LOG.info("Replay effect settling target=%s server_goal=%s verified=%s "
+                         "pause_confirmation=%s observation=%s", target, server_target,
+                         details.get("verified", False), details.get("pause_confirmation"), observation)
                 if goal_owned and self._session is session and self._demo == demo and self._alive():
                     # Cancellation/timeout must not leave a future goal armed. Never
                     # send cleanup commands into a different replay or session.
                     self._require_demo(require_tick=False)
-                    self._request("demo_resume; demo_pause")
+                    if self._session is session and self._demo == demo and self._alive():
+                        self._request("demo_resume; demo_pause")
         finally:
             self._replay_warmup_active = False
 

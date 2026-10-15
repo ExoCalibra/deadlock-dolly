@@ -16,6 +16,8 @@ constexpr std::size_t kEditorConfigOffset = 576;
 constexpr std::size_t kEditorStatusOffset = 2 * 1024 * 1024 + 2048;
 constexpr std::size_t kEditorInputDiagnosticsOffset = 2 * 1024 * 1024 + 3584;
 constexpr std::uint32_t kEditorAbi = 2;
+constexpr std::uint32_t kEditorPlaybackStateMask = 3;
+constexpr std::uint32_t kEditorPauseAfterCapture = 4;
 constexpr std::size_t kEditorBindingCount = 26, kEditorEventCount = 16;
 enum class EditorOwner : std::uint32_t {
     Disabled = 0,
@@ -133,8 +135,16 @@ enum class EditorAction : std::uint32_t {
     ObjectPlace,
     ObjectSelect,
     ObjectDelete,
-    ObjectTransform
+    ObjectTransform,
+    SaveShot,
+    SeekReplayTick,
+    ClearCameraPath,
+    FocusReplayPlayer,
+    PrepareCinematic,
+    SetPauseAfterCapture
 };
+static_assert(static_cast<std::uint32_t>(EditorAction::SetPauseAfterCapture) == 110,
+              "Stable pause-after-capture preference action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::TakeScreenshot) == 98,
               "Stable screenshot action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::ObjectPickerOpen) == 99 &&
@@ -178,7 +188,7 @@ struct EditorConfig {
     char shot_name[96], message[128];
     double duration, playhead;
     std::int32_t replay_tick;
-    std::uint32_t playback_flags;
+    std::uint32_t playback_flags; // playing, busy, pause-after-capture preference
     double playback_speed;
     std::uint32_t playback_rate;
     EditorBinding reshade_binding;
@@ -303,6 +313,15 @@ struct EditorFollowConfig {
     double distance, shoulder, height;
 };
 constexpr std::size_t kEditorCameraListOffset = 2 * 1024 * 1024 + 23360;
+constexpr std::size_t kEditorCinematicOffset = 2 * 1024 * 1024 + 60000;
+struct EditorCinematicStatus {
+    char magic[8];
+    std::uint32_t sequence, abi, token, revision, state;
+};
+static_assert(sizeof(EditorCinematicStatus) == 28, "Python cinematic completion layout");
+static_assert(kEditorCinematicOffset + sizeof(EditorCinematicStatus) <= 2 * 1024 * 1024 + 61440,
+              "Cinematic completion fits the existing mapping");
+bool editor_cinematic_status(EditorCinematicStatus& out) noexcept;
 constexpr std::size_t kEditorCameraListCount = 32;
 struct EditorCameraRow {
     double time, aspect, roll;
@@ -430,7 +449,8 @@ inline bool valid_editor_object_config(const EditorObjectConfig& c) noexcept {
 inline bool valid_editor_camera_list(const EditorCameraList& list) noexcept {
     if (std::memcmp(list.magic, "DLYCAMS1", 8) || list.abi != 1 || !list.revision ||
         list.reserved || (list.flags & ~3u) || list.count > kEditorCameraListCount ||
-        list.first % kEditorCameraListCount || list.first > list.total ||
+        (list.first % kEditorCameraListCount && list.first !=
+            (list.total > kEditorCameraListCount ? list.total - kEditorCameraListCount : 0)) || list.first > list.total ||
         (list.total && list.first == list.total) ||
         list.count != std::min<std::uint32_t>(list.total - list.first, kEditorCameraListCount))
         return false;
@@ -451,7 +471,8 @@ inline bool valid_editor_camera_action(const EditorCameraList& list, EditorActio
         return value == 0 && (list.flags & (action == EditorAction::UndoShot ? 1u : 2u));
     if (action == EditorAction::CameraPage)
         return value >= 0 && value < list.total &&
-               std::fmod(value, double(kEditorCameraListCount)) == 0;
+               (std::fmod(value, double(kEditorCameraListCount)) == 0 ||
+                value == (list.total > kEditorCameraListCount ? list.total - kEditorCameraListCount : 0));
     if (action == EditorAction::SetCameraTime || action == EditorAction::SetCameraRoll)
         return value >= list.first && value < list.first + list.count;
     return (action == EditorAction::SelectCamera || action == EditorAction::ViewCamera ||
@@ -510,7 +531,7 @@ struct EditorSnapshot {
     std::uint32_t selected_camera = 0, camera_count = 0, dropped_events = 0;
     double speed = 400, sensitivity = .08, phase = 0, duration = 0, playhead = 0;
     std::int32_t tick = 0;
-    bool playing = false, busy = false;
+    bool playing = false, busy = false, pause_after_capture = false;
     double playback_speed = 1;
     std::uint32_t playback_rate = 60;
     std::uint32_t video_fps = 60, video_bitrate_mbps = 20, video_codec = 0;
