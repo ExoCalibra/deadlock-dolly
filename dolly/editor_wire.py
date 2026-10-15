@@ -49,6 +49,14 @@ EXTRA_ACTIONS += ("take_screenshot",)
 # action-ID ABI is unchanged. Ids 99+ are reserved for this feature.
 EXTRA_ACTIONS += ("object_picker_open", "object_picker_cancel", "object_place",
                   "object_select", "object_delete", "object_transform")
+EXTRA_ACTIONS += ("save_shot", "seek_replay_tick", "clear_camera_path")
+EXTRA_ACTIONS += ("focus_replay_player",)
+EXTRA_ACTIONS += ("prepare_cinematic",)
+EXTRA_ACTIONS += ("set_pause_after_capture",)
+
+# Optional completion signal in the unused mapping tail; existing offsets stay fixed.
+CINEMATIC_OFFSET = 2 * 1024 * 1024 + 60000
+CINEMATIC_STATUS = struct.Struct("<8s5I")
 
 CAMERA_LIST_OFFSET = 2 * 1024 * 1024 + 23360
 CAMERA_LIST_COUNT = 32
@@ -121,7 +129,8 @@ def pack_camera_list(sequence, project, revision, first=0, *, can_undo=False, ca
     revision = _uint(revision, 'camera list revision')
     first = _uint(first, 'camera list page')
     total = len(project.keyframes)
-    if not revision or first % CAMERA_LIST_COUNT or first > max(0, total - 1):
+    if (not revision or first > max(0, total - 1)
+            or first % CAMERA_LIST_COUNT and first != max(0, total - CAMERA_LIST_COUNT)):
         raise ValueError('Invalid camera list page or revision')
     keys = project.keyframes[first:first + CAMERA_LIST_COUNT]
     flags = int(bool(can_undo)) | int(bool(can_redo)) << 1
@@ -363,6 +372,9 @@ def pack_config(sequence, owner_sequence, ack_event, values):
     enabled = values.get("enabled", False)
     if not isinstance(enabled, bool):
         raise ValueError("Editor enabled must be a boolean")
+    pause_after_capture = values.get("pause_after_capture", False)
+    if type(pause_after_capture) is not bool:
+        raise ValueError("Pause after capture must be a boolean")
     owner = values.get("owner", "disabled")
     if owner not in OWNERS or owner == "unfocused":
         raise ValueError("Unknown native editor input owner")
@@ -427,7 +439,8 @@ def pack_config(sequence, owner_sequence, ack_event, values):
         *wire, _text(values.get("shot_name", "Untitled shot"), 96), _text(values.get("message", ""), 128),
         _finite(values.get("duration", 0), 0, 1e9, "duration"),
         _finite(values.get("playhead", 0), 0, 1e9, "playhead"), tick,
-        int(bool(values.get("playing", False))) | int(bool(values.get("busy", False))) << 1,
+        int(bool(values.get("playing", False))) | int(bool(values.get("busy", False))) << 1
+        | int(pause_after_capture) << 2,
         _finite(values.get("playback_speed", 1.0), .05, 4, "playback speed"),
         playback_rate, 0 if reshade is None else reshade.vk,
         0 if reshade is None else reshade.modifiers,

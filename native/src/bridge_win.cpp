@@ -24,6 +24,7 @@
 #include "dolly_path.hpp"
 #include "dolly_effects.hpp"
 #include "dolly_protocol.hpp"
+#include "dolly_module_residency.hpp"
 #include "dolly_replay_clock.hpp"
 #include "dolly_editor.hpp"
 #include "dolly_bone_picker.hpp"
@@ -1859,9 +1860,14 @@ static DWORD WINAPI worker(void*) {
     return 0;
 }
 static BOOL CALLBACK start_worker(PINIT_ONCE, PVOID, PVOID*) {
+    if (!pin_worker_module(reinterpret_cast<const void*>(&worker))) {
+        OutputDebugStringA("Dolly native: could not keep startup worker resident.\n");
+        return FALSE;
+    }
     HANDLE thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
-    if (thread)
-        CloseHandle(thread);
+    if (!thread)
+        return FALSE;
+    CloseHandle(thread);
     return TRUE;
 }
 static BOOL CALLBACK load_unlocker(PINIT_ONCE, PVOID, PVOID*) {

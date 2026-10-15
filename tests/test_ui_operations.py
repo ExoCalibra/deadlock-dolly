@@ -112,6 +112,16 @@ class OperationLifecycleTests(unittest.TestCase):
         self.assertEqual(app.events.get_nowait(), ('done', 'Next', (7, None)))
         app._recover_export_failure.assert_not_called()
 
+    def test_failed_crash_recovery_does_not_kill_operation_worker(self):
+        app=self.app();error=RuntimeError('Game exited')
+        app._base_capture=object()
+        app.video_export=SimpleNamespace(status=Mock(side_effect=RuntimeError('Native session closed')))
+        app.jobs.put(('Crash',Mock(side_effect=error),None))
+        app.jobs.put(('Next',lambda:7,None));app.jobs.put(None)
+        app._worker_loop()
+        self.assertEqual(app.events.get_nowait(),('error','Crash',error))
+        self.assertEqual(app.events.get_nowait(),('done','Next',(7,None)))
+
     def test_shutdown_sentinel_preserves_fifo_and_stops_before_later_jobs(self):
         app = self.app(); after = Mock()
         app.jobs.put(('Before', lambda: 1, None)); app.jobs.put(None); app.jobs.put(('After', after, None))

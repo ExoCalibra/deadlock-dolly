@@ -47,8 +47,9 @@ def _intensity_bits(value: float) -> int:
 CONTROL_BYTES = 2 * 1024 * 1024
 # The legacy tail is 24576 bytes (camera list + framing grid). The Object Picker
 # block lives in one appended 4 KiB page after it; keep this in step with
-# dolly_protocol.hpp kMappingBytes and dolly/object_wire.OBJECT_MAPPING_BYTES.
-MAPPING_BYTES = CONTROL_BYTES + 24576 + 4096
+# dolly_protocol.hpp kMappingBytes. Replay events append a separate 32 KiB block
+# after dolly/object_wire.OBJECT_MAPPING_BYTES; no existing offsets move.
+MAPPING_BYTES = CONTROL_BYTES + 24576 + 4096 + 32768
 PAYLOAD_OFFSET = 1024
 MAX_PAYLOAD_BYTES = CONTROL_BYTES - PAYLOAD_OFFSET
 CONTROL = struct.Struct("<8s6IQ2I2d512s")
@@ -662,7 +663,7 @@ class NativeBridge(MediaTransport):
             self._sleep(min(0.02, remaining))
 
     def start_flight(self, demo_name, pose=None, timeout=8, *, cancelled=None, owner="flight",
-                     playback=False):
+                     playback=False, phase=0.0):
         """Enter native manual flight, optionally seeded from a displayed view.
 
         ``playback`` selects the replay state to wait for: ``False`` requires
@@ -670,6 +671,9 @@ class NativeBridge(MediaTransport):
         playing, and ``None`` follows the replay's current state.
         """
         timeout = _number(timeout, "Native acknowledgment timeout")
+        phase = _number(phase, "Manual camera phase")
+        if phase < 0:
+            raise ValueError("Manual camera phase must be nonnegative")
         if owner not in ("flight", "panel"):
             raise ValueError("Native flight owner must be flight or panel")
         if playback is not None and not isinstance(playback, bool):
@@ -696,7 +700,7 @@ class NativeBridge(MediaTransport):
                 raise NativeBridgeError("Native flight requires its launched game process")
             self._prepared = False
             self._manual = False
-            self._demo, self._start, self._speed = demo, 0.0, 1.0
+            self._demo, self._start, self._speed = demo, phase, 1.0
             self._frozen = playback is not True
             self._pov = False
             self._flags = self._compose_flags()
@@ -797,6 +801,77 @@ class NativeBridge(MediaTransport):
             self._mapping[offset + 12:offset + len(data)] = data[12:]
             self._store(offset + 8, even)
             self._editor_cameras_sequence = even
+
+    def configure_shader_loading(self, loading):
+        """Publish a noninteractive startup notice independently of editor ownership."""
+        from .lite_mode import REPLAY_INFO, REPLAY_INFO_OFFSET, pack_replay_info
+        from .path import Project
+        with self._lock:
+            self._check_open()
+            self._shader_loading = bool(loading)
+            previous = getattr(self, "_lite_replay_sequence", 0)
+            odd, even = (previous + 1) & 0xffffffff, (previous + 2) & 0xffffffff
+            data = bytes(self._mapping[REPLAY_INFO_OFFSET:REPLAY_INFO_OFFSET + REPLAY_INFO.size])
+            if data[:8] != b'DLYLITE1':
+                data = pack_replay_info(odd, Project(), 1)
+            values = list(REPLAY_INFO.unpack(data))
+            values[1] = odd
+            values[6] = (values[6] & ~4) | (4 if loading else 0)
+            data = REPLAY_INFO.pack(*values)
+            self._store(REPLAY_INFO_OFFSET + 8, odd)
+            self._mapping[REPLAY_INFO_OFFSET:REPLAY_INFO_OFFSET + 8] = data[:8]
+            self._mapping[REPLAY_INFO_OFFSET + 12:REPLAY_INFO_OFFSET + len(data)] = data[12:]
+            self._store(REPLAY_INFO_OFFSET + 8, even)
+            self._lite_replay_sequence = even
+
+    def configure_lite_replay(self, project, revision, first=0, total_ticks=None):
+        from .lite_mode import pack_replay_info, REPLAY_INFO_OFFSET
+        with self._lock:
+            self._check_open()
+            previous = getattr(self, "_lite_replay_sequence", 0)
+            odd, even = (previous + 1) & 0xffffffff, (previous + 2) & 0xffffffff
+            data = pack_replay_info(odd, project, revision, first, total_ticks)
+            if getattr(self, "_shader_loading", False):
+                from .lite_mode import REPLAY_INFO
+                values = list(REPLAY_INFO.unpack(data))
+                values[6] |= 4
+                data = REPLAY_INFO.pack(*values)
+            offset = REPLAY_INFO_OFFSET
+            self._store(offset + 8, odd)
+            self._mapping[offset:offset+8] = data[:8]
+            self._mapping[offset+12:offset+len(data)] = data[12:]
+            self._store(offset + 8, even)
+            self._lite_replay_sequence = even
+
+    def configure_editor_cinematic(self, token, revision, state):
+        from . import editor_wire as wire
+        if not 0 < token <= 0xffffffff or not 0 <= revision <= 0xffffffff or state not in (1, 2, 3):
+            raise ValueError("Invalid cinematic preparation result")
+        with self._lock:
+            self._check_open()
+            previous = getattr(self, '_cinematic_sequence', 0)
+            odd, even = (previous + 1) & 0xffffffff, (previous + 2) & 0xffffffff
+            data = wire.CINEMATIC_STATUS.pack(b'DLYCIN01', odd, 1, token, revision, state)
+            offset = wire.CINEMATIC_OFFSET
+            self._store(offset + 8, odd)
+            self._mapping[offset:offset + 8] = data[:8]
+            self._mapping[offset + 12:offset + len(data)] = data[12:]
+            self._store(offset + 8, even)
+            self._cinematic_sequence = even
+
+    def configure_replay_events(self, index):
+        from . import replay_event_wire as wire
+        with self._lock:
+            self._check_open()
+            previous = getattr(self, '_replay_events_sequence', 0)
+            odd, even = (previous + 1) & 0xffffffff, (previous + 2) & 0xffffffff
+            data = wire.pack(odd, index)
+            offset = wire.OFFSET
+            self._store(offset + 8, odd)
+            self._mapping[offset:offset+8] = data[:8]
+            self._mapping[offset+12:offset+len(data)] = data[12:]
+            self._store(offset + 8, even)
+            self._replay_events_sequence = even
 
     def configure_framing_grid(self, *, enabled=False, binding=None):
         """Optional framing-guide block; enabled state and its bindable action."""

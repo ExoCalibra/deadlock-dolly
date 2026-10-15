@@ -36,8 +36,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(set(raw), {"version", "full_editor", "ffmpeg_path", "auto_updates", "capture_binding", "game_path", "replay_folder",
                                    "demo_path", "launch_options", "movement_speed",
                                    "mouse_sensitivity", "action_bindings", "reshade_binding",
-                                   "reshade_runtime_path", "framing_grid_enabled", "export_folder"})
-        self.assertEqual(raw["version"], 7)
+                                   "reshade_runtime_path", "framing_grid_enabled", "export_folder", "pause_after_capture"})
+        self.assertEqual(raw["version"], 8)
         self.assertEqual(raw["capture_binding"], settings.capture_binding.to_dict())
         self.assertNotIn("enabled", raw)
 
@@ -51,6 +51,7 @@ class SettingsTests(unittest.TestCase):
         raw.pop("ffmpeg_path")
         raw.pop("auto_updates")
         raw.pop("framing_grid_enabled"); raw.pop("export_folder")
+        raw.pop("pause_after_capture")
         self.write_raw(json.dumps(raw))
         before = self.path.read_bytes()
         loaded = load_settings(self.path)
@@ -73,6 +74,7 @@ class SettingsTests(unittest.TestCase):
         raw = json.loads(self.path.read_text('utf-8'))
         raw['version'] = 6
         raw.pop('export_folder')
+        raw.pop('pause_after_capture')
         self.write_raw(json.dumps(raw))
         before = self.path.read_bytes()
         self.assertEqual(load_settings(self.path), settings)
@@ -91,6 +93,29 @@ class SettingsTests(unittest.TestCase):
         for invalid in (None, 17, 'bad\nfolder'):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 AppSettings(export_folder=invalid)
+
+    def test_v7_capture_migration_preserves_existing_export_folder_without_writing(self):
+        settings = AppSettings(export_folder='E:/Unplugged/Videos', full_editor=True,
+                               auto_updates=False, framing_grid_enabled=True)
+        save_settings(settings, self.path)
+        raw = json.loads(self.path.read_text('utf-8'))
+        raw['version'] = 7
+        raw.pop('pause_after_capture')
+        self.write_raw(json.dumps(raw))
+        before = self.path.read_bytes()
+        loaded = load_settings(self.path)
+        self.assertEqual(loaded, settings)
+        self.assertFalse(loaded.pause_after_capture)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_pause_after_capture_roundtrips_and_rejects_non_boolean_preferences(self):
+        self.assertFalse(AppSettings().pause_after_capture)
+        settings = AppSettings(pause_after_capture=True, export_folder='E:/Videos')
+        save_settings(settings, self.path)
+        self.assertEqual(load_settings(self.path), settings)
+        for value in (0, 1, 'true', None):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'pause_after_capture'):
+                AppSettings(pause_after_capture=value)
 
     def test_invalid_file_load_preserves_original_and_creates_no_backup(self):
         self.write_raw("{ broken")

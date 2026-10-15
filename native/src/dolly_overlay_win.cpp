@@ -161,6 +161,11 @@ void feed_window_input(const InputMessage& message) {
     // that belongs to Deadlock's hero/replay UI. Mouse events only update ImGui.
     auto& io = ImGui::GetIO();
     const auto msg = message.message;
+    // Tab is a game key in Lite, never a request to focus ImGui controls.
+    // ImGui tabbing remains enabled even without NavEnableKeyboard.
+    if (panel_ui.lite_mode() && message.wparam == VK_TAB &&
+        (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP))
+        return;
     int button = -1;
     bool down = false;
     switch (msg) {
@@ -460,6 +465,7 @@ bool initialize_device(IDXGISwapChain* chain) {
         io.LogFilename = nullptr;
         io.ConfigFlags = ImGuiConfigFlags_NoMouseCursorChange;
         panel_ui.style_panel();
+        panel_ui.initialize_layout();
         const float panel_scale = std::clamp(ImGui_ImplWin32_GetDpiScaleForHwnd(game_window), 1.0f, 2.5f);
         panel_ui.load_panel_fonts(panel_scale);
         ImGui::GetStyle().ScaleAllSizes(panel_scale);
@@ -547,7 +553,7 @@ void render_overlay(IDXGISwapChain* chain) {
     const bool media_live = media_session_active();
     if (!media_live)
         depth::set_white_clear(false);
-    if (!state.enabled && !media_live) {
+    if (!state.enabled && !media_live && !panel_ui.shader_notice_visible(state)) {
         // Playback may disable manual editor input. Only a lost session retires
         // media here; control ownership and camera readiness are transient.
         if (!media_suspended && chain == swapchain && immediate) {
@@ -736,7 +742,8 @@ void render_overlay(IDXGISwapChain* chain) {
         editor_text_input_active(false);
         return;
     }
-    if (!state.enabled) {
+    const bool draw_loading = panel_ui.shader_notice_visible(state);
+    if (!state.enabled && !draw_loading) {
         clear_pending_input();
         editor_text_input_active(false);
         return;
@@ -746,6 +753,7 @@ void render_overlay(IDXGISwapChain* chain) {
     const auto guides = panel_ui.guides_visible(state) ? visualization_snapshot() : nullptr;
     const bool draw_guides = guides && guides->enabled();
     const bool draw_grid = panel_ui.framing_grid_visible(state);
+    const bool draw_campaths = panel_ui.lite_campaths_visible(state);
     auto& io = ImGui::GetIO();
     if (panel != last_panel) {
         io.ClearInputKeys();
@@ -754,7 +762,8 @@ void render_overlay(IDXGISwapChain* chain) {
     }
     // Present must never perform OS cursor updates on the game's behalf.
     io.ConfigFlags =
-        ImGuiConfigFlags_NoMouseCursorChange | (panel ? ImGuiConfigFlags_NavEnableKeyboard : 0);
+        ImGuiConfigFlags_NoMouseCursorChange |
+        (panel && !panel_ui.lite_mode() ? ImGuiConfigFlags_NavEnableKeyboard : 0);
     io.ConfigNavMoveSetMousePos = false;
     io.WantSetMousePos = false;
     io.MouseDrawCursor = panel;
@@ -764,7 +773,7 @@ void render_overlay(IDXGISwapChain* chain) {
         clear_pending_input();
         io.ClearEventsQueue();
         editor_text_input_active(false);
-        if (!draw_guides && !draw_grid)
+        if (!draw_guides && !draw_grid && !draw_campaths && !draw_loading)
             return;
     } else
         feed_pending_input();
@@ -796,6 +805,12 @@ void render_overlay(IDXGISwapChain* chain) {
         else
             panel_ui.draw_panel(state);
     }
+    if (draw_campaths) {
+        panel_ui.draw_lite_campaths(state);
+        panel_ui.draw_lite_timeline(state);
+    }
+    if (draw_loading)
+        panel_ui.draw_shader_notice();
     editor_text_input_active(panel && ImGui::GetIO().WantTextInput);
     ImGui::Render();
     immediate->OMSetRenderTargets(1, &target, nullptr);

@@ -1,5 +1,14 @@
 # Changes
 
+## 0.6.49-alpha
+
+- **Refreshed in-game UI, contributed by [Marcel (@tbhtho)](https://github.com/tbhtho).** *Before:* the editor used its older panel layout. *After:* dedicated Camera, Follow, Bone Picker, Look and Export tabs sit alongside a compact Campaths list and replay timeline with player kill/death markers.
+- **Saved layouts and complete F8 hiding.** *Before:* hiding Dolly could leave panels on screen. *After:* F8 hides/restores all three panels while keeping guides and the grid available. Main and Campaths headers are always draggable; **Layout > Arrange panels** enables resizing and timeline placement.
+- **Optional pause after capture.** *Before:* Capture paused playback. *After:* in-game Capture keeps it running by default, with a remembered **Pause after capture** checkbox beside Resume/Pause for the previous behavior.
+- **Safer player selection.** *Before:* selecting a hero could produce an availability error. *After:* the timeline moves freecam near an available player; absent or settling targets show a status notice without moving the camera. The hideout shader-loading notice also has clearer wording, spacing and placement.
+
+Full details: [0.6.49 release notes](RELEASE_NOTES_0.6.49-alpha.md).
+
 ## 0.6.48-alpha
 
 - **Replay effects settle before camera-path shots.** *Before:* seeking could pile up fresh flashes and glow on a hero as an export started. *After:* Dolly plays two seconds of normal replay before the authored start, pauses at the same start tick, and records the shot without seeking again. The saved camera path, export speed and FPS are preserved; Stop cancels preparation.

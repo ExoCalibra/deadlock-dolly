@@ -16,6 +16,20 @@ from release_files import sha256
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_declared_replay_reader_is_bundled_and_hash_checked(self):
+        native,dll,metadata=self.runtime_fixture()
+        reader=native/build_native.REPLAY_INDEX_RELATIVE
+        reader.write_bytes(b'Replay reader fixture')
+        notice=native/'replay_index/THIRD_PARTY_NOTICES.txt'
+        notice.parent.mkdir();notice.write_text('MIT license fixture')
+        info=json.loads(metadata.read_text());info['replay_index_sha256']=sha256(reader)
+        metadata.write_text(json.dumps(info))
+        with patch.object(build_native,'verify_native_dll',return_value={'machine':'x64'}):
+            files,_=build_native.runtime_files(self.root)
+            self.assertIn(reader,[source for source,_ in files])
+            reader.write_bytes(b'Unexpected replacement')
+            with self.assertRaisesRegex(ValueError,'Replay reader'):
+                build_native.runtime_files(self.root)
     def test_ui_override_pack_matches_launcher_pin_and_shipped_stylesheets(self):
         from dolly.launcher import UI_OVERRIDE_PACK_SHA256
         import struct

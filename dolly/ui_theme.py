@@ -35,6 +35,7 @@ TOKENS: dict[str, str] = {
     "button_active": "#2c3a3e",
     "selected": "#2b403f",      # selected row / header
     "selected_ink": "#dff0ed",
+    "selected_blue": "#357cbb",     # selected Lite playback speed
     "disabled_bg": "#1b232a",
     "disabled_fg": "#66747e",
     "track": "#27313a",         # slider / progress trough
