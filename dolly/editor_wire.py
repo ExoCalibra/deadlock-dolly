@@ -53,6 +53,7 @@ EXTRA_ACTIONS += ("save_shot", "seek_replay_tick", "clear_camera_path")
 EXTRA_ACTIONS += ("focus_replay_player",)
 EXTRA_ACTIONS += ("prepare_cinematic",)
 EXTRA_ACTIONS += ("set_pause_after_capture",)
+EXTRA_ACTIONS += ("set_video_ae_camera",)
 
 # Optional completion signal in the unused mapping tail; existing offsets stay fixed.
 CINEMATIC_OFFSET = 2 * 1024 * 1024 + 60000
@@ -414,13 +415,16 @@ def pack_config(sequence, owner_sequence, ack_event, values):
     for layer in ("world", "players", "effects"):
         if type(values.get("video_layer_" + layer, False)) is not bool:
             raise ValueError("Video layer must be a boolean")
+    if type(values.get("video_ae_camera", False)) is not bool:
+        raise ValueError("After Effects camera export must be a boolean")
     video_flags = ((1 if values.get("video_fixed_step") else 0)
                    | (2 if values.get("video_depth") else 0)
                    | (4 if values.get("video_depth_exr") else 0)
                    | (8 if values.get("video_layer_world") else 0)
                    | (16 if values.get("video_layer_players") else 0)
                    | (32 if values.get("video_layer_effects") else 0)
-                   | (64 if values.get("video_pov") else 0))
+                   | (64 if values.get("video_pov") else 0)
+                   | (128 if values.get("video_ae_camera") else 0))
     video_speed = _finite(values.get("video_speed", 1.0), .05, 4, "video export speed")
     confetti_enabled = values.get("confetti_enabled", False)
     confetti_despawn = values.get("confetti_despawn_on_ground", False)

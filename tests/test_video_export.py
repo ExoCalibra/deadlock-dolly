@@ -755,6 +755,44 @@ class VideoGuiTests(unittest.TestCase):
         self.app._play.assert_called_once()
         self.assertFalse(self.app._pending_auto_play)
 
+    def test_ae_camera_toggle_saves_the_recorded_shot_beside_the_video(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        self.app.project = Project()  # Later edits must not change the recorded take.
+        self.finish_color_take()
+        script = Path(self.folder.name) / "shot_camera.jsx"
+        text = script.read_text("ascii")
+        self.assertIn("var FPS = 60;", text)
+        self.assertIn("var FRAMES = 61;", text)
+        self.app._log.assert_any_call("After Effects camera saved to " + str(script))
+        self.assertIsNone(self.app._ae_camera_take)
+
+    def test_ae_camera_is_not_written_when_the_toggle_is_off(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(False)
+        self.app._start_video_recording()
+        self.finish_color_take()
+        self.assertEqual(list(Path(self.folder.name).glob("*.jsx")), [])
+
+    def test_ae_camera_is_dropped_when_the_take_fails(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        self.app._video_operation_done({"state": "failed", "error": "encoder stopped"})
+        self.assertIsNone(self.app._ae_camera_take)
+        self.finish_color_take()
+        self.assertEqual(list(Path(self.folder.name).glob("*.jsx")), [])
+
+    def test_ae_camera_write_failure_is_logged_without_failing_the_take(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        with patch("dolly.ae_export.export_jsx", side_effect=OSError("disk full")):
+            self.finish_color_take()
+        self.app._log.assert_any_call("After Effects camera was not saved: disk full")
+        self.app._error.assert_not_called()
+
     def test_poll_delivers_recorder_ready_to_pending_playback(self):
         self.app._pending_auto_play = True
         self.app.busy = False

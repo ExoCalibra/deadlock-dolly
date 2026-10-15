@@ -1621,6 +1621,26 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                 ImGui::EndDisabled();
             }
             if (lite_page_ == 4) {
+                // Standardizing RTT for these settings
+                struct Pending {
+                    double value = 0;
+                    std::uint64_t until = 0;
+                };
+                static std::array<Pending, 14> pending;
+                const auto now_ms = GetTickCount64();
+                const auto shown = [&](int id, double current) {
+                    auto& edit = pending[id];
+                    if (edit.value == current || now_ms >= edit.until)
+                        edit.until = 0;
+                    else if (edit.until)
+                        return edit.value;
+                    return current;
+                };
+                const auto commit = [&](int id, double value, EditorAction action) {
+                    if (editor_enqueue(action, value))
+                        pending[id] = {value, now_ms + 1000};
+                };
+
                 if (begin_panel_card("##export-camera")) {
                     section_title("Camera source", "Export");
                     const auto capture_state = export_recording.state;
@@ -1628,28 +1648,38 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                                          capture_state == video::State::starting ||
                                          capture_state == video::State::recording ||
                                          capture_state == video::State::finalizing);
-                    int source = state.video_pov ? 1 : 0;
+                    int source = int(shown(12, state.video_pov ? 1.0 : 0.0));
                     ImGui::TextUnformatted("Source");
                     ImGui::SetNextItemWidth(-1);
                     if (ImGui::Combo("##export-source", &source, "Camera path / Bone camera\0Player POV\0"))
-                        editor_enqueue(EditorAction::SetVideoSource, source);
+                        commit(12, double(source), EditorAction::SetVideoSource);
+                    const bool pov = source != 0;
+                    if (!pov) {
+                        bool ae_camera = shown(11, state.video_ae_camera ? 1.0 : 0.0) != 0.0;
+                        if (ImGui::Checkbox("Export After Effects camera (.jsx)", &ae_camera))
+                            commit(11, ae_camera ? 1.0 : 0.0, EditorAction::SetVideoAeCamera);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip(
+                                "Save the shot's camera as an After Effects script beside the finished video.");
+                    }
                     const bool single_attach = state.camera_count == 1 && state.attach_selected;
-                    if (state.video_pov || single_attach) {
+                    if (pov || single_attach) {
+                        const double duration = shown(13, state.pov_duration);
                         char duration_label[32];
                         std::snprintf(duration_label, sizeof(duration_label), "%.3g seconds",
-                                      state.pov_duration);
+                                      duration);
                         ImGui::TextUnformatted("Replay duration");
                         ImGui::SetNextItemWidth(-1);
                         if (ImGui::BeginCombo("##export-duration", duration_label, ImGuiComboFlags_HeightLargest)) {
                             for (const double seconds : {1., 2., 5., 10., 15., 30., 60., 120.}) {
                                 char label[32];
                                 std::snprintf(label, sizeof(label), "%.0f seconds", seconds);
-                                if (ImGui::Selectable(label, seconds == state.pov_duration))
-                                    editor_enqueue(EditorAction::SetPovDuration, seconds);
+                                if (ImGui::Selectable(label, seconds == duration))
+                                    commit(13, seconds, EditorAction::SetPovDuration);
                             }
                             ImGui::EndCombo();
                         }
-                        if (!compact_controls_ && single_attach && !state.video_pov)
+                        if (!compact_controls_ && single_attach && !pov)
                             ImGui::TextWrapped(
                                 "Record saves an end time for this bone camera and records the attached shot. Offsets and smoothing are preserved.");
                         else if (!compact_controls_)
@@ -1657,9 +1687,9 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                                 "Select a hero with Game Follow or F9, then pause at the start. F8: return here. Record POV hides the HUD and stops after this segment.");
                     }
                     ImGui::EndDisabled();
-                    if (!state.video_pov && !state.camera_count) {
+                    if (!pov && !state.camera_count) {
                         ImGui::TextWrapped("Capture at least two camera views to record a shot.");
-                    } else if (!compact_controls_ && !state.video_pov && state.attach_selected) {
+                    } else if (!compact_controls_ && !pov && state.attach_selected) {
                         EditorRoster roster{};
                         char target[112] = "Saved player";
                         if (editor_roster_snapshot(roster) &&
@@ -1675,36 +1705,14 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                                                                            : "Point: Eyes");
                         ImGui::TextDisabled("%u of %u views use attachment", state.attach_keys,
                                             state.shot_keys);
-                    } else if (!compact_controls_ && !state.video_pov) {
+                    } else if (!compact_controls_ && !pov) {
                         ImGui::TextWrapped("View %u: Free path", state.selected_camera + 1);
                     }
-                    if (!compact_controls_ && !state.video_pov)
+                    if (!compact_controls_ && !pov)
                         ImGui::TextWrapped(
                             "Export uses saved sources and offsets, including edits made while previewing.");
                 }
                 end_panel_card();
-                // The in-game controls mirror the desktop values through a
-                // Python config round trip (~100 ms). Apply a clicked value
-                // immediately so a control cannot flicker back to the
-                // outgoing value while the acknowledgement travels.
-                struct Pending {
-                    double value = 0;
-                    std::uint64_t until = 0;
-                };
-                static std::array<Pending, 11> pending;
-                const auto now_ms = GetTickCount64();
-                const auto shown = [&](int id, double current) {
-                    auto& edit = pending[id];
-                    if (edit.value == current || now_ms >= edit.until)
-                        edit.until = 0;
-                    else if (edit.until)
-                        return edit.value;
-                    return current;
-                };
-                const auto commit = [&](int id, double value, EditorAction action) {
-                    if (editor_enqueue(action, value))
-                        pending[id] = {value, now_ms + 1000};
-                };
                 if (begin_panel_card("##export-settings")) {
                     char bitrate[64]{};
                     std::snprintf(bitrate, sizeof(bitrate), "%u Mbps", state.video_bitrate_mbps);

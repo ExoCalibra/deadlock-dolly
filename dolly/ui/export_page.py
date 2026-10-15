@@ -30,6 +30,7 @@ class ExportState:
     video_reconstructed_audio: tk.Variable
     video_source: tk.Variable
     video_status_text: tk.Variable
+    video_ae_camera: tk.Variable
     codec_choices: tuple[str, ...]
     bitrate_choices: tuple[str, ...]
 
@@ -49,7 +50,6 @@ class ExportActions:
     use_bundled_ffmpeg: Callable[..., object]
     video_source_changed: Callable[..., object]
     discard_recording: Callable[..., object]
-    export_ae_camera: Callable[..., object]
 
 
 class ExportPage:
@@ -65,6 +65,8 @@ class ExportPage:
         source = card(body, "Camera source")
         self.video_source_combo = field(source, "Source", state.video_source, values=("Camera path", "Player POV"))
         self.video_source_combo.bind("<<ComboboxSelected>>", commands.video_source_changed)
+        self.video_ae_camera_check = ttk.Checkbutton(source, style="Card.TCheckbutton", text="Export After Effects camera (.jsx)", variable=state.video_ae_camera)
+        self.video_ae_camera_check.pack(anchor="w", pady=(0, GAP))
         self.video_pov_controls = ttk.Frame(source)
         self.video_pov_duration_combo = field(self.video_pov_controls, "Replay seconds", state.video_pov_duration,
                                            values=("1", "2", "5", "10", "15", "30", "60", "120"))
@@ -86,9 +88,6 @@ class ExportPage:
             audio_options, style="Card.TCheckbutton", text="Include reconstructed audio",
             variable=state.video_reconstructed_audio)
         self.video_reconstructed_audio_check.pack(side="left")
-        after_effects = card(body, "After Effects camera")
-        ttk.Label(after_effects, text="Exports a .jsx script that creates a comp with this shot's camera", style="CardMuted.TLabel", wraplength=320).pack(anchor="w", pady=(0, GAP))
-        self.ae_camera_button = actions(after_effects, (("Export camera (.jsx)...", commands.export_ae_camera),), 1)[0]
         options = ttk.Frame(body)
         options.pack(fill="x", pady=(0, GAP))
         for i in (0, 1):
