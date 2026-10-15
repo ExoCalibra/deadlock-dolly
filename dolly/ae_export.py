@@ -134,13 +134,20 @@ def build_jsx(project: Project, fps: float, *, width: int | None = None,
     samples, warnings = sample_camera(project, fps)
     default_width, default_height = comp_size(project.standard_aspect)
     width, height = width or default_width, height or default_height
-    keys = [(float(key.time), ae_vector(key.x, key.y, key.z)) for key in project.keyframes]
+    
+    # Positions are offsets from the first frame's camera,
+    origin = samples[0]["position"]
+    def offset(position):
+        return tuple(value - base for value, base in zip(position, origin))
+
+    keys = [(float(key.time), offset(ae_vector(key.x, key.y, key.z))) for key in project.keyframes]
     frames = len(samples)
     data = {
-        "positions": array(array(map(number, s["position"])) for s in samples),
+        "positions": array(array(map(number, offset(s["position"]))) for s in samples),
         "rotations": array(array(map(number, s["rotation"])) for s in samples),
         "fovs": array(number(s["fov"]) for s in samples),
         "keys": array(array([number(t), *map(number, p)]) for t, p in keys),
+        "origin": array(map(number, origin)),
     }
     name = json.dumps(project.name, ensure_ascii=True)
     script = f"""// Dolly camera for After Effects.
@@ -154,6 +161,7 @@ def build_jsx(project: Project, fps: float, *, width: int | None = None,
     var SHOT_NAME = {name};
     var FPS = {number(float(fps))};
     var FRAMES = {frames};
+    var ORIGIN = {data["origin"]};
     var positions = {data["positions"]};
     var rotations = {data["rotations"]};
     var fovs = {data["fovs"]};

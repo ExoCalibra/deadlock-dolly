@@ -1,5 +1,6 @@
 """After Effects camera export tests"""
 
+import json
 import math
 from pathlib import Path
 import random
@@ -129,6 +130,19 @@ class ScriptTests(unittest.TestCase):
         fovs = re.search(r"var fovs = \[(.*?)\];", script).group(1).split(",")
         self.assertEqual(len(fovs), 61)
         self.assertEqual(script.count("{"), script.count("}"))
+
+    def test_positions_are_offsets_from_the_first_frame(self):
+        shot = Project(keyframes=[camera(0, x=12000, y=-8000, z=300), camera(1, x=12100, y=-8000, z=350)],
+                       interpolation="linear")
+        script, _ = build_jsx(shot, 10)
+
+        def values(name):
+            return json.loads(re.search(r"var " + name + r" = (\[.*?\]);\n", script).group(1))
+        self.assertEqual(values("ORIGIN"), [12000, -300, -8000])
+        positions = values("positions")
+        self.assertEqual(positions[0], [0, 0, 0])
+        self.assertEqual(positions[-1], [100, -50, 0])
+        self.assertEqual(values("dollyKeys"), [[0, 0, 0, 0], [1, 100, -50, 0]])
 
     def test_export_writes_the_script(self):
         shot = Project(keyframes=[camera(0), camera(1)])
