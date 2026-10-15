@@ -43,6 +43,7 @@ dolly/camera_commands.py
 dolly/compatibility.py
 dolly/preload.py
 dolly/replay_camera.py
+dolly/replay_warmup.py
 dolly/console.py
 dolly/controller.py
 dolly/convar_response.py
@@ -264,6 +265,7 @@ tests/test_generated_compatibility.py
 tests/test_native_capture_timing.py
 tests/test_native_controller.py
 tests/test_replay_recovery.py
+tests/test_replay_warmup.py
 tests/test_restore_guidance.py
 tests/test_native_effects.py
 tests/test_native_flight_controller.py
@@ -670,3 +672,4 @@ native/profiles/scenesystem-2026-10-14-6782.json
 native/profiles/soundsystem-2026-10-14-6782.json
 third_party/cvar_unlocker/unlocker-build-6782.patch
 docs/RELEASE_NOTES_0.6.47-alpha.md
+docs/RELEASE_NOTES_0.6.48-alpha.md

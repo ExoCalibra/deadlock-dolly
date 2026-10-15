@@ -46,6 +46,7 @@ from . import launcher
 from .native_effects import compile_effects
 from .preload import PreloadMonitor
 from .replay_camera import ReplayCameraMonitor
+from .replay_warmup import ReplayWarmupMixin, seek_game_tick_offset
 
 ROOT = application_root(Path(__file__).resolve().parents[1])
 LOG = logging.getLogger("dolly")
@@ -221,7 +222,7 @@ class PreloadUnavailableError(RuntimeError):
     """
 
 
-class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHandoffMixin):
+class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHandoffMixin):
     def __init__(self, log_callback=None):
         self._log_callback = log_callback
         self._session = None
@@ -292,10 +293,12 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         self._startup_evidence = {}
         self._replay_requested = False
         self._replay_recovery_active = False
+        self._replay_warmup_active = False
         self._replay_recovery = {}
         self._replay_header = {}
         self._game_build = None
         self._recording_replay = None
+        self._recording_warmup = None
         self._recording_pending = False
         self._stop_event = threading.Event()
         self._thread = None
@@ -560,6 +563,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
             if graphics_profile:
                 options["graphics_profile"] = graphics_profile
             self._recording_replay = None
+            self._recording_warmup = None
             self._session = launcher.launch(game_path, str(path), port=self._port, protocol=protocol, **options)
             self._native_active = False
             self._native_manual = False
@@ -1171,6 +1175,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         with self._op_lock:
             self._require_unlocker()
             self._recording_replay = None
+            self._recording_warmup = None
             self.stop()
             path = launcher._validate_demo(self._demo)
             if path is None:
@@ -1197,7 +1202,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
 
     def cancel_replay_recovery(self):
         """Signal the existing worker; never launch, reconnect or queue a retry."""
-        if not self._replay_recovery_active:
+        if not (self._replay_recovery_active or self._replay_warmup_active):
             return False
         self._stop_event.set()
         return True
@@ -1208,6 +1213,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         self._recording_pending = bool(pending)
         if was_pending and not pending:
             self._recording_replay = None
+            self._recording_warmup = None
 
     def _recorder_active(self):
         if self._recording_pending:
@@ -1250,6 +1256,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         previous_probe = deepcopy(self._probe_result)
         session = self._session
         self._recording_replay = None
+        self._recording_warmup = None
         self._replay_recovery = {"pid": session.pid, "replay": str(path), "stage": "disconnecting"}
         self._replay_recovery_active = True
         self._invalidate_probe()
@@ -1516,6 +1523,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
     def prepare_pov_recording(self, project):
         """Prepare a segment clock; never calibrate or write a spectator pose."""
         with self._op_lock:
+            self._recording_warmup = None
             project.validate()
             if project.tracks or project.setup_values or any(k.source != "free" for k in project.keyframes):
                 raise ValueError("POV export requires a segment without camera/effect overrides.")
@@ -1605,6 +1613,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         """Recover before opening a video file; reserve one paused shot start."""
         with self._op_lock:
             self._recording_replay = None
+            self._recording_warmup = None
             if self._recorder_active():
                 raise RuntimeError("Finish the current recording before preparing another.")
             self._require_probe()
@@ -1622,11 +1631,22 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                 compile_effects(project)
                 pose = project.evaluate(0)
             self._recover_replay_for_shot()
+            warmed = None
             if project is not None:
-                self._seek(project, 0)
+                positioned = self._seek(project, 0)
+                start = self._seek_shot_time(project, 0, positioned)
+                pose = project.evaluate(start)
+                try:
+                    positioned = self._warm_replay_for_shot(project, start, positioned, calibrate=True)
+                except Exception:
+                    self.stop()
+                    raise
+                if positioned["replay_warmup"].get("performed"):
+                    warmed = {"project": project.to_dict(), "start": start, "positioned": positioned}
             self.enter_native_flight(pose=pose)
             info = self._require_demo()
             self._recording_replay = (self._session, str(self._demo), info["tick"])
+            self._recording_warmup = warmed
             self._message("Replay prepared for recording. Play the shot once, then finish recording.")
 
     def _wait_for_recorder_ready(self, timeout=10.0):
@@ -1661,17 +1681,21 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                 raise RuntimeError("The recorder did not start in time. Wait for the recording counter before playing the shot.")
             self._stop_event.wait(.05)
 
-    def _prepare_native_shot_replay(self):
+    def _prepare_native_shot_replay(self, project=None, start=0):
         if self._recorder_active():
             prepared, self._recording_replay = self._recording_replay, None
+            warmed, self._recording_warmup = self._recording_warmup, None
             info = self._require_demo()
             native = self._native_bridge().status()
             if (prepared is None or (prepared[0] is not self._session or prepared[1:] != (str(self._demo), info["tick"]))
                     or not native.get("paused") or native.get("tick") != info["tick"]):
                 raise RuntimeError("This recording has no unused prepared shot. Finish recording and start a new recording before playing again.")
+            if warmed is not None and (project is None or warmed["project"] != project.to_dict() or start != 0):
+                raise RuntimeError("The camera path changed after effect settling. Finish recording and prepare it again.")
             self._wait_for_recorder_ready()
-            return
+            return warmed
         self._recording_replay = None
+        self._recording_warmup = None
         self._recover_replay_for_shot()
 
     def probe(self):
@@ -3359,6 +3383,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
     def _seek_tick_run(self, target, *, allow_start_boundary=False):
         """Verify a paused tick; optionally recognize the replay's packet-1 floor."""
         self._recording_replay = None
+        self._recording_warmup = None
         target = int(target)
         self._check_position_cancelled()
         # Current engine help: demo_goto <tick> [relative] [pause].
@@ -3396,6 +3421,9 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         corrections = []
         self._last_seek_details = {"target_tick": target, "verified": False,
                                    "corrections": corrections}
+        clock_offset = seek_game_tick_offset(seek_output, target)
+        if clock_offset is not None:
+            self._last_seek_details["game_tick_offset"] = clock_offset
         while time.perf_counter() < end:
             self._check_position_cancelled()
             if wait_for_view:
@@ -3639,8 +3667,9 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                              any(track.name == "citadel_hud_visible" for track in project.tracks)):
                 raise ValueError("Remove the citadel_hud_visible track/fixed value or turn off Hide HUD during playback.")
             start = self._shot_time(project, time)
+            warmed = None
             if self._native_bridge() is not None and not frozen:
-                self._prepare_native_shot_replay()
+                warmed = self._prepare_native_shot_replay(project, start)
             self._snapshot(project)
             tick_rate_warning = self._replay_tick_rate_warning(project)
             self._playback_details = {"project": project.to_dict(), "start_time": start,
@@ -3672,7 +3701,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                 self._prepare_playback_settings(hide_hud)
                 if not frozen:
                     view_before = int(native.status().get("frame_count", 0)) if native is not None else 0
-                    positioned_demo = self._seek(project, start)
+                    positioned_demo = warmed["positioned"] if warmed is not None else self._seek(project, start)
                     actual_start = self._seek_shot_time(project, start, positioned_demo)
                     if native is not None and positioned_demo.get("tick") is not None:
                         # A long demo skip keeps reconstructing after the tick
@@ -3706,7 +3735,14 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                 frame = project.evaluate(start)
                 if native is not None:
                     frame["cvars"] = {}  # Native preparation snapshots originals before the first effect write.
-                if native is not None and frozen:
+                if native is not None and warmed is not None:
+                    self._playback_details["startup_calibration"] = deepcopy(
+                        positioned_demo["replay_warmup"]["calibration"])
+                    prepared_offset = self._playback_details["startup_calibration"].get("offset")
+                    if prepared_offset is not None:
+                        self._camera_offset = dict(prepared_offset)
+                    self._playback_details["startup_seek"] = deepcopy(self._last_seek_details)
+                elif native is not None and frozen:
                     self._playback_details["startup_calibration"] = {
                         "method": "native_frozen_view", "prepared_tick": positioned_demo["tick"],
                         "console_calibration_required": False}
@@ -3718,6 +3754,10 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                         self._playback_details["startup_calibration"] = deepcopy(self._camera_calibration)
                         self._playback_details["startup_seek"] = (deepcopy(self._last_seek_details)
                             if positioned_demo.get("tick") is not None else None)
+                if native is not None and not frozen and warmed is None and not self._recorder_active():
+                    positioned_demo = self._warm_replay_for_shot(project, start, positioned_demo)
+                if positioned_demo.get("replay_warmup"):
+                    self._playback_details["replay_warmup"] = deepcopy(positioned_demo["replay_warmup"])
                 self._reset_motion_observations(frame)
                 checked_demo = self._require_demo(require_tick=not frozen)
                 if (positioned_demo.get("tick") is not None and
@@ -3738,6 +3778,9 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
                     self._detach_spectator_view()
                     self._native_last_status = native.status()
                     self._require_native_demo(self._native_last_status)
+                    if positioned_demo.get("replay_warmup", {}).get("performed"):
+                        self._check_warmed_native_view(self._native_last_status, frame, positioned_demo["tick"],
+                            attached=any(key.source != "free" for key in project.keyframes))
                     if frozen and (not self._native_last_status.get("paused") or
                                    int(self._native_last_status["tick"]) != positioned_demo["tick"]):
                         raise RuntimeError("The replay moved while preparing frozen native preview. Pause it and retry.")
@@ -4312,6 +4355,8 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
 
     def stop(self, *, preserve_layers=False, preserve_speed=False):
         self._halt(native_action="release")
+        if not preserve_layers:
+            self._recording_warmup = None
         bridge = self._native_bridge()
         if bridge is not None and callable(getattr(bridge, "editor_status", None)) and self._alive():
             try:
@@ -4379,6 +4424,7 @@ class Controller(LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHa
         step is best-effort so the editor can always return to a clean state.
         """
         self._recording_replay = None
+        self._recording_warmup = None
         self._recording_pending = False
         self._release_replay_camera()
         bridge = self._native_bridge()

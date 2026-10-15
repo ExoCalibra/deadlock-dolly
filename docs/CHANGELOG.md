@@ -1,5 +1,10 @@
 # Changes
 
+## 0.6.48-alpha
+
+- **Replay effects settle before camera-path shots.** *Before:* seeking could pile up fresh flashes and glow on a hero as an export started. *After:* Dolly plays two seconds of normal replay before the authored start, pauses at the same start tick, and records the shot without seeking again. The saved camera path, export speed and FPS are preserved; Stop cancels preparation.
+- **Camera-path Color exports start on the authored frame.** Setup frames are excluded using the same native frame admission already used by layered exports.
+
 ## 0.6.45-alpha
 
 - **Reliable export startup.** *Before:* switching away from Deadlock or using Dolly's desktop controls could block the first recording frame and produce a misleading DirectX 11 error. *After:* recording starts from available game frames even when another window has focus.

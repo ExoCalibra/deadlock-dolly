@@ -510,7 +510,8 @@ class VideoExport:
                                ffmpeg_path=str(options.ffmpeg_path) if encoder == 1 and options.ffmpeg_path else "",
                                fixed_step=options.fixed_step, depth=options.depth,
                                depth_exr=options.depth_exr,
-                               shot_only=bool(options.depth or options.layers or options.shot_only),
+                               shot_only=bool(options.depth or options.layers or options.shot_only
+                                              or (project is not None and not frozen)),
                                white_clear=options.white_clear, **limited)
         except Exception as exc:
             if folder is not None:

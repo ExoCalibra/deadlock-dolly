@@ -191,6 +191,14 @@ Reconstructed audio is an advanced workflow with additional tools.
 Recording continues through
 camera handoffs and desktop controls; use Finish recording to save.
 
+Camera-path shots let the replay run for two seconds before the chosen start to
+settle effects created during seeking, then pause at the original start tick.
+This preparation finishes before recording begins and preserves the saved path,
+export speed and FPS. **Stop / restore** cancels preparation. Settling requires
+enough earlier replay data and supported replay clock/pause controls; very early
+shots retain their existing start behavior. Frozen and manual captures keep the
+current scene.
+
 The **Depth master** option writes a paired depth `.mov` (and optional EXR
 sequence) beside the color video. **World**, **Players** and **Effects** record
 isolated layer takes; players and effects also get an alpha master built from

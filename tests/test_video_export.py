@@ -73,6 +73,22 @@ class VideoExportTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 VideoOptions(self.path, max_frames=value).validated()
 
+    def test_camera_path_export_skips_setup_frames_without_changing_selected_timing(self):
+        project = Project(keyframes=[Keyframe(0, 0, 0, 0, 0, 0, 0),
+                                    Keyframe(1, 10, 0, 0, 0, 0, 0)])
+        self.export.start(VideoOptions(self.path, fps=120, speed=.5, fixed_step=True,
+                                       max_frames=30), project=project)
+        self.controller.prepare_native_recording.assert_called_once_with(project, frozen=False)
+        self.controller.set_export_timing.assert_called_once_with(120, .5)
+        self.assertTrue(self.bridge.start_video.call_args.kwargs["shot_only"])
+        self.assertEqual(self.bridge.start_video.call_args.kwargs["max_frames"], 30)
+
+    def test_frozen_recording_keeps_its_existing_current_scene_admission(self):
+        project = Project(keyframes=[Keyframe(0, 0, 0, 0, 0, 0, 0),
+                                    Keyframe(1, 10, 0, 0, 0, 0, 0)])
+        self.export.start(VideoOptions(self.path), project=project, frozen=True)
+        self.assertFalse(self.bridge.start_video.call_args.kwargs["shot_only"])
+
     def test_audio_take_places_video_inside_its_export_folder(self):
         self.export.start(VideoOptions(self.path, bundle_audio=True))
         folder = self.path.with_suffix("")
