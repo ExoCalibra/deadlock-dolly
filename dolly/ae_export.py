@@ -1,15 +1,12 @@
 """On export, create an After Effects ExtendScript (.jsx) with camera data
 
-Records camera position from Project.evaluate() once per frame. Attach
-cameras don't work correctly since the camera position is relative to the
-attach.
+Camera data saved per frame. Falls back to using keyframes when no camera data is available.
 
 AE uses left handed cartesian coordinates
 pos:      (x, y, z) -> (x, -z, y)
 rotation: (x, y, z) -> (Rx, Ry, Rz)
 fov:      2 * atan(lens_scale * aspect_ratio)
 """
-# TODO: Fix attach cameras
 # TODO: Fix comp size - only works for 16:9
 
 from __future__ import annotations
@@ -23,6 +20,7 @@ from .path import Project
 DEFAULT_LENS = .75
 DEFAULT_COMP = 1920
 GIMBAL = 1 - 1e-9 # gimbal lock floating point rounding errors
+CAMERA_FIELDS = ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll", "horizontal_fov"]
 
 
 def ae_vector(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -116,7 +114,8 @@ def sample_camera(project: Project, fps: float):
         lens = pose["lens_scale"] if has_lens else DEFAULT_LENS
         rotation = continuous(ae_rotation(pose["pitch"], pose["yaw"], pose["roll"]), previous)
         previous = rotation
-        samples.append({"time": time, "position": ae_vector(pose["x"], pose["y"], pose["z"]),
+        samples.append({"frame": index, "time": time,
+                        "position": ae_vector(pose["x"], pose["y"], pose["z"]),
                         "rotation": rotation, "fov": horizontal_fov(lens, pose["aspect_ratio"])})
    
     warnings = []
@@ -128,10 +127,51 @@ def sample_camera(project: Project, fps: float):
     return samples, warnings
 
 
-def build_jsx(project: Project, fps: float, *, width: int | None = None,
-              height: int | None = None) -> tuple[str, list[str]]:
-    """Return the JSX source and accuracy warnings for a shot."""
-    samples, warnings = sample_camera(project, fps)
+def sample_camera_data(path: str | Path, fps: float):
+    """Samples saved camera data"""
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError(f"Invalid fps ({fps})")
+    data = json.loads(Path(path).read_text("utf-8"))
+    if (not isinstance(data, dict) or data.get("format") != "deadlock-dolly-camera"
+            or data.get("version") != 1 or data.get("fields") != CAMERA_FIELDS):
+        raise ValueError("Not a supported camera path")
+    rows = data.get("frames")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("The camera data has no frames")
+
+    samples = []
+    previous = None
+    last_frame = -1
+    for row in rows:
+        if (not isinstance(row, list) or len(row) != len(CAMERA_FIELDS) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in row)):
+            raise ValueError("The camera data has an invalid frame")
+        _, video_time, _, x, y, z, pitch, yaw, roll, fov = row
+        frame = round(video_time * fps)
+        if frame <= last_frame or not 1 < fov < 179:
+            raise ValueError("The camera data has an invalid frame")
+        last_frame = frame
+        rotation = continuous(ae_rotation(pitch, yaw, roll), previous)
+        previous = rotation
+        samples.append({"frame": frame, "time": frame / fps, "position": ae_vector(x, y, z), "rotation": rotation, "fov": fov})
+
+    written = data.get("frames_written")
+    video_frames = written if isinstance(written, int) and written > last_frame else last_frame + 1
+    return samples, video_frames
+
+
+def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = None,
+              width: int | None = None, height: int | None = None) -> tuple[str, list[str]]:
+    """Return the JSX source and accuracy warnings for a shot.
+
+    With the native camera available, every frame is sampled; otherwise the
+    path is sampled from its keyframes.
+    """
+    if camera_data is not None:
+        samples, video_frames = sample_camera_data(camera_data, fps)
+        warnings = []
+    else:
+        samples, warnings = sample_camera(project, fps)
+        video_frames = len(samples)
     default_width, default_height = comp_size(project.standard_aspect)
     width, height = width or default_width, height or default_height
     
@@ -141,8 +181,8 @@ def build_jsx(project: Project, fps: float, *, width: int | None = None,
         return tuple(value - base for value, base in zip(position, origin))
 
     keys = [(float(key.time), offset(ae_vector(key.x, key.y, key.z))) for key in project.keyframes]
-    frames = len(samples)
     data = {
+        "frame_numbers": array(str(s["frame"]) for s in samples),
         "positions": array(array(map(number, offset(s["position"]))) for s in samples),
         "rotations": array(array(map(number, s["rotation"])) for s in samples),
         "fovs": array(number(s["fov"]) for s in samples),
@@ -160,8 +200,9 @@ def build_jsx(project: Project, fps: float, *, width: int | None = None,
 
     var SHOT_NAME = {name};
     var FPS = {number(float(fps))};
-    var FRAMES = {frames};
+    var FRAMES = {video_frames};
     var ORIGIN = {data["origin"]};
+    var frameNumbers = {data["frame_numbers"]};
     var positions = {data["positions"]};
     var rotations = {data["rotations"]};
     var fovs = {data["fovs"]};
@@ -186,9 +227,9 @@ def build_jsx(project: Project, fps: float, *, width: int | None = None,
         var camera = comp.layers.addCamera("Dolly camera", [COMP_WIDTH / 2, COMP_HEIGHT / 2]);
         camera.autoOrient = AutoOrientType.NO_AUTO_ORIENT;
         var times = [], scaled = [], xs = [], ys = [], zs = [], zooms = [];
-        for (var i = 0; i < FRAMES; i++) {{
+        for (var i = 0; i < positions.length; i++) {{
             var p = positions[i], r = rotations[i];
-            times.push(i / FPS);
+            times.push(frameNumbers[i] / FPS);
             scaled.push([p[0] * SCALE, p[1] * SCALE, p[2] * SCALE]);
             xs.push(r[0]); ys.push(r[1]); zs.push(r[2]);
             zooms.push((COMP_WIDTH / 2) / Math.tan(fovs[i] * Math.PI / 360));
@@ -211,12 +252,12 @@ def build_jsx(project: Project, fps: float, *, width: int | None = None,
     return script, warnings
 
 
-def export_jsx(project: Project, path: str | Path, fps: float, **size) -> list[str]:
+def export_jsx(project: Project, path: str | Path, fps: float, **options) -> list[str]:
     """Write the script"""
     import os
     import tempfile
 
-    script, warnings = build_jsx(project, fps, **size)
+    script, warnings = build_jsx(project, fps, **options)
     destination = Path(path)
     temporary: str | None = None
     try:

@@ -109,7 +109,7 @@ struct Test {
         if (window)
             DestroyWindow(window);
     }
-    void present(unsigned id, bool missing = false, bool scaled = false) {
+    void present(unsigned id, bool missing = false, bool scaled = false, const video::CameraSample* camera = nullptr) {
         std::array<unsigned char, 640> bytes{};
         const auto put = [&bytes](unsigned offset, float value) {
             std::memcpy(bytes.data() + offset, &value, 4);
@@ -149,7 +149,12 @@ struct Test {
         // depth_scene_smoke separately verifies the real draw detours.
         tracker->draw(context.p);
         auto scene = tracker->consume(context.p);
-        video::capture(chain.p, device.p, context.p, missing ? nullptr : &scene, double(id) / 10);
+        // A camera stands in for the bridge's view hook, which publishes the
+        // phase and its applied camera before the frame is presented.
+        if (camera)
+            video::publish_path_replay_time(true, double(id) / 10, false, camera);
+        video::capture(chain.p, device.p, context.p, missing ? nullptr : &scene, double(id) / 10,
+                       camera != nullptr);
         chain.p->Present(0, 0);
     }
     void wait() {
@@ -206,7 +211,9 @@ int wmain(int argc, wchar_t** argv) {
                 // scene; they must be skipped, not fail the take. Mode 7
                 // renders the scene below the color size (upscaling), so the
                 // paired depth is captured at the scene's own resolution.
-                t.present(frame % 100 + 1, mode == 6 && frame < 3, mode == 7);
+                const video::CameraSample camera{{double(frame), 2, 3}, {4, 5, 6}, 90};
+                t.present(frame % 100 + 1, mode == 6 && frame < 3, mode == 7,
+                          mode == 0 ? &camera : nullptr);
                 const auto status = video::status();
                 if (status.state == video::State::failed) {
                     std::fwprintf(stderr, L"%ls\n", status.error);
@@ -254,9 +261,27 @@ int wmain(int argc, wchar_t** argv) {
                     "\"last_frame\": " + std::to_string(status.frames_written - 1) + ",";
                 require(text.find(last) != std::string::npos,
                         "Shot metadata included an unwritten tail frame");
-                require(text.find("\"clock_fallback_frames\": " +
-                                  std::to_string(status.frames_written) + ",") != std::string::npos,
+                const auto clock = mode == 0 ? "\"clock_native_frames\": " : "\"clock_fallback_frames\": ";
+                require(text.find(clock + std::to_string(status.frames_written) + ",") !=
+                            std::string::npos,
                         "Clock metadata did not match the written frames");
+                // Only the native view clock carries a rendered camera. Its
+                // sidecar has exactly one row per encoded frame.
+                const auto camera_path = fs::path(path.wstring() + L".camera.json");
+                if (mode == 0) {
+                    std::ifstream camera_file(camera_path);
+                    const std::string camera((std::istreambuf_iterator<char>(camera_file)), {});
+                    std::size_t rows = 0;
+                    for (auto at = camera.find("\n    ["); at != std::string::npos;
+                         at = camera.find("\n    [", at + 1))
+                        ++rows;
+                    require(camera.find("\"format\": \"deadlock-dolly-camera\"") != std::string::npos &&
+                                rows == status.frames_written,
+                            "Camera metadata did not match the written frames");
+                    video::publish_path_replay_time(false, 0);
+                } else {
+                    require(!fs::exists(camera_path), "Camera metadata written without a native clock");
+                }
                 if (mode == 7) {
                     // The paired depth keeps the scene target's size and names
                     // the color recording it belongs to.

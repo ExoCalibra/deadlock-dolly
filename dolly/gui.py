@@ -637,8 +637,10 @@ class DollyApp:
         from .ae_export import export_jsx
         project, fps = take
         path = video.with_name(video.stem + "_camera.jsx")
+
+        camera_data = video.with_name(video.name + ".camera.json")
         try:
-            warnings = export_jsx(project, path, fps)
+            warnings = export_jsx(project, path, fps, camera_data=camera_data if camera_data.is_file() else None)
         except (OSError, ValueError) as exc:
             # The video is already saved; a camera sidecar failure must not fail the take.
             self._log("After Effects camera was not saved: " + str(exc))

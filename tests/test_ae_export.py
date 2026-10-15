@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from dolly.ae_export import (angle_vectors, ae_rotation, build_jsx, comp_size, export_jsx,
-                             horizontal_fov, sample_camera, ae_vector)
+                             horizontal_fov, sample_camera, sample_camera_data, ae_vector)
 from dolly.path import AttachKey, Keyframe, Project
 
 
@@ -143,6 +143,56 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(positions[0], [0, 0, 0])
         self.assertEqual(positions[-1], [100, -50, 0])
         self.assertEqual(values("dollyKeys"), [[0, 0, 0, 0], [1, 100, -50, 0]])
+
+    @staticmethod
+    def write_camera_data(folder, rows, frames_written=10, **overrides):
+        data = {"format": "deadlock-dolly-camera", "version": 1, "fps": 60, "fixed_step": True,
+                "frames_written": frames_written,
+                "fields": ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll",
+                           "horizontal_fov"],
+                "frames": rows, **overrides}
+        path = Path(folder) / "shot.mp4.camera.json"
+        path.write_text(json.dumps(data), "utf-8")
+        return path
+
+    def test_camera_data_replaces_the_authored_shot(self):
+        # An attach shot: the authored keys sit still, but the rendered camera moved.
+        attached = camera(1, x=5000)
+        attached.source, attached.attach = "attach", AttachKey(handle=5)
+        shot = Project(keyframes=[camera(0, x=5000), attached])
+        rows = [[frame, frame / 60, (frame - 3) / 60, 5000 + 10 * frame, 200, 64, 0, 90, 0, 80]
+                for frame in range(3, 8)]
+        with tempfile.TemporaryDirectory() as folder:
+            camera_data = self.write_camera_data(folder, rows)
+            script, warnings = build_jsx(shot, 60, camera_data=camera_data)
+
+        def values(name):
+            return json.loads(re.search(r"var " + name + r" = (\[.*?\]);\n", script).group(1))
+        self.assertEqual(warnings, [])
+        self.assertIn("var FRAMES = 10;", script)  # The whole video, including pre-roll.
+        self.assertEqual(values("frameNumbers"), [3, 4, 5, 6, 7])
+        self.assertEqual(values("ORIGIN"), [5030, -64, 200])
+        self.assertEqual([p[0] for p in values("positions")], [0, 10, 20, 30, 40])
+        self.assertEqual(values("fovs"), [80] * 5)
+        self.assertEqual(values("rotations")[0], [0, 0, 0])
+
+    def test_camera_data_frames_follow_video_time_not_row_order(self):
+        rows = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90], [1, 0.5, .5, 1, 0, 0, 0, 0, 0, 90]]
+        with tempfile.TemporaryDirectory() as folder:
+            samples, video_frames = sample_camera_data(self.write_camera_data(folder, rows, 2), 60)
+        self.assertEqual([s["frame"] for s in samples], [0, 30])
+        self.assertEqual(video_frames, 31)
+
+    def test_invalid_camera_data_is_rejected(self):
+        good = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90]]
+        cases = (dict(format="other"), dict(version=2), dict(fields=["frame"]), dict(frames=[]),
+                 dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 200]]),
+                 dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, float("nan")]]),
+                 dict(frames=good * 2))
+        for overrides in cases:
+            with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as folder:
+                with self.assertRaises(ValueError):
+                    sample_camera_data(self.write_camera_data(folder, good, **overrides), 60)
 
     def test_export_writes_the_script(self):
         shot = Project(keyframes=[camera(0), camera(1)])

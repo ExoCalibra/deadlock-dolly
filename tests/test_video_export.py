@@ -768,6 +768,23 @@ class VideoGuiTests(unittest.TestCase):
         self.app._log.assert_any_call("After Effects camera saved to " + str(script))
         self.assertIsNone(self.app._ae_camera_take)
 
+    def test_ae_camera_prefers_camera_data(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        camera_data = Path(self.folder.name) / "shot.mp4.camera.json"
+        camera_data.write_text(json.dumps({
+            "format": "deadlock-dolly-camera", "version": 1, "fps": 60, "fixed_step": True,
+            "frames_written": 2,
+            "fields": ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll",
+                       "horizontal_fov"],
+            "frames": [[0, 0, 0, 0, 0, 0, 0, 0, 0, 90], [1, 1 / 60, 1 / 60, 7, 0, 0, 0, 0, 0, 90]]}),
+            "utf-8")
+        self.finish_color_take()
+        text = (Path(self.folder.name) / "shot_camera.jsx").read_text("ascii")
+        self.assertIn("var FRAMES = 2;", text)
+        self.assertIn("var frameNumbers = [0,1];", text)
+
     def test_ae_camera_is_not_written_when_the_toggle_is_off(self):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(False)

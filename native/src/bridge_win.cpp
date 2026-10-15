@@ -1201,7 +1201,11 @@ static void on_view(void* self, std::uintptr_t caller) noexcept {
                            confetti_height, confetti_despawn, confetti_preset, confetti_intensity);
         player_capture::set_hidden_handles(0, 0, 5);
         if (c.mode == std::uint32_t(Mode::Play)) {
-            video::publish_path_replay_time(true, phase, completed);
+            const video::CameraSample rendered{
+                {original_xyz[0], original_xyz[1], original_xyz[2]},
+                {original_angles[0], original_angles[1], original_angles[2]},
+                original_fov};
+            video::publish_path_replay_time(true, phase, completed, &rendered);
             player_capture::publish_replay_time(phase);
         }
         finish(completed ? State::Completed
@@ -1365,7 +1369,11 @@ static void on_view(void* self, std::uintptr_t caller) noexcept {
     confetti::on_frame(demo.time, demo.playing, demo.seeking, &confetti_camera, confetti_enabled,
                        confetti_height, confetti_despawn, confetti_preset, confetti_intensity);
     if (c.mode == std::uint32_t(Mode::Play)) {
-        video::publish_path_replay_time(true, phase, completed);
+        // The final camera: attach targets, smoothing and blends included.
+        const video::CameraSample rendered{{applied[0], applied[1], applied[2]},
+                                           {applied[3], applied[4], applied[5]},
+                                           fov};
+        video::publish_path_replay_time(true, phase, completed, &rendered);
         player_capture::publish_replay_time(phase);
     }
     finish(completed ? State::Completed
