@@ -4,7 +4,7 @@
 
 [Open the in-game workspace.]
 
-Deadlock Dolly has a new in-game UI, thanks to Marcel, or tbhtho on GitHub. Camera, Follow, Bone Picker, Look and Export now have their own tabs, with your cameras on the left and replay controls underneath.
+Deadlock Dolly has a new in-game UI, thanks to @tbhtho on GitHub. Camera, Follow, Bone Picker, Look and Export now have their own tabs, with your cameras on the left and replay controls underneath.
 
 [Move Campaths, then open Layout.]
 
@@ -18,4 +18,4 @@ Capture now keeps playback running. Want the old behavior? Check Pause after cap
 
 While paused, the player selector brings freecam near your chosen hero. F8 hides all Dolly panels while keeping your guides and grid. Press it again to bring everything back. F9 still opens Deadlock's replay UI.
 
-Big thanks to Marcel for the rework.
+Big thanks to @tbhtho for the rework.

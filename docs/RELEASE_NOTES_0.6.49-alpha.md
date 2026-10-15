@@ -1,7 +1,7 @@
 # Deadlock Dolly 0.6.49-alpha
 
-A refreshed in-game workspace, with the UI rework contributed by Marcel
-([@tbhtho](https://github.com/tbhtho)) in [PR #20](https://github.com/cravvnn/deadlock-dolly/pull/20).
+A refreshed in-game workspace, with the UI rework contributed by
+[@tbhtho](https://github.com/tbhtho) in [PR #20](https://github.com/cravvnn/deadlock-dolly/pull/20).
 
 ## Changes
 

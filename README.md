@@ -341,7 +341,9 @@ ZIP from **Export diagnostics**. If the app does not open, include
 
 ## Contributors
 
-- [Marcel (@tbhtho)](https://github.com/tbhtho) — contributed the in-game UI rework in [PR #20](https://github.com/cravvnn/deadlock-dolly/pull/20).
+- [@tbhtho](https://github.com/tbhtho) — in-game UI rework and saved panel layouts.
+- [@s34532](https://github.com/s34532) — custom particle effects system, beginning with native confetti rain.
+- [@Hesykhia](https://github.com/Hesykhia) — high-resolution screenshot export with players-only mattes.
 
 ## License
 
@@ -354,7 +356,7 @@ separate terms in [assets/README.md](assets/README.md).
 Recent releases and the complete history live in the [changelog](docs/CHANGELOG.md)
 and the per-version [release notes](docs/).
 
-- **0.6.49-alpha** — refreshed in-game UI by Marcel (@tbhtho), saved layouts, a pause-after-capture choice and complete F8 panel hiding.
+- **0.6.49-alpha** — refreshed in-game UI by @tbhtho, saved layouts, a pause-after-capture choice and complete F8 panel hiding.
 - **0.6.48-alpha** — replay-effect settling before camera-path playback and exports.
 - **0.6.35-alpha** — every FFmpeg output step (stills, Players layer, alpha combine, clip audio, depth preview) runs hidden in a clean environment.
 - **0.6.34-alpha** — Native Depth of Field works on installs that previously showed the black checkerboard.
