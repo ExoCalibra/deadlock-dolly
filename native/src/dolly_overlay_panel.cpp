@@ -764,6 +764,8 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
         std::min(20.0f * panel_scale, std::min(io.DisplaySize.x, io.DisplaySize.y) * .04f);
     const bool compact = io.DisplaySize.x < 900 * panel_scale || io.DisplaySize.y < 650 * panel_scale;
     if (compact && compact_paths_) return;
+    const auto export_recording = editor_recording_status();
+    const bool recording_locked = editor_recording_locks_cameras(export_recording.state);
     const bool editor_arranged=layout_custom_ || editor_custom_;
     const float left = compact || editor_arranged ? margin : 284 * panel_scale;
     const ImVec2 maximum(std::max(1.0f, io.DisplaySize.x - left - margin),
@@ -790,7 +792,7 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
         panel_handle("Drag main menu",true);
         EditorCameraList history{};
         if (state.ready && state.paused && !state.busy && !state.playing && !state.attach_preview &&
-            !state.bone_picker && !io.WantTextInput && !ImGui::IsAnyItemActive() &&
+            !state.bone_picker && !recording_locked && !io.WantTextInput && !ImGui::IsAnyItemActive() &&
             editor_camera_list(history) && history.total == state.camera_count) {
             CameraPose request{};
             request[0] = double(history.revision);
@@ -832,7 +834,6 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
             }
             lite_page_ = lite_pending_page_; lite_pending_page_ = -1;
         }
-        const auto export_recording = lite_page_ == 4 ? video::status() : decltype(video::status()){};
         ImGui::Separator();
         ImGui::Spacing();
         // All cards share one continuous tab. Fit the presentation to the
@@ -912,6 +913,7 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                         ImGui::EndCombo();
                     }
                     ImGui::Separator();
+                    ImGui::BeginDisabled(recording_locked);
                     const float capture_hint = key_cap_width(EditorAction::Capture, panel_scale);
                     action_button(
                         "Capture camera here", EditorAction::Capture,
@@ -923,10 +925,11 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                         ImGui::AlignTextToFramePadding();
                         key_cap(EditorAction::Capture, panel_scale);
                     }
+                    ImGui::EndDisabled();
                     }
                     {
                     ImGui::BeginDisabled(!state.ready || state.busy || state.playing ||
-                                         !state.camera_count);
+                                         !state.camera_count || recording_locked);
                     if (ImGui::Button("Reset camera path",
                                       ImVec2(ImGui::GetContentRegionAvail().x, 0)))
                         ImGui::OpenPopup("Reset camera path?");
@@ -936,7 +939,7 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                         ImGui::TextUnformatted("Replace all camera views with the current view?");
                         ImGui::TextUnformatted("Lens and depth-of-field tracks will be kept.");
                         ImGui::BeginDisabled(!state.ready || state.busy || state.playing ||
-                                             !state.camera_count);
+                                             !state.camera_count || recording_locked);
                         if (ImGui::Button("Reset here") &&
                             editor_enqueue(EditorAction::ResetCameraPath))
                             ImGui::CloseCurrentPopup();
@@ -948,8 +951,10 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                     }
                     ImGui::Separator();
                     ImGui::BeginDisabled(!state.camera_count || state.playing);
+                    ImGui::BeginDisabled(recording_locked);
                     action_button("Replace selected", EditorAction::Replace,
                                   ImGui::GetContentRegionAvail().x);
+                    ImGui::EndDisabled();
                     const float half =
                         (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
                     action_button("Previous view", EditorAction::PreviousView, half);
@@ -1872,22 +1877,22 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
             ImGui::AlignTextToFramePadding();
             key_cap(EditorAction::Stop, panel_scale);
         }
-        if (lite_page_ == 4) {
+        if (lite_page_ == 4 || recording_locked) {
             ImGui::SameLine();
             const auto& recording = export_recording;
             const bool active = recording.state == video::State::starting ||
                                 recording.state == video::State::recording;
-            ImGui::BeginDisabled(!state.ready || state.busy);
+            ImGui::BeginDisabled(state.busy || (!active && !state.ready));
             if (active) {
                 action_button("Finish recording", EditorAction::StopVideo,
                               150 * panel_scale, 0, true);
-            } else {
-                ImGui::BeginDisabled(recording.state == video::State::finalizing);
-                action_button(recording.state == video::State::finalizing
-                                  ? "Finalizing video..."
-                                  : (state.video_pov ? "Record POV" : "Record video"),
-                              EditorAction::StartVideo, 150 * panel_scale, 0, true);
+            } else if (recording.state == video::State::finalizing) {
+                ImGui::BeginDisabled();
+                ImGui::Button("Finalizing video...", ImVec2(150 * panel_scale, 0));
                 ImGui::EndDisabled();
+            } else {
+                action_button(state.video_pov ? "Record POV" : "Record video",
+                              EditorAction::StartVideo, 150 * panel_scale, 0, true);
             }
             ImGui::EndDisabled();
         }

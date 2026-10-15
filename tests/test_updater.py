@@ -216,8 +216,43 @@ install(json.loads(Path(sys.argv[1]).read_text()),replace=cut_power)
         self.assertEqual(opened.call_count, 1)
         self.assertEqual([p.name for p in self.target.glob(".dolly-update-*")], [Path(work).name])
         self.assertTrue((Path(work) / "payload/UPDATE_MANIFEST.json").is_file())
-        (Path(work) / "verified.json").unlink()
+        self.assertEqual(u.staged_payload(self.target, "1.0.1", release["sha256"]), work)
         self.assertIsNone(u.staged_payload(self.target, "1.0.1"))
+        (Path(work) / "verified.json").unlink()
+        self.assertIsNone(u.staged_payload(self.target, "1.0.1", release["sha256"]))
+
+    def test_same_version_republished_asset_cannot_reuse_another_digest(self):
+        archive, original = self.make_zip()
+        original.update(url="https://github.com/cravvnn/deadlock-dolly/releases/download/v1.0.1/package.zip",
+                        size=archive.stat().st_size)
+        with patch.object(u, "open_url", return_value=BytesIO(archive.read_bytes())):
+            old_work = u.download_update(original, self.target)
+        (self.payload / "Dolly.exe").write_text("republished 1.0.1")
+        u.write_manifest(self.payload, "1.0.1")
+        archive, approved = self.make_zip()
+        approved.update(url=original["url"], size=archive.stat().st_size)
+        self.assertNotEqual(approved["sha256"], original["sha256"])
+        with patch.object(u, "open_url", return_value=BytesIO(archive.read_bytes())) as network:
+            new_work = u.download_update(approved, self.target)
+        self.assertNotEqual(new_work, old_work, "The approved replacement digest reused the older package")
+        network.assert_called_once_with(approved["url"])
+        self.assertEqual((new_work / "payload/Dolly.exe").read_text(), "republished 1.0.1")
+        self.assertEqual((old_work / "payload/Dolly.exe").read_text(), "1.0.1")
+        self.assertEqual(json.loads((new_work / "verified.json").read_text())["sha256"], approved["sha256"])
+
+    def test_old_cache_without_verified_digest_is_not_reused(self):
+        archive, approved = self.make_zip()
+        approved.update(url="https://github.com/cravvnn/deadlock-dolly/releases/download/v1.0.1/package.zip",
+                        size=archive.stat().st_size)
+        content = archive.read_bytes()
+        with patch.object(u, "open_url", return_value=BytesIO(content)):
+            old_work = u.download_update(approved, self.target)
+        (old_work / "verified.json").write_text(json.dumps({"version": approved["version"]}))
+        with patch.object(u, "open_url", return_value=BytesIO(content)) as network:
+            new_work = u.download_update(approved, self.target)
+        self.assertNotEqual(new_work, old_work, "An old marker without digest bypassed exact-release approval")
+        network.assert_called_once_with(approved["url"])
+        self.assertEqual(json.loads((new_work / "verified.json").read_text())["sha256"], approved["sha256"])
 
     def test_cleanup_removes_stale_workspaces_but_keeps_live_ones(self):
         stale = self.root / ".dolly-update-stale"; (stale / "payload").mkdir(parents=True)
@@ -333,12 +368,17 @@ class UpdateUITests(unittest.TestCase):
         from dolly.update_ui import UpdateUI
         from unittest.mock import Mock
         manager = UpdateUI.__new__(UpdateUI)
-        manager.app = SimpleNamespace(busy=False, playing=False, dirty=False, startup_cancel=None,
+        manager.app = SimpleNamespace(busy=False, playing=False, dirty=False, startup_cancel=None, closed=False,
             controller=Mock(), video_export=Mock(), root=Mock(), update_status=Mock(), _on_close=Mock())
         manager.app.controller.status.return_value = {"game_running": False}
         manager.app.video_export.status.return_value = {"state": "idle"}
         manager.app.root.grab_current.return_value = None
-        manager.ready = None; manager.restarting = False
+        manager.available = {"version": "1.0.1", "url": "https://github.com/cravvnn/deadlock-dolly/releases/download/v1.0.1/package.zip",
+                             "sha256": "a" * 64, "size": 100,
+                             "notes_url": "https://github.com/cravvnn/deadlock-dolly/releases/tag/v1.0.1"}
+        manager.ready = None; manager.ready_release = None; manager.approved = None
+        manager.restarting = False; manager.dismissed = False; manager.running = False
+        manager.notice = Mock(); manager.message = ""
         return manager
 
     def test_unsaved_work_game_recording_operations_and_dialogs_defer_restart(self):
@@ -364,6 +404,7 @@ class UpdateUITests(unittest.TestCase):
             work = target / ".dolly-update-verified"; work.mkdir()
             (target / "Dolly.exe").write_bytes(b"helper")
             m = self.manager(); m.ready = (work, "1.0.1")
+            m.approved = m.ready_release = m.release_key(m.available)
             with patch.object(update_ui, "application_root", return_value=target), \
                  patch.object(update_ui, "check_processes"), patch.object(w.subprocess, "Popen") as launch:
                 m.restart()
@@ -375,10 +416,22 @@ class UpdateUITests(unittest.TestCase):
     def test_other_active_game_keeps_desktop_open(self):
         from dolly import update_ui
         m = self.manager(); m.ready = (Path("staging"), "1.0.1")
+        m.approved = m.ready_release = m.release_key(m.available)
         with patch.object(update_ui, "check_processes", side_effect=RuntimeError("game running")):
             m.restart()
         m.app._on_close.assert_not_called()
         self.assertFalse(m.restarting)
+        self.assertIsNone(m.approved)
+
+    def test_verified_ready_payload_without_consent_cannot_launch_the_real_worker(self):
+        from dolly import update_ui
+        m = self.manager(); m.ready = (Path("staging"), "1.0.1")
+        m.ready_release = m.release_key(m.available)
+        with patch.object(update_ui, "check_processes") as processes, patch.object(w.subprocess, "Popen") as launch:
+            m.restart()
+        processes.assert_not_called()
+        launch.assert_not_called()
+        m.app._on_close.assert_not_called()
 
 
 class UpdateProgressWindowTests(unittest.TestCase):

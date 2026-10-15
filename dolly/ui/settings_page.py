@@ -89,8 +89,10 @@ class SettingsPage:
         updates = card(body, "Updates")
         self.auto_updates = tk.BooleanVar(value=state.auto_updates_initial)
         self.update_status = tk.StringVar(value="Checks published Latest releases; experimental pre-releases are ignored.")
-        ttk.Checkbutton(updates, style="Card.TCheckbutton", text="Download and install updates automatically when idle", variable=self.auto_updates,
+        ttk.Checkbutton(updates, style="Card.TCheckbutton", text="Automatically check for updates", variable=self.auto_updates,
                         command=commands.save_update_preference).pack(anchor="w", pady=(0, GAP))
+        ttk.Label(updates, text="Nothing downloads or installs until you choose Update now.",
+                  wraplength=700, style="CardMuted.TLabel").pack(anchor="w", pady=(0, GAP))
         self.update_check_button = actions(updates, (("Check for updates", commands.check_updates),), 1)[0]
         ttk.Label(updates, textvariable=self.update_status, wraplength=700, style="CardMuted.TLabel").pack(fill="x")
         game = card(body, "Game & files")

@@ -1,4 +1,4 @@
-"""Self-contained public Dolly.exe: startup checks and interrupted-update recovery.
+"""Self-contained public Dolly.exe: open the editor and recover interrupted updates.
 
 The editor runtime lives under _internal. This launcher bundles its own Python
 and Tk so recovery can start even when the editor runtime was partly replaced.
@@ -7,13 +7,8 @@ from __future__ import annotations
 import ctypes
 import os
 from pathlib import Path
-import queue
 import sys
-import threading
-import tkinter as tk
-from tkinter import ttk
-from . import __version__, ui_theme, updater, update_worker
-from .settings import load_settings
+from . import update_worker
 
 
 def launcher_process_ids():
@@ -42,103 +37,7 @@ def launcher_process_ids():
 
 def open_editor(target, arguments=(), *, wait=False):
     command = [str(target / "_internal/DollyApp.exe"), *arguments]
-    if not arguments:
-        command.append("--updated")  # The public launcher already handled startup.
     return update_worker.launch_program(command, target, wait=wait)
-
-
-def check_for_update(target, events, excluded):
-    """Worker emits data only; the window and installation stay on the UI thread."""
-    try:
-        update_worker.check_processes(target, exclude_pid=excluded)
-        release = updater.check_latest(__version__)
-        if release is None:
-            events.put(("open", "Dolly is up to date. Opening the editor..."))
-        else:
-            work = updater.download_update(release, target,
-                lambda message: events.put(("status", message)))
-            events.put(("ready", work))
-    except Exception as error:
-        events.put(("open", "Update deferred. Opening Dolly..."))
-        # Avoid writing preferences or application files on a failed check.
-        if sys.stderr is not None:
-            print("Dolly update deferred:", error, file=sys.stderr)
-
-
-class StartupWindow:
-    def __init__(self, target):
-        self.target = target
-        self.events = queue.Queue()
-        self.closed = False
-        self.outcome = "open"
-        self.excluded = launcher_process_ids()
-        self.root = tk.Tk()
-        self.root.title("Deadlock Dolly")
-        self.root.resizable(False, False)
-        self.root.configure(background=ui_theme.TOKENS["bg"])
-
-        icon = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) / "assets/dolly.ico"
-        if icon.is_file():
-            self.root.iconbitmap(str(icon))
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure("Startup.TFrame", background=ui_theme.TOKENS["bg"])
-        style.configure("Startup.TLabel", background=ui_theme.TOKENS["bg"], foreground=ui_theme.TOKENS["text"], font=(ui_theme.FONT_FAMILY, ui_theme.FONT_SIZES["body"]))
-        style.configure("Title.Startup.TLabel", font=(ui_theme.FONT_FAMILY, 16, "bold"))
-        style.configure("Startup.Horizontal.TProgressbar", background=ui_theme.TOKENS["accent"], troughcolor=ui_theme.TOKENS["button"], bordercolor=ui_theme.TOKENS["button"], lightcolor=ui_theme.TOKENS["accent"], darkcolor=ui_theme.TOKENS["accent"], borderwidth=0)
-        style.configure("Startup.TButton", padding=(12, 7), background=ui_theme.TOKENS["button"], foreground=ui_theme.TOKENS["text"], font=(ui_theme.FONT_FAMILY, ui_theme.FONT_SIZES["body"]), borderwidth=0)
-        body = ttk.Frame(self.root, style="Startup.TFrame", padding=24)
-        body.pack(fill="both", expand=True)
-        ttk.Label(body, text="DEADLOCK DOLLY", style="Title.Startup.TLabel").pack(anchor="w")
-        self.status = tk.StringVar(value="Checking for updates...")
-        ttk.Label(body, textvariable=self.status, style="Startup.TLabel", wraplength=390).pack(anchor="w", pady=(18, 14))
-        self.progress = ttk.Progressbar(body, mode="indeterminate", length=390, style="Startup.Horizontal.TProgressbar")
-        self.progress.pack(fill="x")
-        self.progress.start(15)
-        ttk.Button(body, text="Open Dolly", style="Startup.TButton", command=self.finish).pack(anchor="e", pady=(20, 0))
-        self.root.protocol("WM_DELETE_WINDOW", self.finish)
-        self.root.update_idletasks()
-        width, height = self.root.winfo_reqwidth(), self.root.winfo_reqheight()
-        self.root.geometry(f"+{max(0, (self.root.winfo_screenwidth()-width)//2)}+{max(0, (self.root.winfo_screenheight()-height)//2)}")
-
-    def finish(self):
-        if not self.closed:
-            self.closed = True
-            self.root.destroy()
-
-    def poll(self):
-        if self.closed:
-            return
-        try:
-            while True:
-                kind, value = self.events.get_nowait()
-                if kind == "status":
-                    self.status.set(value)
-                elif kind == "open":
-                    self.status.set(value)
-                    self.root.after(600, self.finish)
-                elif kind == "ready":
-                    try:
-                        # Recheck after download; another editor/game may have opened.
-                        update_worker.check_processes(self.target, exclude_pid=self.excluded)
-                        update_worker.launch_worker(self.target, value, parent_pid=self.excluded[-1])
-                    except (OSError, RuntimeError, ValueError):
-                        self.status.set("Update deferred. Opening Dolly...")
-                        self.root.after(600, self.finish)
-                    else:
-                        self.outcome = "updating"
-                        self.finish()
-                        return
-        except queue.Empty:
-            pass
-        self.root.after(100, self.poll)
-
-    def run(self):
-        threading.Thread(target=check_for_update, args=(self.target, self.events, self.excluded),
-                         daemon=True, name="Dolly startup update").start()
-        self.root.after(100, self.poll)
-        self.root.mainloop()
-        return self.outcome
 
 
 def main(argv=None, *, target=None):
@@ -158,12 +57,7 @@ def main(argv=None, *, target=None):
         update_worker.launch_worker(target, pending, recover=True, parent_pid=ids[-1])
         return 0
     update_worker.cleanup_workspaces(target)
-    try:
-        automatic = load_settings().auto_updates
-    except (OSError, ValueError):
-        automatic = True
-    if not args and automatic and (target / updater.MANIFEST).is_file():
-        if StartupWindow(target).run() == "updating":
-            return 0
+    # Release discovery belongs to the already-open desktop editor. The public
+    # launcher never downloads or installs a new release on an ordinary open.
     open_editor(target, args)
     return 0

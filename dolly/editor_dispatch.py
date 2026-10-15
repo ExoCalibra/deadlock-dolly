@@ -193,11 +193,18 @@ def _dispatch(app, event, bridge, *, publish):
         app._native_attach_cache = None
         publish()
     if action == "clear_camera_path":
+        if app.playing:
+            app.status_text.set("Stop path playback before clearing cameras.")
+            publish()
+            return True
+        if not app._shot_edit_ready():
+            # A queued confirmation can arrive after recording starts. Keep
+            # its cameras and report the actual blocker without a modal.
+            publish()
+            return True
         history = getattr(app, "shot_history", None)
         if history is None or event["pose"][0] != history.revision:
             raise ValueError("The camera list changed. Try again.")
-        if app.playing or not app._shot_edit_ready():
-            raise ValueError("Stop playback before clearing cameras.")
         candidate = copy.deepcopy(app.project)
         candidate.keyframes = []
         candidate.validate()

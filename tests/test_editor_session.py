@@ -130,6 +130,91 @@ class EditorSessionTests(unittest.TestCase):
         self.app._select_key.assert_called_once()
         self.app._submit.assert_not_called()
 
+    def test_paused_recording_rejects_clear_without_an_error_dialog(self):
+        from dolly.gui import DollyApp
+        for state in ('starting', 'recording', 'finalizing'):
+            with self.subTest(state=state):
+                self.camera_list_app()
+                self.app.native_editor_active = True
+                self.app.video_export = Mock()
+                self.app.video_export.status.return_value = {'state': state}
+                self.app._shot_edit_ready = lambda: DollyApp._shot_edit_ready(self.app)
+                self.app._commit_project = Mock()
+                self.app._native_camera_page = 32
+                self.app._error.reset_mock()
+                self.bridge.acknowledge_editor_event.reset_mock()
+                original = self.app.project.to_dict()
+                revision = self.app.shot_history.revision
+                self.bridge.editor_status.return_value = {'events': [
+                    {'sequence': 1, 'action': 'clear_camera_path', 'value': 0,
+                     'pose': (revision, 0, 0, 0, 0, 0, 0)}]}
+                session.poll(self.app)
+                self.app._error.assert_not_called()
+                self.app._commit_project.assert_not_called()
+                self.assertEqual(self.app.project.to_dict(), original)
+                self.assertEqual(self.app.shot_history.revision, revision)
+                self.assertIn('recording', self.app.status_text.set.call_args.args[0])
+                self.assertNotIn('Stop playback', self.app.status_text.set.call_args.args[0])
+                self.bridge.acknowledge_editor_event.assert_called_once_with(1)
+
+    def test_clear_during_recording_ignores_stale_confirmation(self):
+        self.camera_list_app()
+        self.app._shot_edit_ready.return_value = False
+        self.app._commit_project = Mock()
+        self.assertTrue(session.dispatch(self.app, {
+            'action': 'clear_camera_path', 'value': 0,
+            'pose': (self.app.shot_history.revision - 1, 0, 0, 0, 0, 0, 0)}, self.bridge))
+        self.app._commit_project.assert_not_called()
+
+    def test_clear_during_playback_keeps_cameras_and_reports_status(self):
+        self.camera_list_app()
+        self.app.playing = True
+        self.app._commit_project = Mock()
+        self.assertTrue(session.dispatch(self.app, {
+            'action': 'clear_camera_path', 'value': 0,
+            'pose': (self.app.shot_history.revision, 0, 0, 0, 0, 0, 0)}, self.bridge))
+        self.app._commit_project.assert_not_called()
+        self.assertIn('Stop path playback', self.app.status_text.set.call_args.args[0])
+
+    def test_rejected_clear_keeps_finish_recording_available(self):
+        from dolly.gui import DollyApp
+        self.camera_list_app()
+        self.app.native_editor_active = True
+        self.app.video_export = Mock()
+        self.app.video_export.status.return_value = {'state': 'recording'}
+        self.app._shot_edit_ready = lambda: DollyApp._shot_edit_ready(self.app)
+        self.app._commit_project = Mock()
+        self.app._stop_video_recording = Mock()
+        self.bridge.editor_status.return_value = {'events': [
+            {'sequence': 1, 'action': 'clear_camera_path', 'value': 0,
+             'pose': (self.app.shot_history.revision, 0, 0, 0, 0, 0, 0)},
+            {'sequence': 2, 'action': 'stop_video', 'value': 0}]}
+        session.poll(self.app)
+        self.app._error.assert_not_called()
+        self.app._commit_project.assert_not_called()
+        self.app._stop_video_recording.assert_called_once_with(cancel=False)
+        self.assertEqual([call.args[0] for call in self.bridge.acknowledge_editor_event.call_args_list], [1, 2])
+
+    def test_clear_waits_for_queued_recording_and_then_can_be_retried(self):
+        from dolly.gui import DollyApp
+        self.camera_list_app()
+        self.app.video_export = Mock()
+        self.app.video_export.status.return_value = {'state': 'completed'}
+        self.app._shot_edit_ready = lambda: DollyApp._shot_edit_ready(self.app)
+        self.app._commit_project = Mock()
+        event = {'action': 'clear_camera_path', 'value': 0,
+                 'pose': (self.app.shot_history.revision, 0, 0, 0, 0, 0, 0)}
+        for name in ('_layer_queue', '_active_layer_take'):
+            with self.subTest(name=name):
+                setattr(self.app, name, ['players'])
+                self.assertTrue(session.dispatch(self.app, event, self.bridge))
+                self.app._commit_project.assert_not_called()
+                self.assertEqual(self.app.status_text.set.call_args.args[0],
+                                 'Finish recording before editing cameras.')
+                setattr(self.app, name, None)
+        self.assertTrue(session.dispatch(self.app, event, self.bridge))
+        self.assertEqual(self.app._commit_project.call_args.args[0].keyframes, [])
+
     def test_cinematic_preparation_waits_for_seek_completion(self):
         self.camera_list_app()
         revision = self.app.shot_history.revision

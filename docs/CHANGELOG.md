@@ -1,5 +1,22 @@
 # Changes
 
+## 0.6.51-alpha
+
+- **Choose when to update.** *Before:* opening Dolly or leaving it idle could download and install updates automatically. *After:* from this version, release checks run inside the desktop app and every update requires **Update now** before a package downloads or installs.
+- **A clear update notice.** *Before:* updates used a startup window or a small sidebar control. *After:* a mint-outlined notice shows your installed and available versions; **Later** leaves a header reminder without scheduling a restart.
+- **Read release highlights inside Dolly.** *Before:* **What's changed** opened a browser. *After:* it smoothly expands the publisher's short Before/After notes inside the update notice, with a separate full-release link.
+
+Thanks to [@Hesykhia](https://github.com/Hesykhia) for the update-control feedback.
+
+Full details: [0.6.51 release notes](RELEASE_NOTES_0.6.51-alpha.md).
+
+## 0.6.50-alpha
+
+- **Visible recording controls.** *Before:* a paused replay could leave the recorder open while Finish recording was only available on Export. *After:* Finish recording stays visible on every editor tab, with a saving status during finalization.
+- **Safe camera clearing.** *Before:* Clear All could appear available while recording and raise a misleading playback error. *After:* camera edits stay locked until the take finishes, and queued Clear requests keep the cameras intact without an error popup.
+
+Full details: [0.6.50 release notes](RELEASE_NOTES_0.6.50-alpha.md).
+
 ## 0.6.49-alpha
 
 - **Deadlock build 6785 support.** *Before:* the October 14 game update was outside the reviewed compatibility profiles. *After:* Dolly recognizes the updated game.

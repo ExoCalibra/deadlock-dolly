@@ -530,6 +530,10 @@ void stress_game_buffer_lifetimes(IDXGISwapChain* chain, ID3D11Device* device,
 static bool framebuffer_scale_probe = false;
 namespace dolly {
 bool framing_grid_enabled_stub = false;
+video::Status recording_status_stub{};
+video::Status editor_recording_status() noexcept {
+    return recording_status_stub;
+}
 EditorCinematicStatus cinematic_status_stub{};
 bool editor_cinematic_status(EditorCinematicStatus& out) noexcept {
     out = cinematic_status_stub;
@@ -779,6 +783,19 @@ static void panel_option_regressions() {
     frame(); frame();
     require(observed_actions.empty(), "Busy campath can be cleared through an open confirmation");
     snapshot.busy = false;
+    for (auto state : {dolly::video::State::starting, dolly::video::State::recording,
+                       dolly::video::State::finalizing}) {
+        dolly::recording_status_stub.state = state;
+        frame(); frame();
+        test_context->NavNextActivateId = confirmation->GetID("Clear");
+        frame(); frame();
+        require(observed_actions.empty(), "Paused recording can be cleared through an open confirmation");
+    }
+    for (auto state : {dolly::video::State::idle, dolly::video::State::completed,
+                       dolly::video::State::cancelled, dolly::video::State::failed})
+        require(!dolly::editor_recording_locks_cameras(state),
+                "A terminal recorder still locks camera editing");
+    dolly::recording_status_stub = {};
     test_context->NavNextActivateId = confirmation->GetID("Cancel");
     frame(); frame();
     test_context->NavNextActivateId = campaths->GetID("Clear All");
@@ -905,6 +922,31 @@ static void panel_option_regressions() {
     require(observed_actions.size() == 1 && observed_actions[0].action == dolly::EditorAction::StartVideo &&
                 observed_actions[0].value == 0,
             "Export recording action is not retained in its fixed footer");
+    for (float width : {640.f, 1280.f, 1920.f}) {
+        io.DisplaySize = ImVec2(width, width == 640.f ? 480.f : 1080.f);
+        dolly::recording_status_stub.state = dolly::video::State::recording;
+        for (const char* page : {"Camera###CAMERA", "Follow###FOLLOW", "Bone Picker###BONE PICKER",
+                                 "Look###LOOK", "Export###EXPORT"}) {
+            test_context->NavNextActivateId = main->GetID(page);
+            frame(); frame();
+            observed_actions.clear();
+            test_context->NavNextActivateId = main->GetID("Finish recording");
+            frame(); frame();
+            require(observed_actions.size() == 1 && observed_actions[0].action == dolly::EditorAction::StopVideo,
+                    "An editor page hides Finish recording while the replay is paused");
+            const auto bounds = test_context->NavWindow->NavRectRel[ImGuiNavLayer_Main];
+            require(test_context->NavWindow == main && bounds.Min.x >= 0 &&
+                        bounds.Max.x <= main->Size.x && bounds.Max.y <= main->Size.y,
+                    "Finish recording is clipped in an editor footer");
+            dolly::recording_status_stub.state = dolly::video::State::finalizing;
+            observed_actions.clear();
+            test_context->NavNextActivateId = main->GetID("Finish recording");
+            frame(); frame();
+            require(observed_actions.empty(), "A finalizing recorder still exposes Finish recording");
+            dolly::recording_status_stub.state = dolly::video::State::recording;
+        }
+    }
+    dolly::recording_status_stub = {};
     ImGui::DestroyContext(test_context);
     ImGui::SetCurrentContext(previous_context);
     snapshot = previous_snapshot;
@@ -1737,6 +1779,14 @@ int main(int argc, char** argv) {
             snapshot.view_height = render_height;
             if (const auto* count = std::getenv("DOLLY_UI_TEST_CAMERAS"))
                 snapshot.camera_count = unsigned(std::clamp(std::atoi(count), 0, 128));
+            if (const auto* recording = std::getenv("DOLLY_UI_TEST_RECORDING")) {
+                if (std::strcmp(recording, "recording") == 0)
+                    dolly::recording_status_stub.state = dolly::video::State::recording;
+                else if (std::strcmp(recording, "finalizing") == 0)
+                    dolly::recording_status_stub.state = dolly::video::State::finalizing;
+                else
+                    require(false, "Unknown recording screenshot fixture state");
+            }
         }
         if (screenshot) {
             snapshot.dof_available = true;

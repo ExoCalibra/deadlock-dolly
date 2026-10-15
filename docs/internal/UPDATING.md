@@ -1,26 +1,44 @@
 # Published release updates
 
-Dolly 0.5.6-alpha introduces the single-entry-point Windows updater. Earlier public
-ZIPs and the unpublished 0.5.5 preview need one manual download of this package.
-Future releases use the same startup updater. Source checkouts still use the
-local build workflow.
+Packaged Windows builds include the updater and recovery launcher in `Dolly.exe`.
+Source checkouts use the local build workflow; the packaged updater does not
+install or build source checkouts.
 
 ## For users
 
-Open `Dolly.exe`. Its startup window shows **Checking for updates...** before
-opening the editor. **Open Dolly** skips a slow check. Only this executable is
-shown at the top of the folder; its editor runtime stays under `_internal`.
+Open `Dolly.exe`. The desktop editor opens immediately, and any enabled update
+check runs in the background. The editor runtime stays under `_internal`.
 
-Dolly checks GitHub's public Latest release. A newer Windows package downloads, is verified against GitHub's SHA-256
-digest and its file manifest, then installs when the desktop has no unsaved shot,
-operation, recording, open dialog or active Deadlock session. Dolly closes,
-checks the replacement application and reopens at the same path. Shortcuts keep
-working. There is no update while a game session is active.
+Dolly checks version and release information from GitHub's public Latest release.
+When a newer release is available, a prominent notice inside the desktop app
+shows the installed and available versions, with **What's changed**, **Update
+now**, and **Later**. **What's changed** smoothly expands the short published
+Before/After notes inside the mint-outlined notice. Longer notes scroll within
+the panel; **Full release notes** opens the release page in your browser. If a
+release has no supported short notes, the panel explains that and keeps the full
+release link available. **Later** collapses
+the notice to an **Update available** button in the header for this session; the
+next launch checks again when automatic checking is enabled. The update also
+remains available in **Settings > Updates**.
 
-Settings / Updates has a manual check and an automatic-update switch. Turning
-automatic updates off leaves a downloaded update available through Restart to
-update. Offline, incomplete, missing-asset and rate-limited checks leave the
-installed application usable. Experimental pre-releases are ignored.
+Every update requires **Update now**. No package downloads or installs before
+that click, and there is no automatic-install option or countdown. If Dolly asks
+you to save your shot, close Deadlock, finish a recording or operation, or close
+an open dialog, do that first and click **Update now** again. The request is not
+queued: becoming idle does not start a download, installation or restart.
+
+After an accepted **Update now** action, Dolly downloads the Windows package,
+verifies GitHub's SHA-256 digest and the file manifest, then installs and restarts
+when safe. If the app becomes busy before installation, finish that work and
+click **Update now** again. The replacement application is checked and reopens
+at the same path, so shortcuts keep working.
+
+**Settings > Updates** has **Check for updates** and **Automatically check for
+updates**. The preference controls background release-information checks only;
+turning it off keeps automatic checks off. Manual checks remain available.
+Existing saved preference values are preserved. Offline, incomplete, missing-asset
+and rate-limited checks leave the installed application usable. Experimental
+pre-releases are ignored.
 
 Preferences and ReShade configuration stay in `%APPDATA%/DeadlockDolly`.
 Custom FFmpeg paths are saved there too. The bundled FFmpeg is found relative
@@ -43,10 +61,11 @@ the transaction, and restores the previous files on replacement or startup-check
 failure. Staging and backups are kept in a `.dolly-update-*` folder inside the
 Dolly folder, never beside it. After a successful update the following launch
 removes that folder automatically; it is kept only while a recovery is pending
-or a transaction is unfinished. A verified download is reused on a retry instead
-of downloading the same release again.
+or a transaction is unfinished. A later **Update now** attempt can reuse an
+already verified download instead of downloading the same release again.
 
-After an interrupted update, close Deadlock and open `Dolly.exe` again. This
+Recovery of an already approved, interrupted update remains automatic. Close
+Deadlock and open `Dolly.exe` again. This
 self-contained launcher can recover even if the editor runtime in `_internal`
 is incomplete. It starts a private copy of its embedded update worker, waits for
 the old processes to close, restores journaled application files, then reopens
@@ -60,6 +79,13 @@ with `--plan plan.json --recover`; otherwise extract a fresh release into a
 separate folder. Ordinary recovery needs only Dolly.exe.
 
 ## For the publisher
+
+The in-app highlights use the same short publish description pasted into the
+GitHub release body. Put the exact release version on its own line, such as
+`**0.6.51-alpha**`, followed by two to four bullets in the form
+`- **Short title.** *Before:* ... *After:* ...`. Wrapped lines are supported.
+Use the version being published; the example is not an assigned next version.
+No separate summary attachment or package download is needed to read highlights.
 
 1. Use a new increasing version in `dolly/__init__.py` for every public build.
 2. Build locally with `tools/build_windows.py`; do not build on GitHub Actions.

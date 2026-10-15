@@ -705,3 +705,10 @@ docs/RELEASE_NOTES_0.6.49-alpha.md
 docs/VIDEO_SCRIPT_0.6.49-alpha.md
 native/profiles/deadlock-2026-10-15-6785-complete.json
 third_party/cvar_unlocker/unlocker-build-6785.patch
+docs/RELEASE_NOTES_0.6.50-alpha.md
+dolly/release_notes.py
+dolly/ui/update_notice.py
+tests/test_release_notes.py
+tests/test_update_consent.py
+tests/test_update_notice.py
+docs/RELEASE_NOTES_0.6.51-alpha.md
