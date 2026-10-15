@@ -1,5 +1,4 @@
-"""On export, create an After Effects ExtendScript (.jsx) with camera data
-
+"""
 Camera data saved per frame. Falls back to using keyframes when no camera data is available.
 
 AE uses left handed cartesian coordinates
@@ -14,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import NamedTuple
 
 from .path import Project
 
@@ -23,6 +23,115 @@ GIMBAL = 1 - 1e-9 # gimbal lock floating point rounding errors
 CAMERA_FIELDS = ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll", "horizontal_fov"]
 
 
+class Frame(NamedTuple):
+    """One video frame's camera."""
+    frame: int
+    time: float
+    position: tuple[float, float, float]
+    angles: tuple[float, float, float]  # pitch, yaw, roll
+    fov: float  # horizontal, degrees
+
+
+class Take(NamedTuple):
+    """Every sampled frame, the video length in frames and accuracy warnings."""
+    frames: list[Frame]
+    video_frames: int
+    warnings: list[str]
+
+
+def angle_vectors(pitch: float, yaw: float, roll: float):
+    """Vectors: forward, right and up."""
+    sp, cp = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+    sy, cy = math.sin(math.radians(yaw)), math.cos(math.radians(yaw))
+    sr, cr = math.sin(math.radians(roll)), math.cos(math.radians(roll))
+    forward = (cp * cy, cp * sy, -sp)
+    right = (-sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp)
+    up = (cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp)
+    return forward, right, up
+
+
+def horizontal_fov(lens_scale: float, aspect_ratio: float) -> float:
+    """Horizontal FOV in degrees"""
+    fov = math.degrees(2 * math.atan(lens_scale * aspect_ratio))
+    if not math.isfinite(fov) or not 1 < fov < 179:
+        raise ValueError(f"Invalid FOV ({fov})")
+    return fov
+
+
+def comp_size(standard_aspect: float, width: int = DEFAULT_COMP) -> tuple[int, int]:
+    """Default comp size for the shot's standard aspect, with an even height."""
+    height = max(2, int(round(width / standard_aspect / 2)) * 2)
+    return width, height
+
+
+def sample_camera(project: Project, fps: float) -> Take:
+    """Sample the camera data once per frame."""
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError(f"Invalid fps ({fps})")
+
+    project.validate()
+    if not project.keyframes:
+        raise ValueError("Add a camera keyframe before exporting the camera.")
+
+    duration = project.duration
+    count = int(math.floor(duration * fps + 1e-9)) + 1
+    has_lens = any(key.lens_scale is not None for key in project.keyframes)
+    frames = []
+
+    for index in range(count):
+        time = index / fps
+        pose = project.evaluate(time)
+        lens = pose["lens_scale"] if has_lens else DEFAULT_LENS
+        frames.append(Frame(index, time, (pose["x"], pose["y"], pose["z"]),
+                            (pose["pitch"], pose["yaw"], pose["roll"]),
+                            horizontal_fov(lens, pose["aspect_ratio"])))
+
+    warnings = []
+    if any(key.source == "attach" for key in project.keyframes):
+        warnings.append("Attach keys are currently unsupported.")
+    if not has_lens:
+        warnings.append("No captured lens, assuming a standard 90-degree lens.")
+
+    return Take(frames, len(frames), warnings)
+
+
+def sample_camera_data(path: str | Path, fps: float) -> Take:
+    """Samples saved camera data"""
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError(f"Invalid fps ({fps})")
+    data = json.loads(Path(path).read_text("utf-8"))
+    if (not isinstance(data, dict) or data.get("format") != "deadlock-dolly-camera"
+            or data.get("version") != 1 or data.get("fields") != CAMERA_FIELDS):
+        raise ValueError("Not a supported camera path")
+    rows = data.get("frames")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("The camera data has no frames")
+
+    frames = []
+    last_frame = -1
+    for row in rows:
+        if (not isinstance(row, list) or len(row) != len(CAMERA_FIELDS) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in row)):
+            raise ValueError("The camera data has an invalid frame")
+        _, video_time, _, x, y, z, pitch, yaw, roll, fov = row
+        frame = round(video_time * fps)
+        if frame <= last_frame or not 1 < fov < 179:
+            raise ValueError("The camera data has an invalid frame")
+        last_frame = frame
+        frames.append(Frame(frame, frame / fps, (x, y, z), (pitch, yaw, roll), fov))
+
+    written = data.get("frames_written")
+    video_frames = written if isinstance(written, int) and written > last_frame else last_frame + 1
+    return Take(frames, video_frames, [])
+
+
+def load_take(project: Project, fps: float, camera_data: str | Path | None = None) -> Take:
+    """Saved camera data when available; otherwise the shot's keyframes."""
+    if camera_data is not None:
+        return sample_camera_data(camera_data, fps)
+    return sample_camera(project, fps)
+
+
+# After Effects (.jsx)
 def ae_vector(x: float, y: float, z: float) -> tuple[float, float, float]:
     """Source vector to After Effects vector."""
     return (x, -z, y)
@@ -34,17 +143,6 @@ def ae_rotation(pitch: float, yaw: float, roll: float) -> list[tuple[float, floa
     columns = (ae_vector(*right), tuple(-v for v in ae_vector(*up)), ae_vector(*forward))
     matrix = [[columns[col][row] for col in range(3)] for row in range(3)]
     return euler_candidates(matrix)
-
-
-def angle_vectors(pitch: float, yaw: float, roll: float):
-    """Source angle vectors: forward, right and up."""
-    sp, cp = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
-    sy, cy = math.sin(math.radians(yaw)), math.cos(math.radians(yaw))
-    sr, cr = math.sin(math.radians(roll)), math.cos(math.radians(roll))
-    forward = (cp * cy, cp * sy, -sp)
-    right = (-sr * sp * cy + cr * sy, -sr * sp * sy - cr * cy, -sr * cp)
-    up = (cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp)
-    return forward, right, up
 
 
 def euler_candidates(matrix) -> list[tuple[float, float, float]]:
@@ -79,84 +177,14 @@ def continuous(candidates, previous):
     return best[1]
 
 
-def horizontal_fov(lens_scale: float, aspect_ratio: float) -> float:
-    """Horizontal FOV in degrees"""
-    fov = math.degrees(2 * math.atan(lens_scale * aspect_ratio))
-    if not math.isfinite(fov) or not 1 < fov < 179:
-        raise ValueError(f"Invalid FOV ({fov})")
-    return fov
-
-
-def comp_size(standard_aspect: float, width: int = DEFAULT_COMP) -> tuple[int, int]:
-    """Default comp size for the shot's standard aspect, with an even height."""
-    height = max(2, int(round(width / standard_aspect / 2)) * 2)
-    return width, height
-
-
-def sample_camera(project: Project, fps: float):
-    """Return per-frame AE camera data"""
-    if not math.isfinite(fps) or fps <= 0:
-        raise ValueError(f"Invalid fps ({fps})")
-    
-    project.validate()
-    if not project.keyframes:
-        raise ValueError("Add a camera keyframe before exporting the camera.")
-        
-    duration = project.duration
-    count = int(math.floor(duration * fps + 1e-9)) + 1
-    has_lens = any(key.lens_scale is not None for key in project.keyframes)
-    samples = []
+def ae_rotations(frames: list[Frame]) -> list[tuple[float, float, float]]:
+    """AE x,y,z Rotation for every frame, continuous from frame to frame."""
+    rotations = []
     previous = None
-
-    for index in range(count):
-        time = index / fps
-        pose = project.evaluate(time)
-        lens = pose["lens_scale"] if has_lens else DEFAULT_LENS
-        rotation = continuous(ae_rotation(pose["pitch"], pose["yaw"], pose["roll"]), previous)
-        previous = rotation
-        samples.append({"frame": index, "time": time,
-                        "position": ae_vector(pose["x"], pose["y"], pose["z"]),
-                        "rotation": rotation, "fov": horizontal_fov(lens, pose["aspect_ratio"])})
-   
-    warnings = []
-    if any(key.source == "attach" for key in project.keyframes):
-        warnings.append("Attach keys are currently unsupported.")
-    if not has_lens:
-        warnings.append("No captured lens, assuming a standard 90-degree spectator lens.")
-
-    return samples, warnings
-
-
-def sample_camera_data(path: str | Path, fps: float):
-    """Samples saved camera data"""
-    if not math.isfinite(fps) or fps <= 0:
-        raise ValueError(f"Invalid fps ({fps})")
-    data = json.loads(Path(path).read_text("utf-8"))
-    if (not isinstance(data, dict) or data.get("format") != "deadlock-dolly-camera"
-            or data.get("version") != 1 or data.get("fields") != CAMERA_FIELDS):
-        raise ValueError("Not a supported camera path")
-    rows = data.get("frames")
-    if not isinstance(rows, list) or not rows:
-        raise ValueError("The camera data has no frames")
-
-    samples = []
-    previous = None
-    last_frame = -1
-    for row in rows:
-        if (not isinstance(row, list) or len(row) != len(CAMERA_FIELDS) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in row)):
-            raise ValueError("The camera data has an invalid frame")
-        _, video_time, _, x, y, z, pitch, yaw, roll, fov = row
-        frame = round(video_time * fps)
-        if frame <= last_frame or not 1 < fov < 179:
-            raise ValueError("The camera data has an invalid frame")
-        last_frame = frame
-        rotation = continuous(ae_rotation(pitch, yaw, roll), previous)
-        previous = rotation
-        samples.append({"frame": frame, "time": frame / fps, "position": ae_vector(x, y, z), "rotation": rotation, "fov": fov})
-
-    written = data.get("frames_written")
-    video_frames = written if isinstance(written, int) and written > last_frame else last_frame + 1
-    return samples, video_frames
+    for frame in frames:
+        previous = continuous(ae_rotation(*frame.angles), previous)
+        rotations.append(previous)
+    return rotations
 
 
 def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = None,
@@ -166,26 +194,22 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
     With the native camera available, every frame is sampled; otherwise the
     path is sampled from its keyframes.
     """
-    if camera_data is not None:
-        samples, video_frames = sample_camera_data(camera_data, fps)
-        warnings = []
-    else:
-        samples, warnings = sample_camera(project, fps)
-        video_frames = len(samples)
+    take = load_take(project, fps, camera_data)
+    frames = take.frames
     default_width, default_height = comp_size(project.standard_aspect)
     width, height = width or default_width, height or default_height
-    
-    # Positions are offsets from the first frame's camera,
-    origin = samples[0]["position"]
-    def offset(position):
-        return tuple(value - base for value, base in zip(position, origin))
 
-    keys = [(float(key.time), offset(ae_vector(key.x, key.y, key.z))) for key in project.keyframes]
+    # Positions are offsets from the first frame's camera,
+    origin = ae_vector(*frames[0].position)
+    def offset(position):
+        return tuple(value - base for value, base in zip(ae_vector(*position), origin))
+
+    keys = [(float(key.time), offset((key.x, key.y, key.z))) for key in project.keyframes]
     data = {
-        "frame_numbers": array(str(s["frame"]) for s in samples),
-        "positions": array(array(map(number, offset(s["position"]))) for s in samples),
-        "rotations": array(array(map(number, s["rotation"])) for s in samples),
-        "fovs": array(number(s["fov"]) for s in samples),
+        "frame_numbers": array(str(f.frame) for f in frames),
+        "positions": array(array(map(number, offset(f.position))) for f in frames),
+        "rotations": array(array(map(number, r)) for r in ae_rotations(frames)),
+        "fovs": array(number(f.fov) for f in frames),
         "keys": array(array([number(t), *map(number, p)]) for t, p in keys),
         "origin": array(map(number, origin)),
     }
@@ -200,7 +224,7 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
 
     var SHOT_NAME = {name};
     var FPS = {number(float(fps))};
-    var FRAMES = {video_frames};
+    var FRAMES = {take.video_frames};
     var ORIGIN = {data["origin"]};
     var frameNumbers = {data["frame_numbers"]};
     var positions = {data["positions"]};
@@ -249,15 +273,21 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
     }}
 }})();
 """
-    return script, warnings
+    return script, take.warnings
 
 
 def export_jsx(project: Project, path: str | Path, fps: float, **options) -> list[str]:
     """Write the script"""
+    script, warnings = build_jsx(project, fps, **options)
+    write_script(path, script)
+    return warnings
+
+
+# Helpers
+def write_script(path: str | Path, script: str) -> None:
     import os
     import tempfile
 
-    script, warnings = build_jsx(project, fps, **options)
     destination = Path(path)
     temporary: str | None = None
     try:
@@ -271,10 +301,8 @@ def export_jsx(project: Project, path: str | Path, fps: float, **options) -> lis
     finally:
         if temporary is not None:
             Path(temporary).unlink(missing_ok=True)
-    return warnings
 
 
-# Helpers
 def number(value: float) -> str:
     """Rounding numbers to 6 decimals"""
     return format(round(value, 6), ".10g")

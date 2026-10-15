@@ -755,6 +755,15 @@ class VideoGuiTests(unittest.TestCase):
         self.app._play.assert_called_once()
         self.assertFalse(self.app._pending_auto_play)
 
+    def finish_color_take(self):
+        self.app._layer_queue = []
+        self.app._active_layer_take = None
+        self.app.video_export.output_path = Path(self.folder.name) / "shot.mp4"
+        self.app.video_export.output_directory = Path(self.folder.name)
+        self.app.video_export.finish_pending = False
+        self.app._log = Mock()
+        self.app._video_operation_done({"state": "completed"})
+
     def test_ae_camera_toggle_saves_the_recorded_shot_beside_the_video(self):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(True)
@@ -805,7 +814,7 @@ class VideoGuiTests(unittest.TestCase):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(True)
         self.app._start_video_recording()
-        with patch("dolly.ae_export.export_jsx", side_effect=OSError("disk full")):
+        with patch("dolly.camera_export.export_jsx", side_effect=OSError("disk full")):
             self.finish_color_take()
         self.app._log.assert_any_call("After Effects camera was not saved: disk full")
         self.app._error.assert_not_called()

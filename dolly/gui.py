@@ -634,7 +634,7 @@ class DollyApp:
         if take is None:
             return
 
-        from .ae_export import export_jsx
+        from .camera_export import export_jsx
         project, fps = take
         path = video.with_name(video.stem + "_camera.jsx")
 

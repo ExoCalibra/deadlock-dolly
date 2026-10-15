@@ -1,4 +1,4 @@
-"""After Effects camera export tests"""
+"""Camera export tests"""
 
 import json
 import math
@@ -8,8 +8,9 @@ import re
 import tempfile
 import unittest
 
-from dolly.ae_export import (angle_vectors, ae_rotation, build_jsx, comp_size, export_jsx,
-                             horizontal_fov, sample_camera, sample_camera_data, ae_vector)
+from dolly.camera_export import (angle_vectors, ae_rotation, ae_rotations, build_jsx, comp_size,
+                                 export_jsx, horizontal_fov, sample_camera, sample_camera_data,
+                                 ae_vector)
 from dolly.path import AttachKey, Keyframe, Project
 
 
@@ -76,39 +77,40 @@ class CoordinateTests(unittest.TestCase):
 class SamplingTests(unittest.TestCase):
     def test_samples_every_frame_through_the_shot_end(self):
         shot = Project(keyframes=[camera(0, x=0), camera(1, x=100)], interpolation="linear")
-        samples, _ = sample_camera(shot, 30)
-        self.assertEqual(len(samples), 31)
-        self.assertAlmostEqual(samples[15]["time"], .5)
-        self.assertAlmostEqual(samples[15]["position"][0], 50)
-        self.assertAlmostEqual(samples[-1]["position"][0], 100)
+        take = sample_camera(shot, 30)
+        self.assertEqual((len(take.frames), take.video_frames), (31, 31))
+        self.assertEqual(take.frames[15].frame, 15)
+        self.assertAlmostEqual(take.frames[15].time, .5)
+        self.assertAlmostEqual(take.frames[15].position[0], 50)
+        self.assertAlmostEqual(take.frames[-1].position[0], 100)
 
     def test_positions_follow_the_project_evaluator(self):
         shot = Project(keyframes=[camera(0, 0, 0, 0), camera(1.3, 400, -50, 90),
                                   camera(2.1, 500, 300, 40), camera(4, -20, 10, 0)])
-        samples, _ = sample_camera(shot, 24)
-        for sample in samples:
-            pose = shot.evaluate(sample["time"])
-            self.assertEqual(sample["position"], ae_vector(pose["x"], pose["y"], pose["z"]))
+        for frame in sample_camera(shot, 24).frames:
+            pose = shot.evaluate(frame.time)
+            self.assertEqual(frame.position, (pose["x"], pose["y"], pose["z"]))
+            self.assertEqual(frame.angles, (pose["pitch"], pose["yaw"], pose["roll"]))
 
     def test_yaw_across_180_stays_continuous(self):
         shot = Project(keyframes=[camera(0, yaw=170), camera(1, yaw=-170)], interpolation="linear")
-        samples, _ = sample_camera(shot, 60)
-        for previous, current in zip(samples, samples[1:]):
-            for a, b in zip(previous["rotation"], current["rotation"]):
+        rotations = ae_rotations(sample_camera(shot, 60).frames)
+        for previous, current in zip(rotations, rotations[1:]):
+            for a, b in zip(previous, current):
                 self.assertLess(abs(b - a), 5)
 
     def test_captured_lens_drives_fov(self):
         shot = Project(keyframes=[camera(0), camera(1)], interpolation="linear")
         for key in shot.keyframes:
             key.lens_scale = math.tan(math.radians(40)) / key.aspect_ratio
-        samples, warnings = sample_camera(shot, 10)
-        self.assertAlmostEqual(samples[4]["fov"], 80)
-        self.assertEqual(warnings, [])
+        take = sample_camera(shot, 10)
+        self.assertAlmostEqual(take.frames[4].fov, 80)
+        self.assertEqual(take.warnings, [])
 
     def test_attach_keys_and_missing_lens_are_reported(self):
         attached = camera(1)
         attached.source, attached.attach = "attach", AttachKey(handle=5)
-        _, warnings = sample_camera(Project(keyframes=[camera(0), attached]), 10)
+        warnings = sample_camera(Project(keyframes=[camera(0), attached]), 10).warnings
         self.assertEqual(len(warnings), 2)
         self.assertIn("attach", warnings[0].lower())
 
@@ -179,9 +181,10 @@ class ScriptTests(unittest.TestCase):
     def test_camera_data_frames_follow_video_time_not_row_order(self):
         rows = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90], [1, 0.5, .5, 1, 0, 0, 0, 0, 0, 90]]
         with tempfile.TemporaryDirectory() as folder:
-            samples, video_frames = sample_camera_data(self.write_camera_data(folder, rows, 2), 60)
-        self.assertEqual([s["frame"] for s in samples], [0, 30])
-        self.assertEqual(video_frames, 31)
+            take = sample_camera_data(self.write_camera_data(folder, rows, 2), 60)
+        self.assertEqual([f.frame for f in take.frames], [0, 30])
+        self.assertEqual(take.frames[1].position, (1, 0, 0))
+        self.assertEqual((take.video_frames, take.warnings), (31, []))
 
     def test_invalid_camera_data_is_rejected(self):
         good = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90]]
