@@ -4,6 +4,25 @@ Packaged Windows builds include the updater and recovery launcher in `Dolly.exe`
 Source checkouts use the local build workflow; the packaged updater does not
 install or build source checkouts.
 
+## Moving from the older automatic updater
+
+The **Update now** choice applies once 0.6.51-alpha or a later version is
+installed. Versions through 0.6.50-alpha still use their original updater when
+opened with automatic updates enabled. They can jump directly to whichever release is Latest:
+for example, 0.6.50-alpha can automatically install 0.6.52-alpha without ever
+opening 0.6.51-alpha. New release code cannot change the launcher that is already
+running before that first upgrade.
+
+After that transition, opening the updated **Dolly.exe** opens the editor first.
+The notice appears when a newer release is available, and requires **Update
+now** before downloading or installing it. When the installed version is already
+Latest, there is no update notice. **Settings > Updates** remains available.
+
+To choose the timing of the first upgrade from an older version, extract the
+complete current Windows ZIP into a fresh folder and open its **Dolly.exe**.
+Updating a Git checkout does not replace a separately installed Windows copy,
+such as a Dolly folder on the desktop.
+
 ## For users
 
 Open `Dolly.exe`. The desktop editor opens immediately, and any enabled update

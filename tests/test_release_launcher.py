@@ -156,6 +156,40 @@ class LauncherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disagrees"):
             worker.pending_work(self.target)
 
+    def test_normal_open_ignores_a_verified_staged_release_without_a_pending_transaction(self):
+        def release(folder, version):
+            package(folder, version)
+            (folder / "DollyUpdater.exe").unlink()
+            (folder / "_internal/DollyApp.exe").write_text(version)
+            updater.write_manifest(folder, version)
+
+        release(self.target, "0.6.52-alpha")
+        staged = self.target / ".dolly-update-next"
+        release(staged / "payload", "0.6.53-alpha")
+        worker.atomic_json(staged / "plan.json", {"target": str(self.target), "work": str(staged)})
+        worker.atomic_json(staged / "verified.json", {"version": "0.6.53-alpha", "sha256": "a" * 64})
+        before = {name: (self.target / name).read_bytes()
+                  for name in (*updater.read_manifest(self.target)["files"], updater.MANIFEST)}
+
+        with patch.object(worker, "launch_program") as editor, \
+             patch.object(worker, "launch_worker") as install, \
+             patch.object(worker, "check_processes") as processes, \
+             patch.object(updater, "open_url") as network, \
+             patch.object(updater, "download_update") as download:
+            for arguments in (["--updated"], [], []):
+                self.assertEqual(boot.main(arguments, target=self.target), 0)
+            self.assertEqual(editor.call_count, 3)
+            for call in editor.call_args_list:
+                self.assertEqual(call.args[0][0], str(self.target / "_internal/DollyApp.exe"))
+            install.assert_not_called()
+            processes.assert_not_called()
+            network.assert_not_called()
+            download.assert_not_called()
+        self.assertIsNone(worker.pending_work(self.target))
+        self.assertEqual(updater.read_manifest(self.target)["version"], "0.6.52-alpha")
+        self.assertEqual({name: (self.target / name).read_bytes() for name in before}, before)
+        self.assertTrue((staged / "payload" / updater.MANIFEST).is_file())
+
 
 class UpdateDiscoveryTests(unittest.TestCase):
     def release(self, tag="v0.6.50-alpha"):
@@ -189,15 +223,6 @@ class UpdateDiscoveryTests(unittest.TestCase):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 updater.select_release(self.release(tag), "0.6.49-alpha")
 
-    def test_notes_link_does_not_bypass_release_asset_integrity_checks(self):
-        for key, value in (("digest", None), ("size", True), ("size", updater.MAX_DOWNLOAD + 1),
-                           ("browser_download_url", "https://untrusted.example/dolly.zip")):
-            with self.subTest(key=key):
-                release = self.release()
-                release["assets"][0][key] = value
-                with self.assertRaises(ValueError):
-                    updater.select_release(release, "0.6.49-alpha")
-
     def test_discovery_fetches_only_metadata_and_never_stages_an_update(self):
         metadata = BytesIO(json.dumps(self.release()).encode())
         with patch.object(updater, "open_url", return_value=metadata) as network, \
@@ -206,7 +231,7 @@ class UpdateDiscoveryTests(unittest.TestCase):
             selected = updater.check_latest("0.6.49-alpha")
             self.assertEqual(selected["version"], "0.6.50-alpha")
             self.assertTrue(selected["notes_url"].endswith("/tag/v0.6.50-alpha"))
-            network.assert_called_once_with(updater.LATEST_URL)
+            network.assert_called_once_with("https://api.github.com/repos/cravvnn/deadlock-dolly/releases/latest")
             download.assert_not_called()
             extract.assert_not_called()
 

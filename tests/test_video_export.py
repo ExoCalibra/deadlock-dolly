@@ -221,6 +221,7 @@ class VideoExportTests(unittest.TestCase):
             result = self.export.stop()
             again = self.export.stop()
         self.assertTrue((folder / "shot.json").is_file())
+        self.assertEqual((folder / "shot.json").read_text(encoding="utf-8"), '{"frames_written":30}')
         self.assertFalse(sidecar.exists())
         self.assertEqual(result["depth_preview"], str(depth / "preview.mp4"))
         self.assertEqual(again["depth_preview"], result["depth_preview"])
@@ -463,7 +464,7 @@ class VideoExportTests(unittest.TestCase):
         self.assertIn("ffv1", captured["args"])
         self.assertNotIn("-b:v", captured["args"])
 
-    def test_depth_preview_failure_keeps_the_exr_folder_intact(self):
+    def test_depth_preview_failure_keeps_the_raw_source_intact(self):
         directory = self.depth_preview_fixture()
         with patch("dolly.video_export.subprocess.run",
                    return_value=SimpleNamespace(returncode=1, stderr="encoder exploded")):
@@ -471,18 +472,6 @@ class VideoExportTests(unittest.TestCase):
         self.assertNotIn("depth_preview", status)
         self.assertTrue((directory / "preview_64x64.raw").exists())
         self.assertFalse((directory / "preview.mp4").exists())
-
-    def test_layered_finish_moves_the_sidecar_into_the_take_folder(self):
-        folder = self.path.with_suffix("")
-        folder.mkdir()
-        color = folder / self.path.name
-        sidecar = Path(str(color) + ".shot.json")
-        sidecar.write_text("{}", encoding="utf-8")
-        self.export.output_path = color
-        self.export._layer_folder = folder
-        self.export._finish_layered_sidecar()
-        self.assertFalse(sidecar.exists())
-        self.assertEqual((folder / "shot.json").read_text(encoding="utf-8"), "{}")
 
     def test_lossless_requires_matroska_and_maps_to_ffv1(self):
         with self.assertRaisesRegex(ValueError, ".mkv"):
@@ -1347,9 +1336,13 @@ class VideoGuiTests(unittest.TestCase):
         self.app._layer_queue = [("players", "black")]
         self.app._active_layer_take = ("players", "white")
         self.app._submit = Mock()
+        result = {"state": "completed", "layer": "players", "master": "players.mov"}
+        self.app._combine_layer = Mock(return_value=result)
         self.app._video_operation_done({"state": "completed"})
         self.app._submit.assert_called_once()
-        self.assertEqual(self.app._submit.call_args.args[1].__name__, "<lambda>")
+        self.app._combine_layer.assert_not_called()
+        self.assertIs(self.app._submit.call_args.args[1](), result)
+        self.app._combine_layer.assert_called_once_with("players")
         self.assertIsNone(self.app._active_layer_take)
 
     def test_layered_completion_suggests_a_path_beside_the_take_folder(self):
@@ -1415,24 +1408,6 @@ class VideoGuiTests(unittest.TestCase):
         self.assertEqual(json.loads((layer_dir / "shot.json").read_text(encoding="utf-8"))["video_file"],
                          "players.mov")
 
-    def test_layer_pipeline_starts_one_take_at_a_time(self):
-        self.app._base_capture = Mock()
-        self.app._layer_queue = [("players", "black")]
-        self.app._active_layer_take = None
-        self.app._pending_combine = None
-        self.app._pipeline_advance = True
-        self.app._submit = Mock()
-        self.app.video_export.status.return_value = {"state": "completed"}
-        self.app._advance_layer_pipeline()
-        self.app._submit.assert_called_once()
-        self.assertFalse(self.app._pipeline_advance)
-        # A poll while the next take is still recording must not start another.
-        self.app._pipeline_advance = True
-        self.app.video_export.status.return_value = {"state": "recording"}
-        self.app._advance_layer_pipeline()
-        self.assertEqual(self.app._submit.call_count, 1)
-        self.assertTrue(self.app._pipeline_advance)
-
     def test_completed_layer_take_advances_then_restores_scene_layers(self):
         self.app.video_export.output_path = None
         self.app.video_export.output_directory = None
@@ -1441,14 +1416,28 @@ class VideoGuiTests(unittest.TestCase):
         self.app._layer_queue = [("players", "black")]
         self.app._active_layer_take = ("world", "black")
         self.app._submit = Mock()
+        self.app._start_next_layer_take = Mock(return_value="started next take")
+        self.app._restore_scene_state = Mock()
+        self.app.video_export.status.return_value = {"state": "recording"}
         self.app._video_operation_done({"state": "completed"})
+        self.app._submit.assert_not_called()
+        self.app._start_next_layer_take.assert_not_called()
+        self.assertTrue(self.app._pipeline_advance)
+        self.assertEqual(self.app._layer_queue, [("players", "black")])
+        self.app.video_export.status.return_value = {"state": "completed"}
+        self.app._advance_layer_pipeline()
         self.app._submit.assert_called_once()
-        self.assertEqual(self.app._submit.call_args.args[1].__name__, "_start_next_layer_take")
+        self.assertFalse(self.app._pipeline_advance)
+        self.assertEqual(self.app._submit.call_args.args[1](), "started next take")
+        self.app._start_next_layer_take.assert_called_once_with()
         self.app._layer_queue = []
         self.app._submit.reset_mock()
         self.app._video_operation_done({"state": "completed"})
         self.app._submit.assert_called_once()
         self.assertIsNone(self.app._base_capture)
+        self.app._restore_scene_state.assert_not_called()
+        self.assertIsNone(self.app._submit.call_args.args[1]())
+        self.app._restore_scene_state.assert_called_once_with()
 
     def test_failed_layer_take_clears_the_queue_and_restores_layers(self):
         self.app.video_export.output_path = None

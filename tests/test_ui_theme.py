@@ -7,9 +7,7 @@ import unittest
 
 from dolly import ui_theme
 
-
 ROOT = Path(__file__).resolve().parents[1]
-
 
 class UiThemeTests(unittest.TestCase):
     def test_tokens_are_valid_hex(self):
@@ -43,7 +41,6 @@ class UiThemeTests(unittest.TestCase):
         found = re.findall(r"panel_color\(0x[0-9a-fA-F]", text)
         self.assertEqual(found, [], f"dolly_overlay_panel.cpp has raw colours: {found}")
 
-
 class DesktopThemeInitializationTests(unittest.TestCase):
     def setUp(self):
         import tkinter as tk
@@ -62,17 +59,82 @@ class DesktopThemeInitializationTests(unittest.TestCase):
         if hasattr(self, "errors"):
             self.assertEqual(self.errors, [], "Tk callback failed")
 
-    def test_final_styles_keep_base_typography_and_rounded_overrides(self):
+    def test_initialized_styles_preserve_typography_surfaces_and_native_elements(self):
         from tkinter import ttk
-        style = ttk.Style(self.root)
-        self.assertEqual(style.theme_use(), "clam")
-        self.assertEqual(self.root.cget("bg"), ui_theme.TOKENS["bg"])
-        self.assertEqual(self.root.tk.splitlist(style.lookup("Title.TLabel", "font")),
-                         (ui_theme.FONT_FAMILY, str(ui_theme.FONT_SIZES["title"]), "bold"))
-        self.assertEqual(tuple(map(int, self.root.tk.splitlist(style.lookup("TButton", "padding")))), (10, 5))
-        self.assertEqual(style.layout("TButton")[0][0], "Dolly.button")
-        self.assertEqual(style.lookup("TCombobox", "fieldbackground", ("readonly",)), ui_theme.TOKENS["field"])
-        self.assertEqual(style.lookup("TCombobox", "foreground", ("disabled",)), ui_theme.TOKENS["disabled_fg"])
+        from dolly import gui_theme
+        with self.subTest(contract='typography and base styles'):
+            style = ttk.Style(self.root)
+            self.assertEqual(style.theme_use(), "clam")
+            self.assertEqual(self.root.cget("bg"), ui_theme.TOKENS["bg"])
+            self.assertEqual(self.root.tk.splitlist(style.lookup("Title.TLabel", "font")),
+                             (ui_theme.FONT_FAMILY, str(ui_theme.FONT_SIZES["title"]), "bold"))
+            self.assertEqual(tuple(map(int, self.root.tk.splitlist(style.lookup("TButton", "padding")))), (10, 5))
+            self.assertEqual(style.layout("TButton")[0][0], "Dolly.button")
+            self.assertEqual(style.lookup("TCombobox", "fieldbackground", ("readonly",)), ui_theme.TOKENS["field"])
+            self.assertEqual(style.lookup("TCombobox", "foreground", ("disabled",)), ui_theme.TOKENS["disabled_fg"])
+
+        with self.subTest(contract='corner stamps and content padding'):
+            style = ttk.Style(self.root)
+            for name, content in (("Rounded.Card.TFrame", None), ("TButton", "Button.padding"),
+                                  ("Card.TEntry", "Entry.padding"), ("TCombobox", "Combobox.padding"),
+                                  ("TMenubutton", "Menubutton.padding")):
+                with self.subTest(style=name):
+                    element, options = style.layout(name)[0]
+                    self.assertIn("background", style.element_options(element))
+                    children = options["children"]
+                    self.assertEqual(children[0][0], element + ".fill")
+                    self.assertIn("fieldbackground", style.element_options(children[0][0]))
+                    self.assertEqual([item[0] for item in children[1:5]],
+                                     [element + "." + corner for corner in ("nw", "ne", "sw", "se")])
+                    for (_, corner), direction in zip(children[1:5], ("nw", "ne", "sw", "se")):
+                        self.assertEqual(set(corner["sticky"]), set(direction))
+                    self.assertEqual(children[5][0], element + ".minimum")
+                    self.assertEqual(children[5][1]["sticky"], "",
+                                     "The minimum-size shim must never tile across a growing widget")
+                    if content:
+                        self.assertEqual(children[6][0], content,
+                                         "Content must remain a sibling of the field, outside its 2px inset")
+
+        with self.subTest(contract='field surfaces across states'):
+            style = ttk.Style(self.root)
+            # A transparent rounded asset still has a rectangular widget behind
+            # it. Clam's active/focus maps must not expose that rectangle.
+            for prefix, surface in (("", "bg"), ("Card.", "panel")):
+                for control in ("TEntry", "TCombobox", "TMenubutton"):
+                    for state in ((), ("active",), ("focus",), ("readonly", "focus"),
+                                  ("readonly", "active", "focus"), ("pressed",), ("disabled",)):
+                        with self.subTest(style=prefix + control, state=state):
+                            self.assertEqual(style.lookup(prefix + control, "background", state),
+                                             ui_theme.TOKENS[surface])
+            for state in ((), ("active",), ("focus",), ("readonly", "focus"), ("disabled",)):
+                self.assertEqual(style.lookup("Numeric.TEntry", "background", state), ui_theme.TOKENS["panel"])
+
+        with self.subTest(contract='page card and notice assets'):
+            style = ttk.Style(self.root)
+            for control, element in (("TButton", "Dolly.button"), ("TEntry", "Dolly.field"),
+                                     ("TCombobox", "Dolly.field"), ("TMenubutton", "Dolly.menu")):
+                self.assertEqual(style.layout(control)[0][0], element)
+                self.assertEqual(style.layout("Card." + control)[0][0], element + ".card")
+            self.assertEqual(style.layout("Numeric.TEntry")[0][0], "Dolly.field.card")
+            self.assertEqual(style.layout("Card.Quiet.TButton")[0][0], "Dolly.button.card")
+            self.assertEqual(style.layout("Card.Primary.TButton")[0][0], "Dolly.primary.card")
+            self.assertEqual(style.layout("UpdateNotice.TButton")[0][0], "Dolly.button.notice")
+            self.assertEqual(style.layout("UpdateNotice.Primary.TButton")[0][0], "Dolly.primary.notice")
+            for surface in ("bg", "panel", "selected"):
+                image = gui_theme.rounded_image(self.root, ui_theme.TOKENS["field"], ui_theme.TOKENS["edge"],
+                                                size=16, radius=5, surface=ui_theme.TOKENS[surface])
+                self.assertFalse(image.transparency_get(0, 0))
+                self.assertEqual(image.get(0, 0), ui_theme.rgb(ui_theme.TOKENS[surface]))
+                self.assertEqual(image.get(8, 8), ui_theme.rgb(ui_theme.TOKENS["field"]))
+
+        with self.subTest(contract='menu and scrollbar elements'):
+            style = ttk.Style(self.root)
+            self.assertEqual(style.layout("TMenubutton")[0][0], "Dolly.menu")
+            for direction in ("Vertical", "Horizontal"):
+                layout = style.layout(direction + ".TScrollbar")
+                self.assertEqual(layout[0][0], "Dolly." + direction + ".Scrollbar.trough")
+                self.assertEqual(layout[0][1]["children"][0][0],
+                                 "Dolly." + direction + ".Scrollbar.thumb")
 
     def test_generated_images_remain_alive_after_collection(self):
         import gc
@@ -84,29 +146,6 @@ class DesktopThemeInitializationTests(unittest.TestCase):
             self.assertIn(str(image), live)
             self.assertGreater(image.width(), 0)
             self.assertGreater(image.height(), 0)
-
-    def test_native_fills_keep_fixed_corner_stamps_without_changing_content_padding(self):
-        from tkinter import ttk
-        style = ttk.Style(self.root)
-        for name, content in (("Rounded.Card.TFrame", None), ("TButton", "Button.padding"),
-                              ("Card.TEntry", "Entry.padding"), ("TCombobox", "Combobox.padding"),
-                              ("TMenubutton", "Menubutton.padding")):
-            with self.subTest(style=name):
-                element, options = style.layout(name)[0]
-                self.assertIn("background", style.element_options(element))
-                children = options["children"]
-                self.assertEqual(children[0][0], element + ".fill")
-                self.assertIn("fieldbackground", style.element_options(children[0][0]))
-                self.assertEqual([item[0] for item in children[1:5]],
-                                 [element + "." + corner for corner in ("nw", "ne", "sw", "se")])
-                for (_, corner), direction in zip(children[1:5], ("nw", "ne", "sw", "se")):
-                    self.assertEqual(set(corner["sticky"]), set(direction))
-                self.assertEqual(children[5][0], element + ".minimum")
-                self.assertEqual(children[5][1]["sticky"], "",
-                                 "The minimum-size shim must never tile across a growing widget")
-                if content:
-                    self.assertEqual(children[6][0], content,
-                                     "Content must remain a sibling of the field, outside its 2px inset")
 
     def test_update_notes_keep_their_dedicated_selected_surface(self):
         from tkinter import ttk
@@ -121,51 +160,6 @@ class DesktopThemeInitializationTests(unittest.TestCase):
         self.assertEqual(style.lookup("UpdateNotice.Notes.TFrame", "background"), ui_theme.TOKENS["selected"])
         self.assertEqual(style.lookup("UpdateNotice.Notes.TFrame", "fieldbackground"), ui_theme.TOKENS["panel"])
         view.frame.destroy()
-
-    def test_field_corners_keep_their_parent_surface_in_every_state(self):
-        from tkinter import ttk
-        style = ttk.Style(self.root)
-        # A transparent rounded asset still has a rectangular widget behind
-        # it. Clam's active/focus maps must not expose that rectangle.
-        for prefix, surface in (("", "bg"), ("Card.", "panel")):
-            for control in ("TEntry", "TCombobox", "TMenubutton"):
-                for state in ((), ("active",), ("focus",), ("readonly", "focus"),
-                              ("readonly", "active", "focus"), ("pressed",), ("disabled",)):
-                    with self.subTest(style=prefix + control, state=state):
-                        self.assertEqual(style.lookup(prefix + control, "background", state),
-                                         ui_theme.TOKENS[surface])
-        for state in ((), ("active",), ("focus",), ("readonly", "focus"), ("disabled",)):
-            self.assertEqual(style.lookup("Numeric.TEntry", "background", state), ui_theme.TOKENS["panel"])
-
-    def test_page_card_and_notice_assets_keep_their_distinct_surfaces(self):
-        from tkinter import ttk
-        from dolly import gui_theme
-        style = ttk.Style(self.root)
-        for control, element in (("TButton", "Dolly.button"), ("TEntry", "Dolly.field"),
-                                 ("TCombobox", "Dolly.field"), ("TMenubutton", "Dolly.menu")):
-            self.assertEqual(style.layout(control)[0][0], element)
-            self.assertEqual(style.layout("Card." + control)[0][0], element + ".card")
-        self.assertEqual(style.layout("Numeric.TEntry")[0][0], "Dolly.field.card")
-        self.assertEqual(style.layout("Card.Quiet.TButton")[0][0], "Dolly.button.card")
-        self.assertEqual(style.layout("Card.Primary.TButton")[0][0], "Dolly.primary.card")
-        self.assertEqual(style.layout("UpdateNotice.TButton")[0][0], "Dolly.button.notice")
-        self.assertEqual(style.layout("UpdateNotice.Primary.TButton")[0][0], "Dolly.primary.notice")
-        for surface in ("bg", "panel", "selected"):
-            image = gui_theme.rounded_image(self.root, ui_theme.TOKENS["field"], ui_theme.TOKENS["edge"],
-                                            size=16, radius=5, surface=ui_theme.TOKENS[surface])
-            self.assertFalse(image.transparency_get(0, 0))
-            self.assertEqual(image.get(0, 0), ui_theme.rgb(ui_theme.TOKENS[surface]))
-            self.assertEqual(image.get(8, 8), ui_theme.rgb(ui_theme.TOKENS["field"]))
-
-    def test_menu_and_scrollbars_do_not_reintroduce_native_square_shells(self):
-        from tkinter import ttk
-        style = ttk.Style(self.root)
-        self.assertEqual(style.layout("TMenubutton")[0][0], "Dolly.menu")
-        for direction in ("Vertical", "Horizontal"):
-            layout = style.layout(direction + ".TScrollbar")
-            self.assertEqual(layout[0][0], "Dolly." + direction + ".Scrollbar.trough")
-            self.assertEqual(layout[0][1]["children"][0][0],
-                             "Dolly." + direction + ".Scrollbar.thumb")
 
     def test_controls_and_both_rails_match_a_card_on_map(self):
         from tkinter import ttk
@@ -384,7 +378,6 @@ class DesktopThemeInitializationTests(unittest.TestCase):
         combo.event_generate("<<ComboboxSelected>>")
         combo.destroy()
         self.root.update_idletasks()
-
 
 if __name__ == "__main__":
     unittest.main()

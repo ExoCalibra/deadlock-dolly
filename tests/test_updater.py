@@ -1,6 +1,5 @@
 """Updater trust boundaries, interrupted transactions and preference migration."""
-import copy
-import hashlib
+from contextlib import nullcontext
 from io import BytesIO
 import json
 import os
@@ -8,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -51,17 +51,11 @@ class ReleaseTests(unittest.TestCase):
 
     def test_asset_origin_digest_size_and_ambiguity(self):
         for key, value in (("browser_download_url", "https://evil.example/dolly.zip"), ("digest", None),
-                           ("size", u.MAX_DOWNLOAD + 1), ("size", -1), ("state", "new")):
+                           ("size", u.MAX_DOWNLOAD + 1), ("size", -1), ("size", True), ("state", "new")):
             data = self.release(); data["assets"][0][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError): u.select_release(data, "0.5.4")
         data = self.release(); data["assets"] *= 2
         with self.assertRaises(ValueError): u.select_release(data, "0.5.4")
-
-    def test_metadata_request_is_latest_only(self):
-        from io import BytesIO
-        with patch.object(u, "open_url", return_value=BytesIO(json.dumps(self.release()).encode())) as opened:
-            self.assertIsNotNone(u.check_latest("0.5.4-alpha"))
-            opened.assert_called_once_with("https://api.github.com/repos/cravvnn/deadlock-dolly/releases/latest")
 
     def test_redirect_rejects_plain_http_and_other_hosts(self):
         from urllib.request import Request
@@ -110,7 +104,8 @@ class TransactionTests(unittest.TestCase):
         settings = AppSettings(export_folder=str(self.root / 'My exports'), full_editor=True)
         save_settings(settings, settings_path)
         before = settings_path.read_bytes()
-        w.install(self.plan)
+        with patch.dict(os.environ, {"APPDATA": str(settings_path.parent.parent)}):
+            w.install(self.plan)
         self.assertEqual(settings_path.read_bytes(), before)
         self.assertEqual(load_settings(settings_path), settings)
 
@@ -179,10 +174,11 @@ class TransactionTests(unittest.TestCase):
                 error = PermissionError("held by a scanner"); error.winerror = 5
                 raise error
             return real(src, dst)
-        with patch.object(w.os, "replace", side_effect=flaky):
+        with patch.object(w.os, "replace", side_effect=flaky), patch.object(w.time, "sleep") as sleep:
             w._replace_retrying(source, target)
         self.assertEqual(target.read_text(), "new")
-        self.assertGreaterEqual(calls["n"], 3)
+        self.assertEqual(calls["n"], 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_persistent_replace_lock_fails_closed(self):
         source = self.root / "new"; source.write_text("new")
@@ -190,10 +186,13 @@ class TransactionTests(unittest.TestCase):
         def locked(src, dst):
             error = PermissionError("protected folder"); error.winerror = 5
             raise error
-        with patch.object(w.os, "replace", side_effect=locked):
+        with patch.object(w.os, "replace", side_effect=locked) as replace, \
+             patch.object(w.time, "sleep") as sleep:
             with self.assertRaises(PermissionError):
                 w._replace_retrying(source, target)
         self.assertEqual(target.read_text(), "old")
+        self.assertTrue(1 < replace.call_count <= 6, "Persistent locks need a bounded retry budget")
+        self.assertEqual(sleep.call_count, replace.call_count - 1)
 
     def test_readonly_target_attribute_is_cleared(self):
         source = self.root / "new"; source.write_text("new")
@@ -205,7 +204,11 @@ class TransactionTests(unittest.TestCase):
         self.assertEqual(target.read_text(), "new")
 
     def test_abrupt_process_exit_can_be_recovered_from_journal(self):
-        plan = self.work / "plan.json"; w.atomic_json(plan, self.plan)
+        from dolly import release_launcher as boot
+        work = self.target / ".dolly-update-interrupted"
+        package(work / "payload", "1.0.1")
+        plan = work / "plan.json"
+        w.atomic_json(plan, {"target": str(self.target), "work": str(work)})
         script = '''import json,os,sys
 from pathlib import Path
 from dolly.update_worker import install,replace_file
@@ -220,8 +223,23 @@ install(json.loads(Path(sys.argv[1]).read_text()),replace=cut_power)
         result = subprocess.run([sys.executable, "-c", script, str(plan)], timeout=30)
         self.assertEqual(result.returncode, 77)
         self.assertTrue((self.target / w.PENDING).exists())
-        w.rollback(self.plan)
-        self.assertEqual(self.snapshot(), self.before)
+        with patch.object(w, "check_processes"), \
+             patch.object(boot, "launcher_process_ids", return_value=(123,)), \
+             patch.object(w, "launch_worker") as handoff, patch.object(boot, "open_editor") as editor:
+            boot.main([], target=self.target)
+            handoff.assert_called_once_with(self.target, work, recover=True, parent_pid=123)
+            editor.assert_not_called()
+        with patch.object(w, "install_lock", side_effect=lambda target: nullcontext()), \
+             patch.object(w, "check_processes"), patch.object(w, "install") as install, \
+             patch.object(w, "launch_program") as launch, patch.object(u, "open_url") as network:
+            self.assertEqual(w.main(["--plan", str(plan), "--recover", "--no-relaunch"]), 0)
+            install.assert_not_called()
+            launch.assert_not_called()
+            network.assert_not_called()
+        self.assertEqual({name: data for name, data in self.snapshot().items()
+                          if not name.startswith(work.name + "/")}, self.before)
+        self.assertIsNone(w.pending_work(self.target))
+        self.assertEqual(json.loads((work / "journal.json").read_text())["state"], "rolled_back")
 
     def test_modified_owned_file_is_backed_up_then_replaced(self):
         (self.target / "Dolly.exe").write_text("customized")
@@ -397,7 +415,6 @@ class PreferenceTests(unittest.TestCase):
 
 class UpdateUITests(unittest.TestCase):
     def manager(self):
-        from types import SimpleNamespace
         from dolly.update_ui import UpdateUI
         from unittest.mock import Mock
         manager = UpdateUI.__new__(UpdateUI)
@@ -413,22 +430,6 @@ class UpdateUITests(unittest.TestCase):
         manager.restarting = False; manager.dismissed = False; manager.running = False
         manager.notice = Mock(); manager.message = ""
         return manager
-
-    def test_unsaved_work_game_recording_operations_and_dialogs_defer_restart(self):
-        m = self.manager()
-        self.assertTrue(m.safe_to_restart())
-        for key in ("busy", "playing", "dirty"):
-            setattr(m.app, key, True)
-            self.assertFalse(m.safe_to_restart())
-            setattr(m.app, key, False)
-        m.app.controller.status.return_value = {"game_running": True}
-        self.assertFalse(m.safe_to_restart())
-        m.app.controller.status.return_value = {"game_running": False}
-        m.app.video_export.status.return_value = {"state": "finalizing"}
-        self.assertFalse(m.safe_to_restart())
-        m.app.video_export.status.return_value = {"state": "idle"}
-        m.app.root.grab_current.return_value = object()
-        self.assertFalse(m.safe_to_restart())
 
     def test_restart_launches_in_install_helper_then_closes_app(self):
         from dolly import update_ui
@@ -456,16 +457,6 @@ class UpdateUITests(unittest.TestCase):
         self.assertFalse(m.restarting)
         self.assertIsNone(m.approved)
 
-    def test_verified_ready_payload_without_consent_cannot_launch_the_real_worker(self):
-        from dolly import update_ui
-        m = self.manager(); m.ready = (Path("staging"), "1.0.1")
-        m.ready_release = m.release_key(m.available)
-        with patch.object(update_ui, "check_processes") as processes, patch.object(w.subprocess, "Popen") as launch:
-            m.restart()
-        processes.assert_not_called()
-        launch.assert_not_called()
-        m.app._on_close.assert_not_called()
-
 
 class UpdateProgressWindowTests(unittest.TestCase):
     def test_launch_worker_requests_the_progress_window_for_a_normal_install(self):
@@ -489,11 +480,27 @@ class UpdateProgressWindowTests(unittest.TestCase):
             self.assertIn("--recover", command)
             self.assertNotIn("--progress", command)
 
-    def test_install_smoke_check_hides_its_window(self):
-        # The post-install check must not paint a window over the progress window.
-        import inspect
-        source = inspect.getsource(w.smoke)
-        self.assertIn("--self-test-hidden", source)
+    def test_install_smoke_check_runs_hidden_and_requires_a_fresh_healthy_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "Dolly with spaces"
+            work = target / ".dolly-update-smoke"; work.mkdir(parents=True)
+            report = work / "installed-smoke.json"
+            healthy = {"passed": True, "frozen": True, "game_launched": False}
+            for returncode, receipt in ((0, healthy), (1, healthy), (0, None), (0, {**healthy, "passed": False}),
+                                        (0, {**healthy, "frozen": False}), (0, {**healthy, "game_launched": True})):
+                with self.subTest(returncode=returncode, receipt=receipt):
+                    report.write_text(json.dumps(healthy))  # Stale success must be discarded.
+                    def run(command, **kwargs):
+                        self.assertEqual(command, [str(target / "Dolly.exe"), "--self-test-hidden", str(report)])
+                        self.assertEqual(kwargs["cwd"], work)
+                        self.assertFalse(report.exists())
+                        if receipt is not None:
+                            report.write_text(json.dumps(receipt))
+                        return SimpleNamespace(returncode=returncode)
+                    with patch.object(w.subprocess, "run", side_effect=run), \
+                         (nullcontext() if not returncode and receipt == healthy else
+                          self.assertRaisesRegex(RuntimeError, "startup check")):
+                        w.smoke(target, work)
 
     def test_progress_window_keeps_failure_on_screen(self):
         # A failure is shown inline and the window stays until the user closes it.

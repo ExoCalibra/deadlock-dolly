@@ -27,6 +27,7 @@ docs/internal/NATIVE_CAMERA.md
 docs/internal/CAMERA_VISIBILITY.md
 docs/internal/NATIVE_EFFECTS.md
 docs/internal/STAGE1_TESTING.md
+docs/internal/TESTING.md
 docs/internal/STAGE2_TESTING.md
 docs/SUPPORTED_CAMERA_CVARS.json
 docs/SUPPORTED_CAMERA_CVARS.md

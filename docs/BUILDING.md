@@ -17,6 +17,8 @@ shots, replays, logs or credentials.
 Build locally using the commands below. The build creates both the native helper
 and the desktop executables; package components must come from the same completed
 build. Inspect `build/checks/` if a check fails. Keep verification enabled.
+For routine development edits, use the [focused checks](internal/TESTING.md)
+before requesting a release build; the full release gates remain required.
 A successful build does not publish anything or prove in-game behavior; complete
 the relevant [in-game checks](internal/STAGE1_TESTING.md) before publishing.
 
