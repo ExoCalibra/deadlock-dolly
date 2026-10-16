@@ -78,6 +78,32 @@ class EditorBridgeTests(unittest.TestCase):
                 self.bridge.configure_framing_grid(**bad)
         self.assertEqual(bytes(self.memory[end:]), published[end:])
 
+    def test_level_view_block_round_trips_and_is_bounded(self):
+        from dolly.editor_actions import EditorBinding
+        before = bytes(self.memory)
+        self.bridge.configure_level_view(binding=EditorBinding("R"), standard_aspect=16 / 9)
+        fields = w.LEVEL_VIEW.unpack_from(self.memory, w.LEVEL_VIEW_OFFSET)
+        self.assertEqual(fields[0], b"DLYLEVL1")
+        self.assertEqual(fields[1], 2)
+        self.assertEqual(fields[2:4], (1, 1))
+        self.assertEqual(fields[4], 0x52)  # R with no modifiers
+        self.assertAlmostEqual(fields[5], 16 / 9)
+        self.assertEqual(bytes(self.memory[:w.LEVEL_VIEW_OFFSET]), before[:w.LEVEL_VIEW_OFFSET])
+        end = w.LEVEL_VIEW_OFFSET + w.LEVEL_VIEW.size
+        self.assertLessEqual(end, 2 * 1024 * 1024 + 24576)
+        self.assertEqual(bytes(self.memory[end:]), before[end:])
+        # The block sits after the framing guide and must not disturb it.
+        self.assertEqual(bytes(self.memory[w.FRAMING_GRID_OFFSET:w.FRAMING_GRID_OFFSET
+                                           + w.FRAMING_GRID.size]),
+                         before[w.FRAMING_GRID_OFFSET:w.FRAMING_GRID_OFFSET + w.FRAMING_GRID.size])
+        self.bridge.configure_level_view()
+        cleared = w.LEVEL_VIEW.unpack_from(self.memory, w.LEVEL_VIEW_OFFSET)
+        self.assertEqual(cleared[3:5], (0, 0))
+        self.assertEqual(cleared[5], 0.0)
+        for bad in ({"binding": "R"}, {"standard_aspect": 0.1}, {"standard_aspect": float("nan")}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.bridge.configure_level_view(**bad)
+
     def test_follow_settings_publish_without_touching_other_blocks(self):
         from dolly.follow_camera import FollowSettings
         before = bytes(self.memory)

@@ -86,7 +86,9 @@ def _configure_visualization(app, bridge, active, selected):
     # bounds work on the Tk thread for oversized, console-only projects.
     from .native_path import CHANNELS, MAX_CAMERA_KEYS
     from .path import channel_value
-    keys = (tuple((key.time, key.source, key.lens_scale, *(channel_value(key, name) for name in CHANNELS))
+    keys = (tuple((key.time, key.source, key.lens_scale, *(channel_value(key, name) for name in CHANNELS),
+                   tuple((name, tangent.mode, tangent.incoming, tangent.outgoing)
+                         for name, tangent in sorted(key.tangents.items())))
                   for key in project.keyframes)
             if len(project.keyframes) <= MAX_CAMERA_KEYS else len(project.keyframes))
     signature = (active, selected, revision, session_id, project.interpolation, project.rotation_mode,
@@ -151,6 +153,8 @@ def configure(app):
         app._native_editor_config_cache = values
         app._native_editor_bridge = bridge
     _configure_visualization(app, bridge, active, selected)
+    from . import curve_preview
+    curve_preview.configure(app, bridge, active=active, selected=selected)
     publish_cameras = getattr(bridge, "configure_editor_cameras", None)
     history = getattr(app, "shot_history", None)
     if callable(publish_cameras) and history is not None:
@@ -195,6 +199,15 @@ def configure(app):
                 or getattr(app, "_native_grid_cache", None) != grid):
             publish_grid(enabled=active and grid[1], binding=grid_binding)
             app._native_grid_bridge, app._native_grid_cache = bridge, grid
+    publish_level = getattr(bridge, "configure_level_view", None)
+    if callable(publish_level):
+        level = (active, settings.action_bindings.get("level_view"),
+                 round(float(getattr(app.project, "standard_aspect", 0.0) or 0.0), 6))
+        if (getattr(app, "_native_level_bridge", None) is not bridge
+                or getattr(app, "_native_level_cache", None) != level):
+            publish_level(binding=level[1] if active else None,
+                          standard_aspect=level[2] if active else None)
+            app._native_level_bridge, app._native_level_cache = bridge, level
     publish_dof = getattr(bridge, "configure_editor_dof", None)
     if callable(publish_dof):
         from .editor_dof import values_at

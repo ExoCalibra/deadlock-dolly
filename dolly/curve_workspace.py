@@ -20,6 +20,50 @@ GROUPS = ("Position", "Rotation", "Framing")
 CHANNELS = (("x", "y", "z"), ("pitch", "yaw", "roll"), ("aspect_ratio",))
 LABELS = {"x": "X", "y": "Y", "z": "Z", "pitch": "Pitch", "yaw": "Yaw",
           "roll": "Roll", "aspect_ratio": "Aspect ratio"}
+TANGENT_MODES = ("auto", "flat", "linked", "broken")
+
+
+def tangent_times(project, index):
+    """Fixed display offsets; dragging a handle never retimes its camera."""
+    keys = project.keyframes
+    return tuple((keys[index+offset].time-keys[index].time)/3
+                 if 0 <= index+offset < len(keys) else None for offset in (-1, 1))
+
+
+def tangent_handle(bounds, timestamp, value, delta, slope, scale=1.0):
+    """A compact direction arm, returning its effective shot-time offset.
+
+    The arm is presentation, not a Bezier time weight. Its screen shortening
+    must also shorten the time denominator used by a vertical drag.
+    """
+    if delta is None or delta == 0 or not math.isfinite(slope):
+        return None
+    key_x, key_y = bounds.point(timestamp, value)
+    inset = 7.0*scale
+    if not (bounds.left <= key_x <= bounds.right and bounds.top <= key_y <= bounds.bottom):
+        return None
+    pixels_per_second = (bounds.right-bounds.left)/bounds.duration
+    pixels_per_unit = (bounds.bottom-bounds.top)/(bounds.high-bounds.low)
+    dx, dy = delta*pixels_per_second, -delta*slope*pixels_per_unit
+    length = math.hypot(dx, dy)
+    if not math.isfinite(length) or length == 0:
+        return None
+    ux, uy = dx/length, dy/length
+    arm = min(56.0*scale, max(28.0*scale, length))
+    # Keep a complete grab target inside the plot, even after time zoom/pan.
+    for direction, origin, low, high in ((ux, key_x, bounds.left+inset, bounds.right-inset),
+                                         (uy, key_y, bounds.top+inset, bounds.bottom-inset)):
+        if direction > 0:
+            arm = min(arm, (high-origin)/direction)
+        elif direction < 0:
+            arm = min(arm, (low-origin)/direction)
+    if arm < 18.0*scale:
+        return None
+    x, y = key_x+ux*arm, key_y+uy*arm
+    effective_delta = (x-key_x)/pixels_per_second
+    if effective_delta == 0 or not math.isfinite(effective_delta):
+        return None
+    return x, y, effective_delta
 
 
 def display_values(project, channel):
@@ -92,19 +136,35 @@ class CurveGesture:
     original: float
 
 
+@dataclass
+class TangentGesture:
+    project: Project
+    snapshot: Project
+    context: tuple
+    index: int
+    channel: str
+    time: float
+    original: object
+    slopes: tuple[float, float]
+
+
 class CurveWorkspaceState:
     """Revision/session-bound transactions, shared clock and independent scales."""
-    def __init__(self, on_change, view=None):
+    def __init__(self, on_change, view=None, on_tangent_change=None):
         self.on_change = on_change
+        self.on_tangent_change = on_tangent_change
         self.view = view if view is not None else TimelineView()
         self.project, self.context = Project(), (None, None)
         self.selected, self.enabled, self.current_time = None, True, 0.0
         self.original, self.show_original, self.gesture = None, False, None
         self.scales = {}
+        self._scale_signatures = {}
+        self._had_cameras = False
         self._angle_state = None
         self._sample_cache = {}
         self._captured_cache = None
         self._captured_signature = None
+        self.tangent_error = ""
 
     def refresh(self, project, selected=None, current_time=0.0, context=None):
         # A caller may refresh an existing Project after an in-place mutation.
@@ -116,6 +176,13 @@ class CurveWorkspaceState:
         if context[0] != self.context[0]:
             self.original, self.show_original = None, False
             self.frame_all()
+        if bool(project.keyframes) != self._had_cameras:
+            # The empty-state scale is a placeholder, never a useful range for
+            # the first captured camera. Do not carry the old shot's scale back
+            # through deleting all cameras either.
+            self.scales.clear()
+            self._scale_signatures.clear()
+        self._had_cameras = bool(project.keyframes)
         self.project, self.context = project, context
         if self.view.end > self.view.start and self.view.start >= (project.duration or 1.0):
             self.view.reset()
@@ -159,13 +226,62 @@ class CurveWorkspaceState:
 
     def commit(self, value):
         edit = self.gesture
-        if not self.current() or not valid_value(edit.channel, value):
+        if (not isinstance(edit, CurveGesture) or not self.current()
+                or not valid_value(edit.channel, value)):
             self.cancel()
             return False
         self.cancel()
         if value == edit.original:
             return False
         self.on_change(edit.index, edit.channel, float(value))
+        return True
+
+    def tangent_editable(self, index=None, channel=None):
+        return (callable(self.on_tangent_change) and self.project.interpolation == "smooth"
+                and channel in CHANNELS[0] and self.editable(index, channel))
+
+    def begin_tangent(self, index, channel):
+        self.cancel()
+        self.tangent_error = ""
+        if (not isinstance(index, int) or isinstance(index, bool)
+                or not self.tangent_editable(index, channel)):
+            return False
+        self.gesture = TangentGesture(
+            self.project, copy.deepcopy(self.project), self.context, index, channel,
+            self.project.keyframes[index].time, self.project.camera_tangent(index, channel),
+            self.project.camera_tangent_slopes(index, channel))
+        return True
+
+    def tangent_current(self):
+        return (isinstance(self.gesture, TangentGesture) and self.current()
+                and self.tangent_editable(self.gesture.index, self.gesture.channel))
+
+    def tangent_preview(self, mode, incoming=None, outgoing=None):
+        self.tangent_error = ""
+        if not self.tangent_current():
+            self.cancel()
+            return None
+        edit = self.gesture
+        preview = copy.deepcopy(self.project)
+        try:
+            preview.set_camera_tangent(edit.index, edit.channel, mode,
+                                       incoming=incoming, outgoing=outgoing)
+        except (ValueError, TypeError, OverflowError) as error:
+            self.tangent_error = str(error)
+            return None
+        return preview
+
+    def commit_tangent(self, mode, incoming=None, outgoing=None):
+        preview = self.tangent_preview(mode, incoming, outgoing)
+        edit = self.gesture
+        self.cancel()
+        if preview is None:
+            return False
+        tangent = preview.camera_tangent(edit.index, edit.channel)
+        if tangent == edit.original:
+            return False
+        self.on_tangent_change(edit.index, edit.channel, tangent.mode,
+                               tangent.incoming, tangent.outgoing)
         return True
 
     def cancel(self):
@@ -182,6 +298,7 @@ class CurveWorkspaceState:
     def frame_all(self):
         self.view.reset()
         self.scales.clear()
+        self._scale_signatures.clear()
 
     def original_offset(self, channel):
         return branch_offset(self.project,self.original,channel)
@@ -200,7 +317,8 @@ class CurveWorkspaceState:
     def samples(self,project,channel,start,end):
         interpolation=project.lens_interpolation if channel=="aspect_ratio" else project.interpolation
         key=(id(project),self.context,channel,start,end,interpolation,project.rotation_mode,project.standard_aspect,
-             tuple((frame.time,channel_value(frame,channel)) for frame in project.keyframes))
+             tuple((frame.time,channel_value(frame,channel),frame.tangents.get(channel))
+                   for frame in project.keyframes))
         item=self._sample_cache.get(key)
         if item is not None and item[0] is project:
             return item[1]
@@ -212,9 +330,20 @@ class CurveWorkspaceState:
         self._sample_cache[key]=project,values
         return values
 
+    def _scale_signature(self, channel):
+        def source(project):
+            return (project.lens_interpolation if channel == "aspect_ratio" else project.interpolation,
+                    project.rotation_mode, project.standard_aspect,
+                    tuple((key.time, channel_value(key, channel), key.tangents.get(channel),
+                           getattr(key, channel) if channel in CURVE_CHANNELS else None)
+                          for key in project.keyframes))
+        return (source(self.project), source(self.original)
+                if self.show_original and self.original is not None else None)
+
     def bounds(self, channel, width, height):
         start, end = self.view.window(self.project.duration or 1.0)
-        if channel not in self.scales:
+        signature = self._scale_signature(channel)
+        if channel not in self.scales or self._scale_signatures.get(channel) != signature:
             values = [value for _, value in self.samples(self.project,channel,start,end)]
             values += display_values(self.project, channel)
             if self.show_original and self.original is not None:
@@ -226,6 +355,13 @@ class CurveWorkspaceState:
                 offset = branch_offset(self.project,captured,channel)
                 values += [value+offset for _, value in self.samples(captured,channel,start,end)]
             low, high = (min(values), max(values)) if values else ((.5, 4) if channel == "aspect_ratio" else (0, 0))
+            previous = self.scales.get(channel)
+            self._scale_signatures[channel] = signature
+            if previous is not None and previous[0] <= low <= high <= previous[1]:
+                return PositionBounds(62, 12, max(86, width-16), max(43, height-28),
+                                      start, end, *previous)
+            if previous is not None:
+                low, high = min(low, previous[0]), max(high, previous[1])
             minimum = .08 if channel == "aspect_ratio" else 10 if channel in CHANNELS[0] else 3
             # Existing files can contain finite values outside the editing
             # range. Normalize the fit arithmetic so those stay readable.
@@ -251,6 +387,12 @@ class CameraCurveLane(ttk.Frame):
         self._pan_x, self._enabled, self._redraw_pending = None, True, False
         self._responsive_width = None
         self._responsive_mode = None
+        self._tangent_side = self._tangent_origin = None
+        self._tangent_error = ""
+        self._handle_side = None
+        self._handle_points = {}
+        self._handle_delta = None
+        self._handle_radius = 9.0
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
         header = self.header = ttk.Frame(self, style="Card.TFrame")
@@ -292,6 +434,9 @@ class CameraCurveLane(ttk.Frame):
         self.canvas.grid(row=1, column=0, sticky="nsew")
         self.hint = ttk.Label(self, style="CardMuted.TLabel")
         self.hint.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.tangent_panel = None
+        if group == 0:
+            self._build_tangent_controls()
         self.canvas.bind("<Configure>", self._schedule_redraw)
         self.bind("<Configure>", self._responsive, add="+")
         for event, handler in (("<ButtonPress-1>", self._press), ("<B1-Motion>", self._motion),
@@ -302,8 +447,45 @@ class CameraCurveLane(ttk.Frame):
             self.canvas.bind(event, handler)
         self.bind("<Unmap>", self._cancel)
         self.canvas.bind("<ButtonRelease-3>", lambda _event: setattr(self, "_pan_x", None))
-        self.canvas.bind("<Double-Button-1>", lambda _event: self.workspace.frame_all())
+        self.canvas.bind("<Double-Button-1>", self._double_press)
         self._sync_value()
+
+    def _build_tangent_controls(self):
+        panel = self.tangent_panel = ttk.Frame(self, style="Card.TFrame")
+        panel.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.tangent_mode = tk.StringVar(self, "Auto")
+        self.tangent_mode_box = ttk.Combobox(panel, textvariable=self.tangent_mode,
+                                            values=tuple(mode.title() for mode in TANGENT_MODES),
+                                            state="readonly", width=8)
+        self.tangent_mode_box.bind("<<ComboboxSelected>>", self._change_tangent_mode)
+        self.tangent_units = ttk.Label(panel, text="units/s", style="CardMuted.TLabel")
+        self.tangent_texts = {}
+        self.tangent_entries = {}
+        self.tangent_labels = {}
+        for side, title in (("incoming", "Arrival"), ("outgoing", "Departure")):
+            self.tangent_labels[side] = ttk.Label(panel, text=title, style="CardMuted.TLabel")
+            text = self.tangent_texts[side] = tk.StringVar(self, "")
+            entry = self.tangent_entries[side] = ttk.Entry(panel, textvariable=text, width=11)
+            entry.bind("<FocusIn>", lambda event, side=side: self._begin_tangent_value(side))
+            entry.bind("<Return>", self._apply_tangent_value)
+            entry.bind("<Escape>", self._cancel_tangent_value)
+            entry.bind("<FocusOut>", self._leave_tangent_value)
+            entry.bind("<KeyPress>", lambda event, side=side: self._tangent_value_key(side))
+        self._layout_tangent_controls(False)
+
+    def _layout_tangent_controls(self, layout):
+        narrow = layout > 0
+        stacked = layout == 2
+        row = 1 if narrow else 0
+        self.tangent_mode_box.grid(row=0, column=0, sticky="w", padx=(0, 10),
+                                   columnspan=2 if narrow and not stacked else 1)
+        for number, side in enumerate(("incoming", "outgoing")):
+            column = 0 if stacked else number*2+(0 if narrow else 1)
+            self.tangent_labels[side].grid(row=row+number if stacked else row, column=column, sticky="w", padx=(0, 5),
+                                           pady=(4, 0) if narrow else 0)
+            self.tangent_entries[side].grid(row=row+number if stacked else row, column=column+1, sticky="w", padx=(0, 10),
+                                            pady=(4, 0) if narrow else 0)
+        self.tangent_units.grid(row=0, column=1 if stacked else 2 if narrow else 5, sticky="w")
 
     @property
     def state(self):
@@ -354,6 +536,13 @@ class CameraCurveLane(ttk.Frame):
                                              columnspan=2 if second_row else 1,pady=(4,0) if second_row else 0)
             self.units_label.grid_configure(row=1 if second_row else 0,column=3 if second_row else 4)
         self.hint.configure(wraplength=max(140,width-6))
+        if self.tangent_panel is not None:
+            total = (self.tangent_mode_box.winfo_reqwidth()+self.tangent_units.winfo_reqwidth()+30
+                     +sum(widget.winfo_reqwidth()+10 for widget in self.tangent_labels.values())
+                     +sum(widget.winfo_reqwidth()+10 for widget in self.tangent_entries.values()))
+            pair_width = (sum(widget.winfo_reqwidth()+10 for widget in self.tangent_labels.values())
+                          +sum(widget.winfo_reqwidth()+10 for widget in self.tangent_entries.values()))
+            self._layout_tangent_controls(2 if width < pair_width else 1 if width < total else 0)
         self.workspace._schedule_measure()
 
     def _sync_value(self):
@@ -361,7 +550,9 @@ class CameraCurveLane(ttk.Frame):
             self._editing_value, self._value_origin = False, None
             self._value_error = ""
         if not self._editing_value:
-            key = self.project.keyframes[self.selected_index] if self.selected_index is not None else None
+            project = (self._preview if self._drag_bounds is not None and self._preview is not None
+                       and self.state.current() else self.project)
+            key = project.keyframes[self.selected_index] if self.selected_index is not None else None
             self.value_text.set(format(channel_value(key,self.channel),".8g") if key is not None else "")
         enabled = self.state.editable(channel=self.channel)
         self.value_entry.configure(state="normal" if enabled else "disabled")
@@ -378,12 +569,141 @@ class CameraCurveLane(ttk.Frame):
                   f"Camera {self.selected_index+1:02d} | {self.project.keyframes[self.selected_index].time:.2f} s"+
                   (" | Dotted: captured angles; Reset restores this channel" if self.group==1 else ""))
         self.hint.configure(text=reason,foreground=ui_theme.TOKENS["warn"] if self._value_error else ui_theme.TOKENS["muted"])
+        if self.tangent_panel is not None:
+            self._sync_tangents()
+            if self._tangent_error:
+                self.hint.configure(text=self._tangent_error, foreground=ui_theme.TOKENS["warn"])
+            elif self.project.interpolation != "smooth":
+                self.hint.configure(text=reason+" | Arrival/departure applies in Smooth; saved controls are kept")
+            elif self._tangent_side is not None:
+                self.hint.configure(text="Slope in units/s | Enter applies; Escape cancels")
         # Stacked graphs share the selected camera and instructions. Keep an
         # individual warning/draft visible, without repeating idle metadata.
-        if self.workspace.stack_var.get() and enabled and not self._editing_value and not self._value_error:
+        if (self.workspace.stack_var.get() and enabled and not self._editing_value and not self._value_error
+                and not self._tangent_error and self._tangent_side is None
+                and not (self.group == 0 and self.project.interpolation != "smooth")):
             self.hint.grid_remove()
         else:
             self.hint.grid()
+
+    def _sync_tangents(self):
+        if self._tangent_side is not None and not self._tangent_value_current():
+            self._tangent_side = self._tangent_origin = None
+            self._tangent_error = ""
+        index = self.selected_index
+        valid = index is not None and 0 <= index < len(self.project.keyframes)
+        project = (self._preview if self._handle_side is not None and self._preview is not None
+                   and self.state.tangent_current() else self.project)
+        tangent = project.camera_tangent(index, self.channel) if valid else None
+        enabled = self.state.tangent_editable(index, self.channel)
+        self.tangent_mode_box.configure(state="readonly" if enabled else "disabled")
+        self.tangent_mode.set(tangent.mode.title() if tangent is not None else "Auto")
+        if tangent is None:
+            slopes = (None, None)
+        elif self.project.interpolation == "smooth":
+            slopes = project.camera_tangent_slopes(index, self.channel)
+        else:
+            slopes = ((0.0, 0.0) if tangent.mode == "flat" else
+                      (tangent.incoming, tangent.outgoing))
+        for number, side in enumerate(("incoming", "outgoing")):
+            available = valid and tangent_times(self.project, index)[number] is not None
+            editable = enabled and available and tangent.mode in ("linked", "broken")
+            self.tangent_entries[side].configure(state="normal" if editable else "disabled")
+            if self._tangent_side != side:
+                value = slopes[number] if available else None
+                self.tangent_texts[side].set(format(value, ".8g") if value is not None else "")
+
+    def _begin_tangent_value(self, side):
+        if (side not in self.tangent_entries or self.selected_index is None
+                or tangent_times(self.project, self.selected_index)[0 if side == "incoming" else 1] is None):
+            return
+        if self._tangent_side == side and self._tangent_value_current():
+            return
+        self.workspace.clear_preview()
+        self.workspace.cancel_edits()
+        tangent = (self.project.camera_tangent(self.selected_index, self.channel)
+                   if self.selected_index is not None else None)
+        if (tangent is not None and tangent.mode in ("linked", "broken")
+                and self.state.begin_tangent(self.selected_index, self.channel)):
+            self._tangent_side, self._tangent_origin = side, self.state.gesture
+            self._tangent_error = ""
+            self.tangent_texts[side].set(repr(getattr(tangent, side)))
+            self._sync_value()
+
+    def _tangent_value_current(self):
+        return (self._tangent_side is not None and self.state.gesture is self._tangent_origin
+                and self.state.tangent_current() and self.state.gesture.channel == self.channel)
+
+    def _tangent_value_key(self, side):
+        if not self._tangent_value_current():
+            self._begin_tangent_value(side)
+        self._tangent_error = ""
+
+    def _apply_tangent_value(self, _event=None):
+        if not self._tangent_value_current():
+            return self._cancel_tangent_value()
+        try:
+            value = float(self.tangent_texts[self._tangent_side].get())
+        except (ValueError, OverflowError):
+            value = math.nan
+        if not math.isfinite(value):
+            self._tangent_error = "Enter a finite slope in units/s; Escape cancels"
+            self._sync_value()
+            return "break"
+        edit = self.state.gesture
+        tangent = edit.original
+        incoming = value if self._tangent_side == "incoming" else tangent.incoming
+        outgoing = value if self._tangent_side == "outgoing" else tangent.outgoing
+        if tangent.mode == "linked":
+            incoming = outgoing = value
+        if self.state.tangent_preview(tangent.mode, incoming, outgoing) is None:
+            if not self.state.tangent_current():
+                return self._cancel_tangent_value()
+            self._tangent_error = self.state.tangent_error or "This slope cannot be represented safely"
+            self._sync_value()
+            return "break"
+        self._tangent_side = self._tangent_origin = None
+        self._tangent_error = ""
+        self.state.commit_tangent(tangent.mode, incoming, outgoing)
+        self.workspace.redraw()
+        return "break"
+
+    def _leave_tangent_value(self, _event=None):
+        if self._tangent_side is not None:
+            return self._apply_tangent_value()
+
+    def _cancel_tangent_value(self, _event=None):
+        if self.state.gesture is self._tangent_origin:
+            self.state.cancel()
+        self._tangent_side = self._tangent_origin = None
+        self._tangent_error = ""
+        if self.tangent_panel is not None:
+            self._sync_value()
+        return "break"
+
+    def _change_tangent_mode(self, _event=None):
+        self.workspace.clear_preview()
+        mode = self.tangent_mode.get().lower()
+        self.workspace.cancel_edits()
+        if mode not in TANGENT_MODES or not self.state.begin_tangent(self.selected_index, self.channel):
+            self.workspace.redraw()
+            return "break"
+        edit = self.state.gesture
+        incoming, outgoing = edit.slopes
+        if mode == "linked":
+            # A shared slope starts with the side present at an endpoint, or
+            # arrival at an interior key. Choosing Linked must not invent a stop.
+            incoming = outgoing = incoming if edit.index > 0 else outgoing
+        if mode in ("auto", "flat"):
+            incoming = outgoing = None
+        if self.state.tangent_preview(mode, incoming, outgoing) is None:
+            self._tangent_error = self.state.tangent_error or "This slope cannot be represented safely"
+            self.state.cancel()
+            self.workspace.redraw()
+            return "break"
+        self.state.commit_tangent(mode, incoming, outgoing)
+        self.workspace.redraw()
+        return "break"
 
     def set_channel(self, channel):
         if channel not in CHANNELS[self.group] or channel == self.channel:
@@ -406,6 +726,7 @@ class CameraCurveLane(ttk.Frame):
     def _begin_value(self, _event=None):
         if self._value_current():
             return
+        self.workspace.clear_preview()
         if self.state.begin(self.selected_index, self.channel):
             self._editing_value, self._value_origin = True, self.state.gesture
             self._value_error = ""
@@ -470,6 +791,7 @@ class CameraCurveLane(ttk.Frame):
         self._sync_value()
         canvas = self.canvas
         canvas.delete("all")
+        self._handle_points = {}
         width, height = canvas.winfo_width(), canvas.winfo_height()
         if width < 110 or height < 65:
             return
@@ -516,6 +838,7 @@ class CameraCurveLane(ttk.Frame):
         project = self._preview or self.project
         draft_offset = branch_offset(self.project,project,self.channel) if self._preview is not None else 0.0
         line(project,accent,offset=draft_offset,width=2,tag="current")
+        self._draw_tangent_handles(project, bounds, accent)
         self._points = [bounds.point(key.time,value+draft_offset)
                         for key,value in zip(project.keyframes,display_values(project,self.channel))]
         for index, (x, y) in enumerate(self._points):
@@ -538,6 +861,44 @@ class CameraCurveLane(ttk.Frame):
                                    fill=colors["muted"],font=font,tags="time-label")
         self._draw_playhead()
 
+    def _draw_tangent_handles(self, project, bounds, accent):
+        index = self.selected_index
+        if self.group != 0 or not self.state.tangent_editable(index, self.channel):
+            return
+        key = project.keyframes[index]
+        value = channel_value(key, self.channel)
+        scale = max(.75, min(3.0, float(self.tk.call("tk", "scaling"))/(4/3)))
+        self._handle_radius = 9*scale
+        other_keys = [bounds.point(other.time, channel_value(other, self.channel))
+                      for number, other in enumerate(project.keyframes) if number != index]
+        key_x, key_y = bounds.point(key.time, value)
+        arm_color = self._blend(accent, ui_theme.TOKENS["field"], .65)
+        for side, delta, slope in zip(("incoming", "outgoing"), tangent_times(project, index),
+                                      project.camera_tangent_slopes(index, self.channel)):
+            if side == self._handle_side and self._handle_delta is not None:
+                delta = self._handle_delta
+                x, y = bounds.point(key.time+delta, value+delta*slope)
+                handle = (x, y, delta) if math.isfinite(y) else None
+            else:
+                handle = tangent_handle(bounds, key.time, value, delta, slope, scale)
+            if handle is None:
+                continue
+            x, y, delta = handle
+            if any((x-other_x)**2+(y-other_y)**2 < (21*scale)**2
+                   for other_x, other_y in other_keys):
+                continue
+            for path in clipped_paths(bounds, [(key.time, value),
+                                               (key.time+delta, value+delta*slope)]):
+                self.canvas.create_line(*(coordinate for point in path for coordinate in point),
+                                        fill=arm_color, width=max(1, scale), tags="tangent-line")
+            if (bounds.left <= x <= bounds.right and bounds.top <= y <= bounds.bottom
+                    and (x-key_x)**2+(y-key_y)**2 >= (18*scale)**2):
+                self._handle_points[side] = x, y, delta
+                radius = 3*scale
+                self.canvas.create_oval(x-radius, y-radius, x+radius, y+radius,
+                                        fill=ui_theme.TOKENS["field"], outline=accent,
+                                        width=1.5, tags=("tangent-handle", "tangent-"+side))
+
     @staticmethod
     def _blend(foreground, background, alpha):
         values = [round(int(foreground[i:i+2],16)*alpha+int(background[i:i+2],16)*(1-alpha)) for i in (1,3,5)]
@@ -555,6 +916,12 @@ class CameraCurveLane(ttk.Frame):
             return
         self.canvas.focus_set()
         self.workspace.cancel_edits()
+        for side, (x, y, delta) in self._handle_points.items():
+            if ((event.x-x)**2+(event.y-y)**2 <= self._handle_radius**2
+                    and self.state.begin_tangent(self.selected_index, self.channel)):
+                self._handle_side, self._handle_delta = side, delta
+                self._drag_bounds, self._drag_press_y = self._bounds, event.y
+                return "break"
         index = hit_key(self._points, event.x, event.y)
         if index is None or self._bounds is None or not self._bounds.top <= event.y <= self._bounds.bottom:
             return
@@ -563,9 +930,22 @@ class CameraCurveLane(ttk.Frame):
             self._drag_bounds, self._drag_press_y = self._bounds, event.y
         self._redraw()
 
+    def _double_press(self, event):
+        # Tk substitutes Double-Button for the second ordinary press. A quick
+        # click to select, then a drag, must still start an editable gesture.
+        if (hit_key(self._points, event.x, event.y) is not None
+                or any((event.x-x)**2+(event.y-y)**2 <= self._handle_radius**2
+                       for x, y, _delta in self._handle_points.values())):
+            self._press(event)
+        else:
+            self.workspace.frame_all()
+        return "break"
+
     def _motion(self, event):
         if self._drag_bounds is None:
             return
+        if self._handle_side is not None:
+            return self._move_tangent_handle(event)
         if not self.state.current() or self.state.gesture.channel != self.channel:
             self._cancel()
             return
@@ -582,24 +962,72 @@ class CameraCurveLane(ttk.Frame):
         self._preview.keyframes = list(self.project.keyframes)
         field = "curve_"+self.channel if self.group == 1 else self.channel
         self._preview.keyframes[edit.index] = replace(self.project.keyframes[edit.index], **{field:value})
+        try:
+            self._preview.validate()
+        except (ValueError, TypeError, OverflowError) as error:
+            self._preview = self._drag_value = None
+            self._value_error = str(error)
+            self.workspace.offer_preview(None, edit)
+            self._redraw()
+            return
+        self._value_error = ""
         self._drag_value = value
+        self.workspace.offer_preview(self._preview, edit)
         self._redraw()
+
+    def _move_tangent_handle(self, event):
+        if not self.state.tangent_current():
+            return self._cancel()
+        edit = self.state.gesture
+        value_delta = (self._drag_bounds.value_at(event.y)
+                       -self._drag_bounds.value_at(self._drag_press_y))
+        slopes = list(edit.slopes)
+        side = 0 if self._handle_side == "incoming" else 1
+        slope = slopes[side]+value_delta/self._handle_delta
+        if not math.isfinite(slope):
+            return self._cancel()
+        slopes[side] = slope
+        mode = "linked" if edit.original.mode == "linked" else "broken"
+        if mode == "linked":
+            slopes = [slope, slope]
+        preview = self.state.tangent_preview(mode, *slopes)
+        if preview is None:
+            error = self.state.tangent_error or "This slope cannot be represented safely"
+            self._cancel()
+            self._tangent_error = error
+            self._sync_value()
+            return "break"
+        # A zero pointer delta must retain Auto/Flat absence exactly.
+        self._drag_value = (mode, *slopes) if value_delta != 0 else None
+        self._preview = preview if value_delta != 0 else None
+        self.workspace.offer_preview(self._preview or self.project, edit)
+        self._redraw()
+        return "break"
 
     def _release(self, _event=None):
         if self._drag_bounds is None:
             return
+        self.workspace.clear_preview()
         value = self._drag_value
+        tangent = self._handle_side is not None
+        self._handle_side = self._handle_delta = None
         self._drag_bounds = self._drag_press_y = self._drag_value = self._preview = None
         if value is not None:
-            self.state.commit(value)
+            if tangent:
+                self.state.commit_tangent(*value)
+            else:
+                self.state.commit(value)
         else:
             self.state.cancel()
         self.workspace.redraw()
 
     def _cancel(self, _event=None):
+        self.workspace.clear_preview()
         self._drag_bounds = self._drag_press_y = self._preview = self._drag_value = None
+        self._handle_side = self._handle_delta = None
         self.state.cancel()
         self._cancel_value()
+        self._cancel_tangent_value()
         if hasattr(self,"canvas"):
             self._redraw()
         return "break"
@@ -632,6 +1060,8 @@ class CameraCurveLane(ttk.Frame):
         return "break"
 
     def _pan_press(self,event):
+        if self._drag_bounds is not None or self._tangent_side is not None:
+            return self._cancel()
         if self._bounds is not None and self.workspace.settle_numeric():
             self.workspace.cancel_edits()
             self._pan_x = event.x
@@ -681,10 +1111,13 @@ class CameraCurveColumn(ScrollPage):
 
 
 class CameraCurveWorkspace(ttk.Frame):
-    def __init__(self,parent,*,on_change,on_select,on_reset,context,view=None):
+    def __init__(self,parent,*,on_change,on_select,on_reset,context,view=None,on_tangent_change=None,
+                 on_preview=None):
         super().__init__(parent,style="Card.TFrame")
         self.on_select,self.on_reset,self.get_context = on_select,on_reset,context
-        self.state = CurveWorkspaceState(on_change,view)
+        self.state = CurveWorkspaceState(on_change,view,on_tangent_change)
+        self.on_preview = on_preview
+        self._preview_gesture = None
         self.graph_font = tkfont.Font(self,font=(ui_theme.FONT_FAMILY,ui_theme.FONT_SIZES["tiny"]))
         self.on_geometry = None
         self._measure_pending = False
@@ -766,7 +1199,8 @@ class CameraCurveWorkspace(ttk.Frame):
 
     def _lane_minimums(self,minimum_graph):
         return [lane.header.winfo_reqheight()+
-                (lane.hint.winfo_reqheight()+4 if lane.hint.winfo_manager() else 0)+minimum_graph+9
+                (lane.hint.winfo_reqheight()+4 if lane.hint.winfo_manager() else 0)+
+                (lane.tangent_panel.winfo_reqheight()+6 if lane.tangent_panel is not None else 0)+minimum_graph+9
                 for lane in self.lanes]
 
     def set_scroll_owner(self,owner):
@@ -831,6 +1265,7 @@ class CameraCurveWorkspace(ttk.Frame):
             self._size_body()
 
     def destroy(self):
+        self.clear_preview()
         if self._measure_after is not None:
             self.after_cancel(self._measure_after)
             self._measure_after=None
@@ -881,6 +1316,9 @@ class CameraCurveWorkspace(ttk.Frame):
 
     def set_project(self,project,selected_index=None,current_time=0.0):
         self.state.refresh(project,selected_index,current_time,self.get_context())
+        if self._preview_gesture is not None and (self.state.gesture is not self._preview_gesture
+                                                  or not self.state.current()):
+            self.cancel_edits()
         self.original_var.set(self.state.show_original)
         self.redraw()
 
@@ -896,6 +1334,8 @@ class CameraCurveWorkspace(ttk.Frame):
             self._schedule_measure()
 
     def select(self,index):
+        if index != self.state.selected:
+            self.cancel_edits()
         self.state.selected=index
         self.on_select(index)
         self.redraw()
@@ -908,6 +1348,8 @@ class CameraCurveWorkspace(ttk.Frame):
         legend = " | Solid: current; dashed: original" if self.state.show_original else ""
         if self.stack_var.get() and 1 in self.visible_groups():
             legend += " | Dotted: captured rotation; Reset restores this channel"
+        if 0 in self.visible_groups() and self.state.project.interpolation == "smooth":
+            legend += " | Round handles: arrival/departure; right-click or Escape cancels"
         self.footer.configure(text="Drag keys | Up/Down fine tune | Wheel zoom | Right-drag pan"+legend,
                               wraplength=max(180,self.winfo_width()-6))
         for group,lane in enumerate(self.lanes):
@@ -918,17 +1360,40 @@ class CameraCurveWorkspace(ttk.Frame):
         self._schedule_measure()
 
     def cancel_edits(self):
+        self.clear_preview()
         self.state.cancel()
         for lane in getattr(self,"lanes",()):
             lane._editing_value,lane._value_origin=False,None
             lane._value_error=""
             lane._drag_bounds=lane._drag_press_y=lane._preview=lane._drag_value=None
+            lane._tangent_side=lane._tangent_origin=None
+            lane._tangent_error=""
+            lane._handle_side=lane._handle_delta=None
+
+    def offer_preview(self, project, gesture):
+        """Offer an already validated local draft; transport owns its cadence."""
+        if gesture is not self.state.gesture or not self.state.current():
+            self.clear_preview()
+            return
+        self._preview_gesture = gesture
+        if callable(self.on_preview):
+            self.on_preview(project, gesture)
+
+    def clear_preview(self):
+        if self._preview_gesture is not None:
+            self._preview_gesture = None
+            if callable(self.on_preview):
+                self.on_preview(None, None)
 
     def settle_numeric(self):
         for lane in self.lanes:
             if lane._editing_value:
                 lane._apply_value()
                 if lane._editing_value:
+                    return False
+            if lane._tangent_side is not None:
+                lane._apply_tangent_value()
+                if lane._tangent_side is not None:
                     return False
         return True
 

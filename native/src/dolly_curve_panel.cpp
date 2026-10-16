@@ -32,6 +32,13 @@ bool request_curve(EditorAction action, const VisualizationPath& graph, unsigned
     request[5] = std::uint32_t(graph.session_id() >> 32);
     return editor_enqueue(action, index, &request);
 }
+bool request_tangent(const VisualizationPath& graph, unsigned index, unsigned axis,
+                     unsigned mode, double incoming, double outgoing) {
+    CameraPose request{double(graph.project_revision()), incoming, outgoing,
+        graph.graph_keys()[index].time, double(std::uint32_t(graph.session_id())),
+        double(std::uint32_t(graph.session_id() >> 32)), 0};
+    return editor_enqueue(EditorAction::SetCameraPositionTangents,index*12+axis*4+mode,&request);
+}
 void dashed_line(ImDrawList* draw, ImVec2 a, ImVec2 b, ImU32 color, float scale, float& phase) {
     const float dx = b.x-a.x, dy = b.y-a.y;
     const float length = std::sqrt(dx*dx + dy*dy);
@@ -93,6 +100,21 @@ void curve_tooltip(float scale,const char* title,const char* value,const char* h
 }
 } // namespace
 
+void OverlayPanel::clear_curve_preview() noexcept {
+    if(!curve_preview_token_) return;
+    editor_enqueue(EditorAction::ClearCameraCurvePreview,curve_preview_index_,&curve_preview_anchor_);
+    visualization_end_native_preview(curve_preview_token_);
+    curve_preview_token_=0;
+}
+void OverlayPanel::start_curve_preview(const VisualizationPath& graph,unsigned index,unsigned channel) {
+    clear_curve_preview();
+    curve_preview_token_=visualization_begin_native_preview(graph,index,channel);
+    curve_preview_index_=index;
+    curve_preview_anchor_={double(graph.project_revision()),0,0,graph.graph_keys()[index].time,
+        double(std::uint32_t(graph.session_id())),double(std::uint32_t(graph.session_id()>>32)),double(curve_preview_token_)};
+    curve_preview_sent_at_=-1e30;
+}
+
 bool OverlayPanel::draw_timeline_modes() {
     using namespace ImGui;
     const float s=panel_scale;
@@ -147,7 +169,7 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
     const bool editable=can_select && free_key;
     // Cancel before DragScalar can blur/commit a typed value. The same right
     // click must not turn into a horizontal pan after the edit is cleared.
-    const bool right_cancelled=(position_graph_dragging_ || position_value_editing_) &&
+    const bool right_cancelled=curve_editing() &&
         IsMouseClicked(ImGuiMouseButton_Right);
     if(right_cancelled) {
         position_graph_draft_=position_graph_original_;
@@ -172,6 +194,30 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
         curve_duration_seen_=-1;
         for(auto& scale:curve_scales_) scale.fitted=false;
     }
+    if((tangent_dragging_ || tangent_value_editing_) && (!editable || !graph->smooth_position() ||
+        tangent_session_!=graph->session_id() || tangent_revision_!=list.revision ||
+        tangent_index_!=state.selected_camera ||
+        tangent_time_!=graph->graph_keys()[state.selected_camera].time || IsKeyPressed(ImGuiKey_Escape))) {
+        cancel_position_graph(); ClearActiveID();
+    }
+    auto commit_tangent=[&] {
+        if((!tangent_dragging_ && !tangent_value_editing_) || !editable || !graph->smooth_position() ||
+           tangent_session_!=graph->session_id() || tangent_revision_!=list.revision ||
+           tangent_index_!=state.selected_camera || tangent_time_!=graph->graph_keys()[state.selected_camera].time ||
+           (tangent_draft_[0]==tangent_original_[0] && tangent_draft_[1]==tangent_original_[1])) return;
+        request_tangent(*graph,tangent_index_,tangent_axis_,tangent_mode_,tangent_draft_[0],tangent_draft_[1]);
+    };
+    auto start_tangent=[&](unsigned axis,unsigned side,bool dragging) {
+        const auto& key=graph->graph_keys()[state.selected_camera]; const auto& slope=key.tangents[axis];
+        tangent_dragging_=dragging;tangent_value_editing_=!dragging;
+        tangent_side_=side;tangent_axis_=axis;tangent_mode_=slope.mode==2 ? 2 : 3;
+        tangent_revision_=list.revision;tangent_index_=state.selected_camera;
+        tangent_session_=graph->session_id();tangent_time_=key.time;
+        tangent_original_[0]=tangent_draft_[0]=slope.incoming;
+        tangent_original_[1]=tangent_draft_[1]=slope.outgoing;
+        tangent_mouse_y_=io.MousePos.y;
+        start_curve_preview(*graph,state.selected_camera,axis);
+    };
     const bool editing=position_graph_dragging_ || position_value_editing_;
     if(editing && (!editable || curve_edit_session_!=graph->session_id() ||
         position_graph_revision_!=list.revision || position_graph_index_!=state.selected_camera ||
@@ -194,12 +240,13 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
     };
     auto frame_all=[&] {
         commit_numeric();
+        commit_tangent();
         cancel_position_graph(); ClearActiveID(); refit();
         // The mouse blur can have queued the edit on the preceding frame.
         // Fit once more when that published revision arrives, not old samples.
         curve_frame_after_value_=curve_value_pending_;
     };
-    if(matching && !position_graph_dragging_ && !position_value_editing_) {
+    if(matching && !curve_editing()) {
         const bool mode_changed=curve_angle_seeded_ && curve_angles_unwrapped_!=graph->unwrapped_rotation();
         for(unsigned i=0;i<2;++i) {
             const double seed=graph->graph_keys().front().pose[4+i];
@@ -408,10 +455,12 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
             position_graph_axis_=channel; position_graph_revision_=list.revision;
             position_graph_index_=state.selected_camera; position_graph_time_=key.time;
             position_graph_original_=key.authored_pose[channel]; curve_edit_session_=graph->session_id();
+            start_curve_preview(*graph,state.selected_camera,unsigned(channel));
         }
         if(IsItemDeactivated()) {
             if(IsItemDeactivatedAfterEdit()) commit_numeric();
             position_value_editing_=false;
+            clear_curve_preview();
         }
         if(IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             char title[64];std::snprintf(title,sizeof(title),"%s value",channels[channel]);
@@ -421,6 +470,66 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
         }
         SameLine(); TextDisabled("%s",units);
         EndDisabled();
+    }
+
+    tangent_mode_rect_=ImVec4();
+    for(auto& rect:tangent_value_rects_) rect=ImVec4();
+    for(auto& point:tangent_points_) point=ImVec2();
+    const bool position_lane=curve_compare_ ? (curve_lanes_&1u)!=0 : curve_group_==0;
+    if(selected && position_lane && graph->smooth_position()) {
+        const unsigned axis=unsigned(curve_axes_[0]);
+        const auto& key=graph->graph_keys()[state.selected_camera];const auto& slope=key.tangents[axis];
+        const char* modes[]{"Auto","Flat","Linked","Broken"};
+        const bool compact=GetContentRegionAvail().x<440*s;
+        BeginDisabled(!editable || curve_editing() || right_cancelled);
+        SetNextItemWidth((compact ? 78 : 92)*s);
+        if(BeginCombo("##curve-tangent-mode",modes[slope.mode],ImGuiComboFlags_HeightSmall)) {
+            for(unsigned mode=0;mode<4;++mode) if(Selectable(modes[mode],slope.mode==mode) && mode!=slope.mode) {
+                const double incoming=mode<2 ? 0 : mode==2 && !state.selected_camera ? slope.outgoing : slope.incoming;
+                const double outgoing=mode<2 ? 0 : mode==2 ? incoming : slope.outgoing;
+                request_tangent(*graph,state.selected_camera,axis,mode,incoming,outgoing);
+            }
+            EndCombo();
+        }
+        const auto mode_low=GetItemRectMin(),mode_high=GetItemRectMax();
+        tangent_mode_rect_=ImVec4(mode_low.x,mode_low.y,mode_high.x,mode_high.y);
+        EndDisabled();
+        if(IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            SetTooltip("XYZ arrival/departure slopes in Smooth mode.\nAuto calculates; Flat stops; Linked shares a slope; Broken edits each side.");
+        for(unsigned side=0;side<2;++side) {
+            SameLine();TextDisabled("%s",compact ? side ? "Out" : "In" : side ? "Departure" : "Arrival");SameLine();
+            SetNextItemWidth((compact ? 64 : 86)*s);
+            const bool active=tangent_value_editing_ && tangent_axis_==axis && tangent_side_==side;
+            double value=active ? tangent_draft_[side] : side ? slope.outgoing : slope.incoming;
+            BeginDisabled(!editable || tangent_dragging_ || position_graph_dragging_ || position_value_editing_ ||
+                          (tangent_value_editing_ && !active) || right_cancelled || slope.mode<2 ||
+                          (!side && !state.selected_camera) || (side && state.selected_camera+1==graph->graph_keys().size()));
+            PushID(int(side));
+            const auto value_id=GetID("##curve-tangent-value");const auto field_at=GetCursorScreenPos();
+            const ImRect field(field_at,ImVec2(field_at.x+(compact ? 64 : 86)*s,field_at.y+GetFrameHeight()));
+            const bool precise=active || GetActiveID()==value_id || TempInputIsActive(value_id) ||
+                GetCurrentContext()->NavActivateId==value_id ||
+                (IsMouseClicked(ImGuiMouseButton_Left) && IsWindowHovered() && field.Contains(io.MousePos));
+            DragScalar("##curve-tangent-value",ImGuiDataType_Double,&value,.25f,nullptr,nullptr,
+                       precise ? "%.17g" : "%.3f",ImGuiSliderFlags_NoRoundToFormat);
+            const auto low=GetItemRectMin(),high=GetItemRectMax();
+            tangent_value_rects_[side]=ImVec4(low.x,low.y,high.x,high.y);
+            if(IsItemActivated()) start_tangent(axis,side,false);
+            if(tangent_value_editing_ && tangent_axis_==axis && tangent_side_==side && std::isfinite(value)) {
+                tangent_draft_[side]=value;
+                if(tangent_mode_==2) tangent_draft_[1-side]=value;
+            }
+            if(IsItemDeactivated()) {
+                if(IsItemDeactivatedAfterEdit()) commit_tangent();
+                tangent_value_editing_=false;
+                clear_curve_preview();
+            }
+            if(IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                curve_tooltip(s,side ? "Departure slope" : "Arrival slope",nullptr,
+                    "World units per shot second.\nDrag to adjust; Ctrl+click to type.\nRight-click cancels an active adjustment.");
+            PopID();EndDisabled();
+        }
+        if(!compact) {SameLine();TextDisabled("units/s");}
     }
 
     unsigned lanes[3]{}, count=0;
@@ -475,7 +584,7 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
             curve_start_seen_=shot_start;curve_key_count_seen_=graph->graph_keys().size();
             if(keys_changed) for(auto& scale:curve_scales_) scale.fitted=false;
         }
-        if(!position_graph_dragging_ && !position_value_editing_ &&
+        if(!curve_editing() &&
            lite_shot_playhead_!=state.playhead) {
             lite_shot_time_=float(std::clamp(state.playhead,shot_start,std::max(shot_start,shot_end)));
             lite_shot_playhead_=state.playhead;
@@ -483,6 +592,9 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
         // Input updates the shared range for the next frame. All lanes in
         // this frame retain exactly the same mapping, even while zooming.
         const double frame_start=curve_view_start_,frame_end=curve_view_end_;
+        const auto live_preview=visualization_preview_snapshot();
+        const auto draw_graph=live_preview && live_preview->source==2 && live_preview->token==curve_preview_token_
+            ? live_preview->path : graph;
         auto fit_scale=[&](unsigned channel) {
             auto& scale=curve_scales_[channel];
             if(scale.fitted && scale.revision==graph->project_revision()) return;
@@ -615,7 +727,7 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
                 const auto& old=curve_before_->graph_keys()[state.selected_camera];
                 curve_before_points_[channel]=screen(old.time,old.pose[channel]+curve_before_offsets_[channel]);
             }
-            line(*graph,false);
+            line(*draw_graph,false);
             const float playhead_x=screen(lite_shot_time_,scale.low).x;
             draw->AddLine(ImVec2(playhead_x,a.y),ImVec2(playhead_x,b.y),GetColorU32(curve_color(ui::ACCENT,.45f)),s);
             unsigned hit=~0u;
@@ -634,7 +746,79 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
                 const float distance=std::sqrt((io.MousePos.x-p.x)*(io.MousePos.x-p.x)+(io.MousePos.y-p.y)*(io.MousePos.y-p.y));
                 if(hovered && distance<nearest) { nearest=distance; hit=index; }
             }
-            if(hit!=~0u && !position_graph_dragging_) {
+            int handle_hit=-1;double handle_times[2]{};
+            const bool handles=selected && free_key && channel<3 && graph->smooth_position();
+            if(handles) {
+                const auto& key=graph->graph_keys()[state.selected_camera];
+                const auto point=screen(key.time,key.pose[channel]);
+                const auto& slopes=key.tangents[channel];
+                const double pixels_per_second=(time_right-time_left)/view_span;
+                const double pixels_per_unit=(b.y-a.y)/(scale.high-scale.low);
+                const bool active=tangent_dragging_ && tangent_axis_==channel;
+                if(active) {
+                    const double value=tangent_original_[tangent_side_]+(tangent_mouse_y_-io.MousePos.y)*
+                        tangent_units_per_pixel_/tangent_dt_;
+                    if(std::isfinite(value)) {
+                        tangent_draft_[tangent_side_]=value;
+                        if(tangent_mode_==2) tangent_draft_[1-tangent_side_]=value;
+                    }
+                }
+                for(unsigned side=0;side<2;++side) {
+                    if((!side && !state.selected_camera) ||
+                       (side && state.selected_camera+1>=graph->graph_keys().size())) continue;
+                    if(point.x<a.x || point.x>b.x || point.y<a.y+7*s || point.y>b.y-7*s) continue;
+                    const double slope=active ? tangent_draft_[side] : side ? slopes.outgoing : slopes.incoming;
+                    const double direction=side ? 1. : -1.;
+                    const auto& neighbor=graph->graph_keys()[side ? state.selected_camera+1 : state.selected_camera-1];
+                    const double raw_x=std::abs(neighbor.time-key.time)*pixels_per_second/3.;
+                    const double ratio=slope*(pixels_per_unit/pixels_per_second);
+                    const double norm=std::hypot(1.,ratio);
+                    if(!std::isfinite(norm)) continue;
+                    const double length=std::clamp(raw_x*norm,28.*s,56.*s);
+                    double dx=direction*length/norm,dy=-direction*length*(ratio/norm);
+                    double fraction=1;
+                    if(dx>0) fraction=std::min(fraction,(b.x-7*s-point.x)/dx);
+                    else if(dx<0) fraction=std::min(fraction,(a.x+7*s-point.x)/dx);
+                    if(dy>0) fraction=std::min(fraction,(b.y-7*s-point.y)/dy);
+                    else if(dy<0) fraction=std::min(fraction,(a.y+7*s-point.y)/dy);
+                    if(fraction<=0) continue;
+                    dx*=fraction;dy*=fraction;
+                    double dt=dx/pixels_per_second;
+                    if(active && side==tangent_side_) {
+                        dt=tangent_dt_;dx=dt*pixels_per_second;dy=-slope*dt*pixels_per_unit;
+                    }
+                    if(!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dt) || dt==0 ||
+                       (!active && std::hypot(dx,dy)<18*s)) continue;
+                    ImVec2 tip(point.x+float(dx),point.y+float(dy));
+                    bool crowded=false;
+                    if(!active) for(unsigned index=0;index<graph->graph_keys().size();++index) {
+                        if(index==state.selected_camera) continue;
+                        const auto other=screen(graph->graph_keys()[index].time,graph->graph_keys()[index].pose[channel]);
+                        if(std::hypot(tip.x-other.x,tip.y-other.y)<21*s) {crowded=true;break;}
+                    }
+                    if(crowded) continue;
+                    tip.y=std::clamp(tip.y,a.y+4*s,b.y-4*s);
+                    tangent_points_[side]=tip;handle_times[side]=dt;
+                    const auto arm=GetColorU32(curve_color(channel_color(channel),.55f));
+                    draw->AddLine(point,tip,arm,s);
+                    draw->AddCircleFilled(tip,3*s,GetColorU32(curve_color(channel_color(channel))),12);
+                    if(hovered && std::hypot(io.MousePos.x-tip.x,io.MousePos.y-tip.y)<9*s) handle_hit=int(side);
+                }
+                if(handle_hit>=0 && !curve_editing()) {
+                    hit=~0u;
+                    curve_tooltip(s,handle_hit ? "Departure handle" : "Arrival handle",nullptr,
+                        "Drag vertically to change the slope.\nRight-click cancels the adjustment.");
+                    if(IsMouseClicked(ImGuiMouseButton_Left) && editable && !right_cancelled) {
+                        start_tangent(channel,unsigned(handle_hit),true);
+                        tangent_dt_=handle_times[handle_hit];
+                        tangent_units_per_pixel_=(scale.high-scale.low)/std::max(1.f,b.y-a.y);
+                    }
+                }
+                if(tangent_dragging_ && tangent_axis_==channel && IsMouseReleased(ImGuiMouseButton_Left)) {
+                    commit_tangent();tangent_dragging_=false;clear_curve_preview();
+                }
+            }
+            if(hit!=~0u && !curve_editing()) {
                 const auto& key=graph->graph_keys()[hit];
                 char title[64],value[96];
                 std::snprintf(title,sizeof(title),"Camera %02u | %.3f s",hit+1,key.time);
@@ -647,7 +831,7 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
                     if(hit!=state.selected_camera) {
                         request_curve(EditorAction::SelectCurveCamera,*graph,hit);
                         lite_shot_time_=float(key.time);
-                    } else if(editable && !position_value_editing_ && std::abs(key.authored_pose[channel])<=1e8) {
+                    } else if(editable && !curve_editing() && std::abs(key.authored_pose[channel])<=1e8) {
                         position_graph_dragging_=true; position_graph_escape_=false;
                         position_graph_axis_=int(channel); position_graph_revision_=list.revision;
                         position_graph_index_=hit; position_graph_time_=key.time;
@@ -655,6 +839,7 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
                         position_graph_mouse_y_=io.MousePos.y;
                         position_graph_units_per_pixel_=float((scale.high-scale.low)/std::max(1.f,b.y-a.y));
                         curve_edit_session_=graph->session_id();
+                        start_curve_preview(*graph,hit,channel);
                     }
                 }
             }
@@ -705,10 +890,11 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
                     if(position_graph_draft_!=position_graph_original_)
                         request_curve(EditorAction::SetCameraCurveValue,*graph,position_graph_index_,channel,position_graph_draft_);
                     position_graph_dragging_=false;
+                    clear_curve_preview();
                 }
             }
             draw->PopClipRect();
-            if(hovered && !position_graph_dragging_ && !position_value_editing_ && !right_cancelled) {
+            if(hovered && !curve_editing() && !right_cancelled) {
                 if(io.MouseWheel!=0) {
                     const double fraction=std::clamp(double((io.MousePos.x-time_left)/std::max(1.f,time_right-time_left)),0.,1.);
                     const double anchor=frame_start+view_span*fraction;
@@ -732,10 +918,21 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
         }
     }
     EndChild(); PopStyleVar();
+    if(editable && curve_editing() && curve_preview_token_ && GetTime()-curve_preview_sent_at_>=.1) {
+        CameraPose request=curve_preview_anchor_;
+        const bool tangent=tangent_dragging_ || tangent_value_editing_;
+        if(tangent) {request[1]=tangent_draft_[0];request[2]=tangent_draft_[1];}
+        else {request[1]=position_graph_axis_;request[2]=position_graph_draft_;}
+        const double target=tangent ? tangent_index_*12+tangent_axis_*4+tangent_mode_ : position_graph_index_;
+        if(editor_enqueue(tangent ? EditorAction::PreviewCameraPositionTangents : EditorAction::PreviewCameraCurveValue,
+                          target,&request)) curve_preview_sent_at_=GetTime();
+    }
     const bool outside_range=selected && std::abs(graph->graph_keys()[state.selected_camera].authored_pose[curve_axes_[curve_group_]])>1e8;
     char snap_hint[96]{};
     if(curve_snapped_neighbor_>=0) std::snprintf(snap_hint,sizeof(snap_hint),"Aligned: Camera %02u | Release applies | Right-click cancels",curve_snapped_neighbor_+1);
-    const char* reason=position_graph_dragging_ && curve_draft_outside_ ? "Release to apply and reveal key | Right-click cancels" :
+    const char* reason=tangent_dragging_ ? "Release applies slope | Right-click cancels" :
+        tangent_value_editing_ ? "Finish editing slope to apply | Right-click cancels" :
+        position_graph_dragging_ && curve_draft_outside_ ? "Release to apply and reveal key | Right-click cancels" :
         position_graph_dragging_ && curve_snapped_neighbor_>=0 ? snap_hint :
         position_graph_dragging_ ? "Release to apply | Alt aligns | Right-click cancels" :
         position_value_editing_ ? "Finish editing to apply | Right-click cancels" :
@@ -744,7 +941,7 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
         !state.paused || state.playing ? "Pause playback to edit curves" :
         curve_show_before_ && curve_before_ ? "Solid: Current | Dashed: Original | Wheel: zoom | Right-drag: pan" :
         "Drag vertically | Alt aligns | Wheel zooms | Right-drag pans";
-    const bool ordinary_hint=!position_graph_dragging_ && !position_value_editing_ && !locked &&
+    const bool ordinary_hint=!curve_editing() && !locked &&
         (!selected || free_key) && !outside_range && state.paused && !state.playing;
     const char* display_reason=compact_header && ordinary_hint && curve_show_before_ && curve_before_ ?
         "Solid: Current | Dashed: Original | Wheel: zoom | Right-drag: pan" : reason;

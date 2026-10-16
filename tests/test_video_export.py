@@ -1088,6 +1088,27 @@ class VideoGuiTests(unittest.TestCase):
         self.app._stop_video_recording.assert_called_once_with()
         self.app._advance_layer_pipeline.assert_not_called()
 
+    def test_a_plain_colour_shot_take_arms_the_same_auto_finish(self):
+        # A finished shot stops producing frames, so a plain colour take that
+        # stayed open looked complete while its video was still unfinalized.
+        self.app.project = self.two_camera_project()
+        self.app._play = Mock()
+        self.app._start_video_recording()
+        self.app._submit.call_args.args[1]()
+        options = self.app.video_export.start.call_args.args[0]
+        self.assertFalse(options.depth)
+        self.assertEqual(options.layers, ())
+        self.assertFalse(options.shot_only)
+        self.assertTrue(self.app._auto_finish_layered)
+
+    def test_a_free_camera_take_still_finishes_manually(self):
+        # No authored project means no path to end the take at.
+        self.app.project = Project()
+        self.app._play = Mock()
+        self.app._start_video_recording()
+        self.assertTrue(self.app._pending_auto_play is False)
+        self.assertFalse(self.app._auto_finish_layered)
+
     def test_layered_take_finishes_itself_when_the_shot_completes(self):
         self._video_widgets()
         self.app.video_export.status.return_value = {"state": "recording"}

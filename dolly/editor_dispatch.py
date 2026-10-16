@@ -163,7 +163,8 @@ def dispatch(app, event, bridge, *, publish):
     previous = getattr(app, "_history_edit_group", None)
     app._history_edit_group = ((action, app._selection_index(app.camera_tree),
                                 float(_value(app, "shot_time", 0) or 0))
-                               if action.startswith("set_") and action not in ("set_camera_position", "set_camera_curve_value") else None)
+                               if action.startswith("set_") and action not in (
+                                   "set_camera_position", "set_camera_curve_value", "set_camera_position_tangents") else None)
     try:
         return _dispatch(app, event, bridge, publish=publish)
     finally:
@@ -172,9 +173,16 @@ def dispatch(app, event, bridge, *, publish):
 
 def _dispatch(app, event, bridge, *, publish):
     """Dispatch one event on Tk's thread. False means leave it queued."""
+    action = event["action"]
+    if action in ("preview_camera_curve_value", "preview_camera_position_tangents", "clear_camera_curve_preview"):
+        from . import curve_preview
+        if action == "clear_camera_curve_preview":
+            curve_preview.clear_native(app, event)
+        else:
+            curve_preview.offer_native(app, event, bridge, tangent=action == "preview_camera_position_tangents")
+        return True
     if app.busy:
         return False
-    action = event["action"]
     if action in ("open_bone_picker", "cancel_bone_picker", "finish_bone_picker"):
         from .bone_picker import dispatch as picker_dispatch
         return picker_dispatch(app, event, bridge, publish=publish)
@@ -217,7 +225,15 @@ def _dispatch(app, event, bridge, *, publish):
         # The native panel confirms replacement before sending this snapshot.
         app._capture_view("start", native_snapshot=event, replacement_confirmed=True)
     elif action in ("set_camera_curve_value", "select_curve_camera"):
+        if action == "set_camera_curve_value":
+            from .curve_preview import finish_native
+            finish_native(app)
         if _edit_camera_curve(app, event, bridge, select=action == "select_curve_camera"):
+            publish()
+    elif action == "set_camera_position_tangents":
+        from .curve_preview import finish_native
+        finish_native(app)
+        if _edit_camera_position_tangents(app, event, bridge):
             publish()
     elif action == "set_camera_position":
         if _edit_camera_position(app, event, bridge):
@@ -819,6 +835,63 @@ def _dispatch(app, event, bridge, *, publish):
         publish()
     else:
         raise ValueError("The native editor requested an unsupported UI action")
+    return True
+
+
+def _edit_camera_position_tangents(app, event, bridge):
+    """Apply one identity-bound XYZ slope gesture through normal shot history."""
+    from .native_path import MAX_CAMERA_KEYS
+    from .path import POSITION_CHANNELS, TANGENT_MODES
+
+    pose, encoded = event.get("pose"), event.get("value")
+    if (not isinstance(pose, (tuple, list)) or len(pose) != 7
+            or any(isinstance(item, bool) or not isinstance(item, (int, float))
+                   or not math.isfinite(item) for item in pose)
+            or isinstance(encoded, bool) or not isinstance(encoded, (int, float))
+            or not math.isfinite(encoded) or encoded != int(encoded)
+            or not 0 <= encoded < MAX_CAMERA_KEYS * 12 or pose[6] != 0
+            or pose[0] != int(pose[0]) or not 1 <= pose[0] <= 0xFFFFFFFF
+            or any(part != int(part) or not 0 <= part <= 0xFFFFFFFF for part in pose[4:6])):
+        raise ValueError("Invalid in-game arrival/departure edit")
+    index, remainder = divmod(int(encoded), 12)
+    axis, mode_number = divmod(remainder, 4)
+    revision, incoming, outgoing, anchor = pose[:4]
+    session_id = int(pose[4]) | int(pose[5]) << 32
+    history = getattr(app, "shot_history", None)
+    if (history is None or revision != history.revision or not session_id
+            or session_id != visualization_session(app)):
+        raise ValueError("The shot changed. Select the camera again.")
+    if index >= len(app.project.keyframes):
+        raise ValueError("Choose a camera for its arrival/departure controls.")
+    mode, name = TANGENT_MODES[mode_number], POSITION_CHANNELS[axis]
+    if (mode in ("auto", "flat") and (incoming != 0 or outgoing != 0)
+            or mode == "linked" and incoming != outgoing):
+        raise ValueError("Auto and Flat use zero slope payloads; Linked arrival/departure slopes must match.")
+    key = app.project.keyframes[index]
+    if key.time != anchor:
+        raise ValueError("The camera timing changed. Select the camera again.")
+    if key.source != "free":
+        raise ValueError("Curves edit free-camera keys. Use attachment offsets for a tracked camera.")
+    if app.project.interpolation != "smooth":
+        raise ValueError("Arrival/departure controls apply in Smooth mode; saved handles are preserved in other modes.")
+    if not app._shot_edit_ready():
+        return False
+    state = bridge.editor_status()
+    if (not state.get("enabled") or not state.get("ready") or not state.get("focused")
+            or not state.get("paused") or state.get("input_mode") != "panel"):
+        app.status_text.set("Arrival/departure edit cancelled. Pause the replay and return to Dolly's controls.")
+        return False
+    selected = app._selection_index(app.camera_tree)
+    selected = selected if selected is not None and 0 <= selected < len(app.project.keyframes) else 0
+    if selected != index:
+        app.status_text.set("Arrival/departure edit cancelled because the selected camera changed.")
+        return False
+    candidate = copy.deepcopy(app.project)
+    slopes = {} if mode in ("auto", "flat") else dict(incoming=float(incoming), outgoing=float(outgoing))
+    if not candidate.set_camera_tangent(index, name, mode, **slopes):
+        return False
+    app._commit_project(candidate, key.time)
+    app.status_text.set(f"Camera {index + 1:02d} {name.upper()} arrival/departure set to {mode.title()}. Preview to check the move.")
     return True
 
 

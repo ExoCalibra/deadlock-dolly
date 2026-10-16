@@ -31,7 +31,7 @@ class VisualizationWireTests(unittest.TestCase):
         header = HEADER.unpack_from(blob)
         self.assertEqual(HEADER_BYTES, 64)
         self.assertEqual(header[:6], (MAGIC, 24, ABI, 1, 1, 3))
-        self.assertEqual(header[7:], (2048, 64, 0, 0, 3 * KEY_METADATA.size, 0, 0))
+        self.assertEqual(header[7:], (2048, 64, 0, 0, 3 * KEY_METADATA.size, 2, 0))
         self.assertEqual(struct.unpack_from("<3d", blob, 64), (0, 1, 2))
         self.assertEqual(blob[88 + 3 * KEY_METADATA.size:], compile_project(project))
         self.assertEqual(project.to_dict(), original)
@@ -83,15 +83,41 @@ class VisualizationWireTests(unittest.TestCase):
         project.keyframes[1].lens_scale = .875
         blob = build_visualization(project, session_id=0xF123456789ABCDEF, revision=17)
         header = HEADER.unpack_from(blob)
-        self.assertEqual(header[10:14], (0xF123456789ABCDEF, 192, 0, 0))
-        values = KEY_METADATA.unpack_from(blob, 64 + 24 + 64)
+        self.assertEqual(header[10:14], (0xF123456789ABCDEF, 3 * KEY_METADATA.size, 2, 0))
+        values = KEY_METADATA.unpack_from(blob, 64 + 24 + KEY_METADATA.size)
         self.assertEqual(values[:7], (100, 10, 30, 10, 721, 0, 16 / 9))
-        self.assertEqual(values[7:], (0, 0))
+        self.assertEqual(values[7:9], (0, 0))
         project.rotation_mode = "unwrapped"
-        self.assertEqual(HEADER.unpack_from(build_visualization(project))[12], 1)
+        self.assertEqual(HEADER.unpack_from(build_visualization(project))[12], 3)
         for session in (-1, 1 << 64, True, .5, math.nan, "1"):
             with self.subTest(session=session), self.assertRaises(ValueError):
                 build_visualization(project, session_id=session)
+
+    def test_tangent_metadata_keeps_saved_intent_and_matches_automatic_evaluator(self):
+        from dolly.native_path import compile_project
+        project = shot()
+        project.set_camera_tangent(1, "x", "broken", incoming=-12, outgoing=55)
+        project.set_camera_tangent(1, "y", "flat")
+        project.set_camera_tangent(2, "z", "linked", incoming=3, outgoing=3)
+        original = copy.deepcopy(project)
+        for interpolation in ("smooth", "linear", "spline"):
+            with self.subTest(interpolation=interpolation):
+                project.interpolation = interpolation
+                blob = build_visualization(project)
+                self.assertEqual(ABI, 4)
+                self.assertEqual(KEY_METADATA.size, 136)
+                self.assertEqual(HEADER.unpack_from(blob)[12], 2 if interpolation == "smooth" else 0)
+                start = 64 + 3 * 8
+                rows = [KEY_METADATA.unpack_from(blob, start + i * KEY_METADATA.size) for i in range(3)]
+                self.assertEqual(rows[1][9:17], (3, 0, -12, 55, 1, 0, 0, 0))
+                self.assertEqual(rows[2][17:21], (2, 0, 3, 3))
+                for index in range(3):
+                    if index != 1:
+                        incoming, outgoing = project.camera_tangent_slopes(index, "x")
+                        self.assertEqual(rows[index][9:13], (0, 0, incoming, outgoing))
+                self.assertEqual(blob[start + 3 * KEY_METADATA.size:], compile_project(project))
+        project.interpolation = original.interpolation
+        self.assertEqual(project, original)
 
 
 @unittest.skipUnless(shutil.which("g++"), "Portable viewer parity requires g++; Windows CI runs the native CMake test")

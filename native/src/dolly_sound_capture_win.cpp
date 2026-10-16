@@ -33,6 +33,10 @@ std::uintptr_t sound_base = 0;
 std::atomic<bool> installed{false};
 std::atomic<bool> recording{false};
 std::atomic<unsigned> inflight{0};
+// Interface voices are declined while this QPC deadline is in the future. Dolly
+// arms it immediately before its own replay pause/resume console commands.
+std::atomic<std::uint64_t> ui_silence_until_qpc{0};
+constexpr unsigned kUiSilenceMaxMs = 2000;
 std::atomic<std::uint64_t> dropped{0};
 std::atomic<std::int32_t> last_tick{-1};
 std::atomic<double> last_engine_time{0};
@@ -45,6 +49,24 @@ std::int64_t next_state_qpc = 0;
 unsigned head = 0, tail = 0;
 LARGE_INTEGER frequency{};
 thread_local char current_event[128]{};
+
+// True while the armed window covers this voice. Called on the audio thread
+// before any voice is allocated.
+bool sound_ui_voice_silenced(const char* asset) noexcept {
+    (void)asset;  // The window is the rule; the asset is kept for diagnostics.
+    const auto until = ui_silence_until_qpc.load(std::memory_order_acquire);
+    if (!until)
+        return false;
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    if (ui_voice_silenced(std::uint64_t(now.QuadPart), until))
+        return true;
+    // Expire once, so a finished transition leaves no armed state behind.
+    std::uint64_t expected = until;
+    ui_silence_until_qpc.compare_exchange_strong(expected, 0, std::memory_order_acq_rel,
+                                                 std::memory_order_relaxed);
+    return false;
+}
 
 struct VoiceRecord {
     char kind;
@@ -188,6 +210,12 @@ void drain() noexcept {
 }
 std::int64_t __fastcall voice_start_hook(std::uint64_t first, void* parameters,
                                          const char* asset) noexcept {
+    // Declining before the original call makes this a mute rather than a filter:
+    // the voice is never allocated, so nothing is mixed, rendered or captured.
+    // A negative slot is the same "no voice" result the engine returns when it
+    // cannot allocate one, which every caller already handles.
+    if (sound_ui_voice_silenced(asset))
+        return kNoVoice;
     const auto slot = original_voice_start(first, parameters, asset);
     if (!recording.load(std::memory_order_relaxed) || slot < 0 || slot > 65535)
         return slot;
@@ -531,6 +559,34 @@ void sound_capture_worker_tick() noexcept {
     }
 }
 std::uint64_t sound_capture_dropped() noexcept { return dropped.load(); }
+bool sound_silence_ui_voices(unsigned milliseconds) noexcept {
+    if (!installed.load(std::memory_order_relaxed) || frequency.QuadPart <= 0)
+        return false;
+    const auto clamped = milliseconds < kUiSilenceMaxMs ? milliseconds : kUiSilenceMaxMs;
+    if (!clamped)
+        return false;
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    const auto until = std::uint64_t(now.QuadPart) +
+                       std::uint64_t(frequency.QuadPart) * clamped / 1000;
+    // Repeated arming extends the window instead of shortening it, so a burst of
+    // pause/resume commands keeps one continuous window open.
+    auto current = ui_silence_until_qpc.load(std::memory_order_relaxed);
+    while (until > current &&
+           !ui_silence_until_qpc.compare_exchange_weak(current, until,
+                                                       std::memory_order_acq_rel,
+                                                       std::memory_order_relaxed)) {
+    }
+    return true;
+}
+bool sound_ui_silence_armed() noexcept {
+    const auto until = ui_silence_until_qpc.load(std::memory_order_acquire);
+    if (!until)
+        return false;
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    return std::uint64_t(now.QuadPart) < until;
+}
 const char* sound_capture_error() noexcept {
     switch (error_code.load()) {
     case 1: return "Verified audio hook is unavailable or a capture is already active.";

@@ -278,6 +278,7 @@ void release_device() noexcept {
     picker_portrait_format = DXGI_FORMAT_UNKNOWN;
     picker_portrait_captured_request = 0;
     if (imgui) {
+        panel_ui.cancel_position_graph();
         auto* previous = ImGui::GetCurrentContext();
         ImGui::SetCurrentContext(imgui);
         panel_ui.flush_layout(true);
@@ -555,6 +556,7 @@ void render_overlay(IDXGISwapChain* chain) {
     if (!media_live)
         depth::set_white_clear(false);
     if (!state.enabled && !media_live && !panel_ui.shader_notice_visible(state)) {
+        panel_ui.cancel_position_graph();
         // Playback may disable manual editor input. Only a lost session retires
         // media here; control ownership and camera readiness are transient.
         if (!media_suspended && chain == swapchain && immediate) {
@@ -571,6 +573,7 @@ void render_overlay(IDXGISwapChain* chain) {
         return;
     }
     if (renderer_pressure.load(std::memory_order_acquire)) {
+        panel_ui.cancel_position_graph();
         // The engine's DirectX 11 vertex-buffer retirement queue is near its
         // 16-bit capacity. Stop all optional Dolly rendering (effects, capture
         // and the editor) so the engine can retire queued buffers and avoid the
@@ -753,7 +756,11 @@ void render_overlay(IDXGISwapChain* chain) {
     }
     GuiContextScope gui_scope(imgui);
     const bool panel = editor_panel_visible() && state.focused;
-    const auto guides = panel_ui.guides_visible(state) ? visualization_snapshot() : nullptr;
+    const auto preview=visualization_preview_snapshot();
+    const bool use_preview=preview && panel_ui.preview_guides_visible(state,*preview);
+    const bool desktop_preview=use_preview && preview->source==1;
+    const auto guides = panel_ui.guides_visible(state,desktop_preview) ?
+        use_preview ? preview->path : visualization_snapshot() : nullptr;
     const bool draw_guides = guides && guides->enabled();
     const bool draw_grid = panel_ui.framing_grid_visible(state);
     const bool draw_campaths = panel_ui.lite_campaths_visible(state);
@@ -771,8 +778,8 @@ void render_overlay(IDXGISwapChain* chain) {
     io.ConfigNavMoveSetMousePos = false;
     io.WantSetMousePos = false;
     io.MouseDrawCursor = panel;
-    // Paused editing may show guides without the panel. Playback, game UI,
-    // console and unfocused windows do not draw editing guides into the scene.
+    // Paused editing keeps render-only guides while desktop controls own
+    // focus. Playback, game UI, console and capture still hide them.
     if (!panel) {
         clear_pending_input();
         io.ClearEventsQueue();
@@ -796,7 +803,7 @@ void render_overlay(IDXGISwapChain* chain) {
     // The Object Picker is its own mode: it replaces the normal panel and
     // suppresses the editing guides so the scene reads cleanly.
     if (draw_guides && !state.bone_picker && !state.object_picker)
-        panel_ui.draw_path_guides(state, guides);
+        panel_ui.draw_path_guides(state, guides,desktop_preview);
     if (draw_grid && !state.bone_picker && !state.object_picker) {
         panel_ui.draw_framing_grid(state);
         diagnostic_grid.fetch_add(1, std::memory_order_relaxed);

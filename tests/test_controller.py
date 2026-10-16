@@ -1751,5 +1751,50 @@ class CameraParsingTests(unittest.TestCase):
                 frame_commands(frame, "r_aspectratio")
 
 
+class InterfaceSilenceTests(unittest.TestCase):
+    """The replay pause/resume cue is declined before Dolly sends the command."""
+
+    @staticmethod
+    def controller(bridge):
+        controller = Controller()
+        controller._session = SimpleNamespace(native=bridge) if bridge is not None else None
+        return controller
+
+    def test_pause_and_resume_arm_the_window_and_other_commands_do_not(self):
+        calls = []
+        controller = self.controller(SimpleNamespace(silence_ui=lambda: calls.append("armed")))
+        controller._silence_interface_cue("demo_pause")
+        controller._silence_interface_cue("demo_timescale 1; demo_resume")
+        # The deferred pause pauses the replay too, so it needs the same window.
+        controller._silence_interface_cue("demo_pauseatservertick 1200")
+        self.assertEqual(calls, ["armed", "armed", "armed"])
+        for command in ("demo_info", "demo_goto", "citadel_hud_visible 0",
+                        "demo_togglepause", "citadel_replay_toggle_pause"):
+            controller._silence_interface_cue(command)
+        self.assertEqual(calls, ["armed", "armed", "armed"])
+
+    def test_the_window_is_armed_before_the_pause_is_sent(self):
+        seen = []
+        controller = self.controller(SimpleNamespace(silence_ui=lambda: seen.append("armed") or True))
+        controller._require_connection = lambda *args, **kwargs: None
+        controller._console = SimpleNamespace(
+            is_connected=True, request=lambda command, **options: seen.append(command) or "ok")
+        controller._request("demo_resume")
+        self.assertEqual(seen, ["armed", "demo_resume"])
+
+    def test_an_unavailable_sound_bridge_is_reported_once(self):
+        controller = self.controller(SimpleNamespace(silence_ui=lambda: False))
+        with self.assertLogs("dolly", level="INFO") as logs:
+            controller._silence_interface_cue("demo_pause")
+            controller._silence_interface_cue("demo_resume")
+        self.assertEqual(sum("unavailable" in line for line in logs.output), 1)
+
+    def test_a_build_or_session_without_the_hooks_still_pauses(self):
+        # Older native builds have no silence_ui, and a disconnected session has
+        # no bridge at all. Neither may raise or delay the pause.
+        self.controller(SimpleNamespace())._silence_interface_cue("demo_pause")
+        self.controller(None)._silence_interface_cue("demo_resume")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,37 @@
 # Changes
 
+## Unreleased
+
+- Add saved XYZ arrival/departure handles to desktop and in-game Position curves: Auto,
+  Flat, Linked and Broken, with numeric slopes and fixed-time handles.
+- Apply authored handles only in Smooth; preserve them while Linear or Spline
+  is selected. Keep old shots' automatic interpolation and native path format.
+- Preserve handle intent through shot history, save/reopen, Update view,
+  recapture and tick-rate conversion. Authored handles use project format 12.
+- Fit desktop graphs to the first captured cameras and reveal later values
+  outside the current range, preserving valid time zoom and panning.
+- Use compact round handles and muted stems on both editors. Handle display
+  length does not change the saved slope; each gesture remains one Undo step.
+- Preview the in-game path and camera markers while dragging graph keys or XYZ
+  handles. Keep the current viewpoint; release saves one edit and cancel restores
+  the saved path. Desktop graph values follow the temporary drag.
+- Keep key and handle drags working after a quick second click. Double-clicking
+  empty graph space still fits the curve.
+- Level the live camera with R: it returns the paused camera you are composing
+  to a level horizon and the shot's normal aspect and zoom. The reset is
+  view-only, so saved cameras, the project and Undo stay untouched. R was
+  previously unbound; Replace keeps its Ctrl+Alt+R chord.
+- End recordings with the shot instead of the hold after it. A take that plays an
+  authored path kept capturing while the finished camera was held, so every
+  exported video ended with seconds of still frame. The held endpoint is now
+  dropped for every path take, matching the paired depth and POV takes.
+- Silence the game's replay pause/resume cue. *Before:* every pause and resume
+  played Deadlock's own replay cue, which is constant while composing with the
+  pause key and has no game setting that turns it off. *After:* Dolly declines
+  voices for a moment around its own pause and resume commands. Only Dolly
+  sessions arm it, the window closes by itself, and no game setting or file is
+  touched.
+
 ## 0.6.52-alpha
 
 - **Timeline height follows the view.** *Before:* saved tall layouts could leave empty space inside and below the player timeline, while its regular controls had little bottom padding. *After:* Replay and Campaths fit their controls with consistent padding, Curves grows for its graphs, and the timeline sits a small distance above the bottom of the screen while keeping its custom width. Arrange panels allows temporary positioning before it returns to the bottom dock.

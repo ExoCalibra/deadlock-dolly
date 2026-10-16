@@ -222,6 +222,53 @@ class WorkspaceModelTests(unittest.TestCase):
         self.assertNotEqual(self.state.samples(project,'aspect_ratio',0,1),first)
         self.assertEqual(self.state.samples(project,'aspect_ratio',0,1),[(0,2.39),(1,2.39)])
 
+    def test_capture_lifecycle_fits_real_coordinates_and_keeps_valid_viewport(self):
+        # A real editor paints an empty shot before Capture mutates the same
+        # Project. That placeholder used to hide subsequent X and Pitch curves.
+        state = CurveWorkspaceState(Mock())
+        project = Project(interpolation="smooth")
+        channels = sum(CHANNELS, ())
+        state.refresh(project, context=(52, 0))
+        for channel in channels:
+            state.bounds(channel, 1240, 260)
+        cameras = [Keyframe(0, -2190, -420, 1450, 8.25, 359, -3, aspect_ratio=1.6),
+                   Keyframe(.578125, -2420.7906, -180, 1320, 5.28, 1, 7, aspect_ratio=1.9),
+                   Keyframe(.859375, -2480, -460, 1640, 3.15, 16, 4, aspect_ratio=2.1)]
+        for number, camera in enumerate(cameras, 1):
+            project.keyframes.append(camera)
+            state.refresh(project, number-1, context=(52, number))
+            for channel in channels:
+                with self.subTest(cameras=number, channel=channel):
+                    bounds = state.bounds(channel, 1240, 260)
+                    values = [value for _, value in state.samples(project, channel,
+                                                                  bounds.start, bounds.end)]
+                    values += display_values(project, channel)
+                    self.assertLessEqual(bounds.low, min(values))
+                    self.assertGreaterEqual(bounds.high, max(values))
+            if number == 1:
+                x_bounds = state.bounds("x", 1240, 260)
+                self.assertLess(x_bounds.high, -2100)
+                self.assertGreater(x_bounds.low, -2250)
+        state.view.zoom(.5, .578125, project.duration)
+        state.view.pan(.05, project.duration)
+        view = state.view.start, state.view.end
+        before = {channel:state.bounds(channel, 1240, 260) for channel in channels}
+        # Recapture or accepted numeric edits can leave the previous Y range.
+        project.keyframes[1].x = -4100
+        project.keyframes[1].curve_pitch = 28.5
+        state.refresh(project, 1, context=(52, 4))
+        for channel in channels:
+            bounds = state.bounds(channel, 1240, 260)
+            if channel in ("x", "pitch"):
+                value = -4100 if channel == "x" else 28.5
+                self.assertLessEqual(bounds.low, value)
+                self.assertGreaterEqual(bounds.high, value)
+            else:
+                self.assertEqual((bounds.low, bounds.high),
+                                 (before[channel].low, before[channel].high))
+        self.assertEqual((state.view.start, state.view.end), view)
+        self.assertEqual([key.time for key in project.keyframes], [0, .578125, .859375])
+
 
 class WorkspaceAppBoundaryTests(unittest.TestCase):
     def setUp(self):
@@ -462,6 +509,164 @@ class WorkspaceTkTests(unittest.TestCase):
         self.workspace.set_project(copy.deepcopy(self.project),0)
         self.assertIsNone(self.workspace.state.original)
         self.assertFalse(self.workspace.original_var.get())
+
+
+class WorkspaceAppGestureTests(unittest.TestCase):
+    """Real canvas bindings, selection queues and GUI commits through playback input."""
+    def setUp(self):
+        from dolly.settings import AppSettings
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(str(error))
+        self.root.withdraw()
+        self.app = None
+        self.addCleanup(self.close_app)
+        with patch.object(DollyApp, "_submit"), \
+                patch.object(DollyApp, "_load_app_settings", return_value=AppSettings(auto_updates=False)), \
+                patch("dolly.graphics_profiles.load_library", return_value={"format":1,"selected":"","profiles":[]}):
+            self.app = DollyApp(self.root)
+        # Map transparent widgets so event_generate follows Tk's real binding
+        # precedence, without displaying a test window or running app polling.
+        for timer in self.root.tk.splitlist(self.root.tk.call("after", "info")):
+            self.root.tk.call("after", "cancel", timer)
+        self.root.attributes("-alpha", 0.0)
+        self.root.geometry("1400x900+0+0")
+        self.app.notebook.select(self.app.camera_tab)
+        self.root.deiconify()
+        self.reset_shot()
+
+    def close_app(self):
+        if self.app is not None:
+            self.app.closed = True
+            self.app.jobs.put(None)
+        for timer in self.root.tk.splitlist(self.root.tk.call("after", "info")):
+            self.root.tk.call("after", "cancel", timer)
+        self.root.destroy()
+
+    def reset_shot(self):
+        self.app.project = Project(keyframes=[Keyframe(0,-2200,100,1450,8,359,-3),
+                                              Keyframe(.578125,-2420.7906,180,1320,5.28,1,7),
+                                              Keyframe(.859375,-2480,460,1640,3.15,16,4)])
+        self.app.shot_history = ShotHistory(self.app.project)
+        self.app._refresh_keys(.578125)
+        self.root.update()
+
+    def event(self, lane, sequence, x, y, time):
+        lane.canvas.event_generate(sequence, x=round(x), y=round(y), time=time)
+        self.root.update()
+
+    def quick_second_press(self, lane, x, y, time):
+        self.event(lane, "<ButtonPress-1>", x, y, time)
+        self.event(lane, "<ButtonRelease-1>", x, y, time+10)
+        self.event(lane, "<ButtonPress-1>", x, y, time+200)
+
+    def test_click_then_drag_reaches_saved_values_history_and_playback_for_every_channel(self):
+        from dolly.path import channel_value
+        for number,channel in enumerate(sum(CHANNELS, ())):
+            with self.subTest(channel=channel):
+                self.reset_shot()
+                group = next(index for index,channels in enumerate(CHANNELS) if channel in channels)
+                workspace = self.app.camera_curve_workspace
+                workspace.select_group(group)
+                lane = workspace.lanes[group]
+                lane.set_channel(channel)
+                self.root.update()
+                before = copy.deepcopy(self.app.project)
+                before_blob = compile_project(before)
+                x,y = lane._points[1]
+                time = 2000*(number+1)
+                self.quick_second_press(lane, x, y, time)
+                self.assertIsNotNone(workspace.state.gesture)
+                bounds = lane._drag_bounds
+                expected = channel_value(before.keyframes[1],channel)+(bounds.value_at(round(y)-8)-bounds.value_at(round(y)))
+                self.event(lane, "<B1-Motion>", x, round(y)-8, time+250)
+                self.assertEqual(self.app.project,before, "Draft motion must not create saved intermediate edits")
+                self.event(lane, "<ButtonRelease-1>", x, round(y)-8, time+300)
+                self.assertAlmostEqual(channel_value(self.app.project.keyframes[1],channel),expected)
+                snapshot = self.app._snapshot()
+                self.assertAlmostEqual(channel_value(snapshot.keyframes[1],channel),expected)
+                self.assertNotEqual(compile_project(snapshot),before_blob)
+                from dolly.editor_dispatch import dispatch
+                bridge = Mock()
+                def submit(_label, operation, complete=None):
+                    result = operation()
+                    if complete is not None:
+                        complete(result)
+                    return True
+                with patch.object(self.app.controller,"play") as play, \
+                        patch.object(self.app.controller,"seek"), \
+                        patch.object(self.app.controller,"stop"), \
+                        patch.object(self.app,"_submit",side_effect=submit):
+                    for cycle in range(2):
+                        # Native Play cinematic prepares, then dispatches
+                        # PlayPath. Exercise both routes after the real edit.
+                        dispatch(self.app,dict(action="prepare_cinematic",value=cycle+1,
+                            pose=(self.app.shot_history.revision,0,0,0,0,0,0)),bridge,publish=Mock())
+                        dispatch(self.app,dict(action="play_path"),bridge,publish=Mock())
+                        playback = play.call_args.args[0]
+                        self.assertEqual(playback,snapshot)
+                        self.assertNotEqual(compile_project(playback),before_blob)
+                        self.assertEqual(play.call_args.kwargs["time"],0.0)
+                        self.app.playing = True
+                        dispatch(self.app,dict(action="stop"),bridge,publish=Mock())
+                        self.app.playing = False
+                self.assertEqual(play.call_count,2)
+                self.assertEqual(self.app.shot_history.move().project,before)
+                self.assertFalse(self.app.shot_history.can_undo)
+
+    def test_quick_second_handle_press_still_authors_one_saved_slope_pair(self):
+        workspace = self.app.camera_curve_workspace
+        workspace.select_group(0)
+        self.root.update()
+        lane = workspace.lanes[0]
+        before = copy.deepcopy(self.app.project)
+        x,y,_delta = lane._handle_points["outgoing"]
+        self.quick_second_press(lane,x,y,1000)
+        self.assertTrue(workspace.state.tangent_current())
+        self.event(lane,"<B1-Motion>",x,round(y)-8,1250)
+        self.event(lane,"<ButtonRelease-1>",x,round(y)-8,1300)
+        self.assertEqual(self.app.project.camera_tangent(1,"x").mode,"broken")
+        self.assertNotEqual(compile_project(self.app._snapshot()),compile_project(before))
+        self.assertEqual(self.app.shot_history.move().project,before)
+        self.assertFalse(self.app.shot_history.can_undo)
+
+    def test_key_drag_number_and_preview_are_private_and_cancel_restores_them(self):
+        workspace = self.app.camera_curve_workspace
+        workspace.on_preview = preview = Mock()
+        workspace.select_group(0)
+        self.root.update()
+        lane = workspace.lanes[0]
+        before = copy.deepcopy(self.app.project)
+        x,y = lane._points[1]
+        self.event(lane,"<ButtonPress-1>",x,y,1000)
+        self.event(lane,"<B1-Motion>",x,round(y)-8,1100)
+        draft,gesture = preview.call_args.args
+        self.assertIs(gesture,workspace.state.gesture)
+        self.assertNotEqual(draft.keyframes[1].x,before.keyframes[1].x)
+        self.assertAlmostEqual(float(lane.value_text.get()),draft.keyframes[1].x, places=3)
+        self.assertEqual(self.app.project,before)
+        self.assertAlmostEqual(float(self.app.key_vars["x"].get()),before.keyframes[1].x, places=3)
+        self.event(lane,"<ButtonPress-3>",x,round(y)-8,1150)
+        preview.assert_called_with(None,None)
+        self.event(lane,"<ButtonRelease-1>",x,round(y)-8,1200)
+        self.assertAlmostEqual(float(lane.value_text.get()),before.keyframes[1].x, places=3)
+        self.assertEqual(self.app.project,before)
+        self.assertFalse(self.app.shot_history.can_undo)
+
+    def test_double_clicking_empty_plot_still_frames_all_without_editing(self):
+        workspace = self.app.camera_curve_workspace
+        workspace.state.view.zoom(.5,.5,self.app.project.duration)
+        workspace.redraw()
+        self.root.update()
+        lane = workspace.lanes[0]
+        before = copy.deepcopy(self.app.project)
+        x,y = lane._bounds.left+30,lane._bounds.top+12
+        self.quick_second_press(lane,x,y,1000)
+        self.event(lane,"<ButtonRelease-1>",x,y,1300)
+        self.assertEqual((workspace.state.view.start,workspace.state.view.end),(0,0))
+        self.assertEqual(self.app.project,before)
+        self.assertFalse(self.app.shot_history.can_undo)
 
 
 if __name__ == "__main__":

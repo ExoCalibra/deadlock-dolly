@@ -2,6 +2,14 @@
 #include <cstdint>
 
 namespace dolly {
+// Interface voices eligible for the pause/resume silence window. The game's
+// replay pause cue does not live under one stable asset path, so the rule is the
+// armed window itself: it is set only around Dolly's own pause/resume commands,
+// and every voice started inside it is declined. Pure so the rule can be tested
+// without the game's sound system.
+inline bool ui_voice_silenced(std::uint64_t now_qpc, std::uint64_t until_qpc) noexcept {
+    return until_qpc != 0 && now_qpc < until_qpc;
+}
 // Optional audio hooks. Caller supplies the result of the complete fingerprint
 // check; otherwise all addresses require unique reviewed AOB matches.
 bool sound_capture_install(void* module, bool exact) noexcept;
@@ -12,4 +20,12 @@ void sound_capture_stop() noexcept;
 void sound_capture_worker_tick() noexcept;
 std::uint64_t sound_capture_dropped() noexcept;
 const char* sound_capture_error() noexcept;
+// Silences spoken-for UI voices briefly. Deadlock's replay pause/resume ping is a
+// stock interface cue with no supported off switch, so Dolly arms this window
+// immediately before its own pause/resume console commands and declines to start
+// eligible interface voices inside it. Nothing else is affected: the hooks are
+// installed only in Dolly sessions, the window expires on its own, and no game
+// setting or file is written. Returns false when the hooks are unavailable.
+bool sound_silence_ui_voices(unsigned milliseconds) noexcept;
+bool sound_ui_silence_armed() noexcept;
 }

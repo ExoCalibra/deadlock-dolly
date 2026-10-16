@@ -71,7 +71,7 @@ class MediaTransport:
     def video_status(self):
         return self.media_status()
 
-    def _media_command(self, command, **options):
+    def _media_command(self, command, *, wait=True, timeout=5, required=True, **options):
         with self._operations:
             with self._lock:
                 self._ensure_media()
@@ -85,7 +85,9 @@ class MediaTransport:
                 self._media_atomic(8, seq)
                 self._media_sequence = seq
                 self._media_last_command = command
-            deadline = self._clock() + 5
+            if not wait:
+                return None
+            deadline = self._clock() + timeout
             while self._clock() < deadline:
                 self._check_open()
                 status = self.media_status()
@@ -94,6 +96,8 @@ class MediaTransport:
                         raise NativeBridgeError(status.get("command_message") or "Native media command was rejected")
                     return status
                 self._sleep(.02)
+            if not required:
+                return None
             raise NativeBridgeError("Native media did not acknowledge the request. Reconnect with the complete matching Dolly build.")
 
     def start_video(self, path, *, fps=60, bitrate=20000000, encoder=0, codec=0,
@@ -129,6 +133,20 @@ class MediaTransport:
         status = self._media_command("stop_source_audio")
         self._source_audio_recording = False
         return status
+
+    def silence_ui(self, timeout=0.25):
+        """Arm Dolly's interface-voice window and confirm it before the pause.
+
+        This runs immediately before a replay pause/resume, so it must resolve
+        quickly: the window has to be open before the game processes the pause,
+        and a slow media worker must never delay the pause itself. The window is
+        self-expiring, and a build without the sound hooks simply keeps the game's
+        own cue. Returns True when the native side acknowledged the arm.
+        """
+        try:
+            return self._media_command("silence_ui", timeout=timeout, required=False) is not None
+        except Exception:
+            return False
 
     def _close_media(self):
         """Request finalization while the game worker still has our heartbeat."""

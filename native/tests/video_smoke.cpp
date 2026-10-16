@@ -218,6 +218,73 @@ int main(int argc, char** argv) {
                                  fixed ? 60 : 0, shot_only && !fixed ? 190000 : 0);
             DeleteFileW(capped_path.c_str());
         }
+        // A take that plays an authored path must not record the hold after that
+        // path ends. The endpoint clamps, so those frames repeat one authored
+        // instant; only depth and POV/bone takes used to drop them, which left
+        // every other exported video with seconds of still frame at its end.
+        if (ok) {
+            const auto held_path = path + L"-held.mp4";
+            Options options;
+            options.path = held_path.c_str();
+            options.fps = 60;
+            options.bitrate = 2000000;
+            options.fixed_step = true;
+            options.max_frames = 400;
+            ok = check(start(options), "held-endpoint recording starts") && ok;
+            const auto hold_deadline = GetTickCount64() + 15000;
+            double phase = 0;
+            // Advance the authored path until the encoder has definitely written
+            // frames, then let it settle so the held-endpoint comparison below
+            // cannot race the encoder worker.
+            while (ok && status().frames_written < 2 && GetTickCount64() < hold_deadline) {
+                publish_path_replay_time(true, phase, false);
+                const float color[] = {0.2f, 0.4f, 0.7f, 1.0f};
+                context->ClearRenderTargetView(view, color);
+                capture(swapchain, device, context, nullptr, phase, true);
+                phase += 1.0 / 60;
+                swapchain->Present(0, 0);
+                Sleep(2);
+            }
+            ok = check(status().frames_written >= 2, "advancing path frames were captured") && ok;
+            std::uint64_t advancing = 0;
+            for (unsigned stable = 0; ok && stable < 20 && GetTickCount64() < hold_deadline; ) {
+                publish_path_replay_time(true, phase, false);
+                const float color[] = {0.2f, 0.4f, 0.7f, 1.0f};
+                context->ClearRenderTargetView(view, color);
+                capture(swapchain, device, context, nullptr, phase, true);
+                phase += 1.0 / 60;
+                swapchain->Present(0, 0);
+                Sleep(10);
+                const auto written = status().frames_written;
+                stable = written == advancing && written >= 2 ? stable + 1 : 0;
+                advancing = written;
+            }
+            ok = check(advancing >= 2, "the encoded path frames settled") && ok;
+            // Hold the endpoint exactly as the bridge does once the shot ends.
+            // The step after the completed endpoint must not be recorded either:
+            // admitting it once produced a single held frame whose encoded
+            // duration was however long the hold lasted.
+            const auto endpoint = phase - 1.0 / 60;
+            for (unsigned i = 0; ok && i < 40 && GetTickCount64() < hold_deadline; ++i) {
+                const bool past = (i % 2) == 1;
+                const double held_phase = past ? endpoint + 1.0 / 60 : endpoint;
+                publish_path_replay_time(true, held_phase, true);
+                const float color[] = {0.6f, 0.1f, 0.1f, 1.0f};
+                context->ClearRenderTargetView(view, color);
+                capture(swapchain, device, context, nullptr, held_phase, true);
+                swapchain->Present(0, 0);
+                Sleep(5);
+            }
+            Sleep(300);
+            const auto held = status();
+            ok = check(held.frames_written == advancing,
+                       "a completed path endpoint recorded still frames") && ok;
+            stop();
+            ok = check(wait_terminal(), "held-endpoint recording stops") && ok;
+            shutdown();
+            reset_resources();
+            DeleteFileW(held_path.c_str());
+        }
         release(view);
         release(buffer);
         release(context);

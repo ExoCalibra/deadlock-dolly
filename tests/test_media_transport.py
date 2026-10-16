@@ -186,6 +186,23 @@ class MediaTransportTests(unittest.TestCase):
         self.assertEqual(wire.COMMAND.unpack_from(self.bridge._media_mapping)[3], 8)
         self.assertFalse(self.bridge._source_audio_recording)
 
+    def test_interface_silence_waits_for_the_arm_before_the_pause_is_sent(self):
+        # The worker picks media commands up on its own cadence while the pause
+        # lands on the game's next frame, so the arm has to be acknowledged first.
+        self.respond = False
+        self.assertFalse(self.bridge.silence_ui())
+        self.assertEqual(wire.COMMAND.unpack_from(self.bridge._media_mapping)[3], 9)
+        self.assertEqual(self.bridge._media_last_command, "silence_ui")
+        # An unavailable media mapping must stay silent rather than failing a pause.
+        self.bridge._close_media()
+        self.assertFalse(self.bridge.silence_ui())
+
+    def test_a_slow_arm_never_raises_or_hangs_the_pause(self):
+        self.respond = False
+        started = self.now
+        self.assertFalse(self.bridge.silence_ui(timeout=.2))
+        self.assertLessEqual(self.now - started, 1.0)
+
     def test_source_audio_capture_stops_on_disconnect(self):
         self.bridge.start_source_audio("C:\\Videos\\selected_voices.csv")
         self.bridge._close_media()

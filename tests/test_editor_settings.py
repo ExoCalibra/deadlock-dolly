@@ -181,6 +181,11 @@ class EditorBindingTests(unittest.TestCase):
         self.assertEqual(bindings_from_dict(bindings_to_dict(defaults)), defaults)
         self.assertEqual(defaults["capture"].label, DEFAULT_BINDING.label)
         self.assertEqual(defaults["framing_grid"].label, "Alt+G")
+        # R levels the live view; Replace keeps its chord and the disabled
+        # Object Picker holds no key.
+        self.assertEqual(defaults["level_view"].label, "R")
+        self.assertEqual(defaults["replace"].label, "Ctrl+Alt+R")
+        self.assertIsNone(defaults["object_picker"])
         self.assertNotIn("F7", [binding.key for binding in defaults.values() if binding])
 
     def test_duplicates_are_rejected_with_both_action_names(self):

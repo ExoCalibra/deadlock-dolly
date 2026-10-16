@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
 
 namespace dolly {
 
@@ -13,11 +14,12 @@ constexpr std::size_t kVisualizationMappingBytes = 2 * 1024 * 1024;
 constexpr std::size_t kVisualizationHeaderBytes = 64;
 constexpr std::size_t kVisualizationMaxSamples = 4096;
 constexpr std::size_t kVisualizationMaxMarkers = 128;
-constexpr std::uint32_t kVisualizationAbi = 3;
+constexpr std::uint32_t kVisualizationAbi = 4;
 
 // Header offsets match dolly.visualization_wire. The caller checks its
 // seqlock, then passes precisely header + times + metadata + camera-path bytes.
 // ABI3 adds full-shot authoring/source metadata and an opened-shot identity.
+// ABI4 adds saved/effective XYZ slope modes/pairs and the Smooth-position flag.
 #pragma pack(push, 1)
 struct VisualizationHeader {
     char magic[8];
@@ -36,6 +38,8 @@ struct VisualizationCamera {
     std::uint32_t index = 0;
     CameraPose authored_pose{};
     std::uint32_t source = 0;
+    struct Tangent { std::uint32_t mode = 0; double incoming = 0, outgoing = 0; };
+    std::array<Tangent, 3> tangents{};
 };
 
 class VisualizationPath {
@@ -49,6 +53,7 @@ public:
     std::uint32_t project_revision() const noexcept { return project_revision_; }
     std::uint64_t session_id() const noexcept { return session_id_; }
     bool unwrapped_rotation() const noexcept { return unwrapped_rotation_; }
+    bool smooth_position() const noexcept { return smooth_position_; }
     const std::vector<CameraPose>& points() const noexcept { return points_; }
     const std::vector<double>& point_times() const noexcept { return point_times_; }
     // Every authored key, independent of the world-guide marker budget.
@@ -68,6 +73,7 @@ private:
     std::uint32_t project_revision_ = 0;
     std::uint64_t session_id_ = 0;
     bool unwrapped_rotation_ = false;
+    bool smooth_position_ = false;
     std::vector<CameraPose> points_;
     std::vector<double> point_times_;
     std::vector<VisualizationCamera> graph_keys_;
@@ -80,6 +86,23 @@ private:
 // separate 32-row camera-list page validation.
 bool valid_visualization_curve_action(const VisualizationPath& path, double index,
                                       const CameraPose& request, bool select) noexcept;
+// value packs index*12 + XYZ-axis*4 + Auto/Flat/Linked/Broken. The seven
+// request fields retain revision, atomic slope pair, key time and session.
+bool valid_visualization_tangent_action(const VisualizationPath& path, double value,
+                                        const CameraPose& request) noexcept;
+
+constexpr std::size_t kVisualizationPreviewHeaderBytes = 64;
+struct VisualizationPreview {
+    std::uint32_t source = 0, token = 0, revision = 0, index = 0, channel = 0;
+    std::uint64_t session = 0, received_ms = 0;
+    double time = 0;
+    std::shared_ptr<const VisualizationPath> path;
+    std::shared_ptr<const VisualizationPath> base;
+    // A separate render-only envelope; invalid drafts never replace the
+    // authoritative editor/path snapshot. A disabled envelope has no path.
+    bool load(const void* data, std::size_t bytes, const VisualizationPath& committed,
+              std::string& error);
+};
 
 struct VisualizationView {
     // Final applied Source pose and horizontal FOV from the verified main

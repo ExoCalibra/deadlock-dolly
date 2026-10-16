@@ -1280,6 +1280,11 @@ bool start(const Options& options) noexcept {
             encoder_thread->join();
         deferred_stop.store(0);
         deferred_stop_qpc.store(0);
+        // Path state belongs to one take. A completed path from an earlier take
+        // must not make a later free-camera take drop its repeated frames.
+        gPathPlaying.store(false, std::memory_order_release);
+        gPathCompleted.store(false, std::memory_order_release);
+        gPathPhase.store(0, std::memory_order_relaxed);
         auto next = std::make_shared<Session>();
         next->path = path;
         next->fps = options.fps;
@@ -1645,12 +1650,24 @@ void capture(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceContex
         }
         return;
     }
-    if (s.depth_enabled || s.shot_only) {
+    // A take that plays an authored path holds the camera at that path's end
+    // while the recorder is still open. Those clamped frames are the same
+    // authored instant, so they must be dropped for every path take, not only
+    // for the paired depth and POV/bone takes: otherwise each exported video
+    // ends with however many seconds of still frame the hold lasted.
+    const bool path_take = gPathPlaying.load(std::memory_order_relaxed) ||
+                           gPathCompleted.load(std::memory_order_relaxed);
+    if (s.depth_enabled || s.shot_only || path_take) {
         // The authored path clamps at its end. Dropping repeated clamped
         // frames keeps the color, depth and layer takes the same length.
         const auto previous = s.shot_last_replay.load(std::memory_order_relaxed);
-        if (!capture_video_phase(previous, replay_time, s.fixed_step, native_clock,
-                                 gPathCompleted.load(std::memory_order_relaxed))) {
+        const bool completed = gPathCompleted.load(std::memory_order_relaxed);
+        // Nothing after the completed endpoint belongs to the shot. Admitting the
+        // clamped frame produced exactly one extra held frame whose encoded
+        // duration was the real hold -- a freeze of up to seconds at the end of
+        // an otherwise correct export.
+        if (completed ||
+            !capture_video_phase(previous, replay_time, s.fixed_step, native_clock, completed)) {
             if (timing)
                 timing->outcome = CaptureTrace::repeated_phase;
             return;

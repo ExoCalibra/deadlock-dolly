@@ -736,3 +736,11 @@ native/ui_override/panorama/layout/citadel_prewarm_assets_status.xml
 native/ui_override/panorama/layout/hud_hideout.xml
 native/ui_override/panorama/styles/citadel_prewarm_assets_status.css
 docs/RELEASE_NOTES_0.6.52-alpha.md
+tests/test_authored_tangents.py
+tests/test_tangent_ui.py
+tests/test_tangent_editor.py
+tests/test_tangent_native_editor.py
+dolly/curve_preview.py
+dolly/visualization_preview_wire.py
+tests/test_visualization_preview.py
+tests/test_curve_preview.py
