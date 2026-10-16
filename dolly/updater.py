@@ -11,6 +11,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
+from .release_notes import parse_release_notes
 
 REPOSITORY = "cravvnn/deadlock-dolly"
 LATEST_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
@@ -110,10 +111,13 @@ def select_release(data, current):
     digest = asset.get("digest") or ""
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise ValueError("Latest release is missing its GitHub SHA-256 digest; update deferred")
-    return {"version": version, "url": url, "sha256": digest[7:], "size": asset["size"]}
+    return {"version": version, "url": url, "sha256": digest[7:], "size": asset["size"],
+            "notes_url": f"https://github.com/{REPOSITORY}/releases/tag/{tag}",
+            "notes": parse_release_notes(data.get("body"), version)}
 
 
 def check_latest(current):
+    """Return validated release metadata; downloading is a separate action."""
     with open_url(LATEST_URL) as response:
         payload = response.read(2 * 1024 * 1024 + 1)
     if len(payload) > 2 * 1024 * 1024:
@@ -164,21 +168,25 @@ def extract_verified(archive, destination, release):
     return verify_payload(destination, release["version"])
 
 
-def staged_payload(target, version):
-    """Return a verified workspace already holding this version, if any.
+def staged_payload(target, version, sha256=None):
+    """Return a verified workspace matching the approved version and digest.
 
     A deferred or retried update reuses its download instead of fetching the
     same release again and leaving another update folder behind. The completion
     marker is written only after full extraction verification; install rechecks
-    every staged file, so a tampered payload still fails closed.
+    every staged file, so a tampered payload still fails closed. A missing
+    approved digest or an older marker without a digest cannot authorize reuse.
     """
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        return None
     for work in sorted(Path(target).glob(".dolly-update-*")):
         try:
             marker = json.loads((work / "verified.json").read_text(encoding="utf-8"))
             manifest = read_manifest(work / "payload")
         except (OSError, ValueError):
             continue
-        if marker.get("version") == version and manifest["version"] == version:
+        if (isinstance(marker, dict) and marker.get("version") == version
+                and marker.get("sha256") == sha256 and manifest["version"] == version):
             return work
     return None
 
@@ -188,7 +196,7 @@ def download_update(release, target, progress=lambda text: None):
     # out of the user's surrounding folders. This directory is application-
     # created; a failed download never changes installed files.
     target = Path(target)
-    work = staged_payload(target, release["version"])
+    work = staged_payload(target, release["version"], release["sha256"])
     if work is not None:
         progress(f"Using downloaded Dolly {release['version']}")
         return work

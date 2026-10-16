@@ -1,12 +1,11 @@
 """Public executable startup, safe handoff, recovery and package migration."""
+from io import BytesIO
 import json
 from pathlib import Path
-import queue
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 from dolly import release_launcher as boot, update_worker as worker, updater
-from dolly.settings import AppSettings
 from test_updater import package
 
 
@@ -18,90 +17,94 @@ class LauncherTests(unittest.TestCase):
         self.target.mkdir()
         (self.target / updater.MANIFEST).write_text("fixture")
 
-    def test_normal_launch_checks_before_opening_editor(self):
-        with patch.object(boot, "load_settings", return_value=AppSettings()), \
-             patch.object(worker, "pending_work", return_value=None), \
-             patch.object(boot, "StartupWindow") as window, patch.object(boot, "open_editor") as editor:
-            window.return_value.run.return_value = "open"
-            self.assertEqual(boot.main([], target=self.target), 0)
-            window.assert_called_once_with(self.target.resolve())
-            editor.assert_called_once_with(self.target.resolve(), [])
+    def test_normal_launch_cleans_up_and_opens_without_discovery_download_or_install(self):
+        for arguments in ([], ["--updated"], ["--open", "shot.dolly"]):
+            with self.subTest(arguments=arguments), \
+                 patch.object(worker, "pending_work", return_value=None) as recovery, \
+                 patch.object(worker, "cleanup_workspaces") as cleanup, \
+                 patch.object(worker, "launch_program") as editor, \
+                 patch.object(worker, "check_processes") as processes, \
+                 patch.object(worker, "launch_worker") as install, \
+                 patch.object(updater, "check_latest") as discovery, \
+                 patch.object(updater, "download_update") as download, \
+                 patch.object(updater, "open_url") as network:
+                calls = Mock()
+                calls.attach_mock(recovery, "recovery")
+                calls.attach_mock(cleanup, "cleanup")
+                calls.attach_mock(editor, "editor")
+                self.assertEqual(boot.main(arguments, target=self.target), 0)
+                self.assertEqual([call[0] for call in calls.mock_calls], ["recovery", "cleanup", "editor"])
+                editor.assert_called_once_with(
+                    [str(self.target.resolve() / "_internal/DollyApp.exe"), *arguments],
+                    self.target.resolve(), wait=False)
+                discovery.assert_not_called()
+                download.assert_not_called()
+                network.assert_not_called()
+                processes.assert_not_called()
+                install.assert_not_called()
 
-    def test_opt_out_and_updated_launch_never_check_again(self):
-        for args, automatic in (([], False), (["--updated"], True)):
-            with self.subTest(args=args), patch.object(boot, "load_settings", return_value=AppSettings(auto_updates=automatic)), \
-                 patch.object(worker, "pending_work", return_value=None), \
-                 patch.object(boot, "StartupWindow") as window, patch.object(boot, "open_editor") as editor:
-                boot.main(args, target=self.target)
-                window.assert_not_called()
-                editor.assert_called_once()
+    def test_ordinary_open_does_not_mark_the_editor_as_just_updated(self):
+        with patch.object(worker, "launch_program") as launch:
+            boot.open_editor(self.target)
+            launch.assert_called_once_with(
+                [str(self.target / "_internal/DollyApp.exe")], self.target, wait=False)
 
-    def test_update_handoff_does_not_open_old_editor(self):
-        with patch.object(boot, "load_settings", return_value=AppSettings()), \
-             patch.object(worker, "pending_work", return_value=None), \
-             patch.object(boot, "StartupWindow") as window, patch.object(boot, "open_editor") as editor:
-            window.return_value.run.return_value = "updating"
-            boot.main([], target=self.target)
-            editor.assert_not_called()
+    def test_actual_update_argument_is_forwarded_unchanged(self):
+        with patch.object(worker, "launch_program") as launch:
+            boot.open_editor(self.target, ["--updated"])
+            launch.assert_called_once_with(
+                [str(self.target / "_internal/DollyApp.exe"), "--updated"], self.target, wait=False)
 
     def test_recovery_runs_without_the_editor_runtime_and_waits_for_bootloader(self):
         work = self.target / ".dolly-update-test"
         with patch.object(worker, "pending_work", return_value=work), \
              patch.object(boot, "launcher_process_ids", return_value=(123, 100)), \
              patch.object(worker, "check_processes") as check, patch.object(worker, "launch_worker") as launch, \
-             patch.object(boot, "open_editor") as editor:
+             patch.object(boot, "open_editor") as editor, \
+             patch.object(worker, "cleanup_workspaces") as cleanup, \
+             patch.object(updater, "check_latest") as discovery, \
+             patch.object(updater, "download_update") as download:
             boot.main([], target=self.target)
             check.assert_called_once_with(self.target.resolve(), exclude_pid=(123, 100))
             launch.assert_called_once_with(self.target.resolve(), work, recover=True, parent_pid=100)
             editor.assert_not_called()
+            cleanup.assert_not_called()
+            discovery.assert_not_called()
+            download.assert_not_called()
+
+    def test_recovery_process_guard_still_blocks_an_unsafe_handoff(self):
+        with patch.object(worker, "pending_work", return_value=self.target / ".dolly-update-test"), \
+             patch.object(boot, "launcher_process_ids", return_value=(123, 100)), \
+             patch.object(worker, "check_processes", side_effect=RuntimeError("Game is running")), \
+             patch.object(worker, "launch_worker") as install, patch.object(boot, "open_editor") as editor:
+            with self.assertRaisesRegex(RuntimeError, "Game is running"):
+                boot.main([], target=self.target)
+            install.assert_not_called()
+            editor.assert_not_called()
 
     def test_install_health_check_bypasses_pending_recovery_and_network(self):
-        args = ["--self-test", "report.json"]
-        with patch.object(worker, "pending_work") as recovery, \
-             patch.object(boot, "load_settings") as settings, patch.object(worker, "launch_program", return_value=0) as launch:
-            self.assertEqual(boot.main(args, target=self.target), 0)
-            self.assertEqual(launch.call_args.args[0], [str(self.target.resolve() / "_internal/DollyApp.exe"), *args])
-            self.assertTrue(launch.call_args.kwargs["wait"])
-            recovery.assert_not_called(); settings.assert_not_called()
+        for args in (["--self-test", "report.json"], ["--self-test-hidden", "report.json"],
+                     ["--cleanup-session", "session.json"], ["--help"]):
+            with self.subTest(args=args), patch.object(worker, "pending_work") as recovery, \
+                 patch.object(worker, "cleanup_workspaces") as cleanup, \
+                 patch.object(updater, "check_latest") as discovery, \
+                 patch.object(worker, "launch_program", return_value=0) as launch:
+                self.assertEqual(boot.main(args, target=self.target), 0)
+                launch.assert_called_once_with(
+                    [str(self.target.resolve() / "_internal/DollyApp.exe"), *args], self.target.resolve(), wait=True)
+                recovery.assert_not_called()
+                cleanup.assert_not_called()
+                discovery.assert_not_called()
 
-    def test_offline_or_running_game_opens_installed_editor_without_installing(self):
-        for game in (False, True):
-            events = queue.Queue()
-            with patch.object(worker, "check_processes", side_effect=RuntimeError("game") if game else None), \
-                 patch.object(updater, "check_latest", side_effect=OSError("offline")) as check, \
-                 patch.object(updater, "download_update") as download:
-                boot.check_for_update(self.target, events, (123, 100))
-                self.assertEqual(events.get_nowait()[0], "open")
-                download.assert_not_called()
-                if game: check.assert_not_called()
-
-    def test_verified_download_reports_ready_but_does_not_install_in_worker_thread(self):
-        events = queue.Queue(); release = {"version": "1.2.3"}; work = self.target / ".dolly-update-test"
-        with patch.object(worker, "check_processes"), patch.object(updater, "check_latest", return_value=release), \
-             patch.object(updater, "download_update", return_value=work) as download, \
-             patch.object(worker, "launch_worker") as install:
-            boot.check_for_update(self.target, events, (123,))
-            self.assertEqual(events.get_nowait(), ("ready", work))
-            self.assertEqual(download.call_args.args[1], self.target)
-            install.assert_not_called()
-
-    def test_skipped_window_ignores_late_ready_event(self):
-        window = boot.StartupWindow.__new__(boot.StartupWindow)
-        window.closed = True; window.events = queue.Queue(); window.events.put(("ready", self.target))
-        with patch.object(worker, "launch_worker") as install:
-            window.poll()
-            install.assert_not_called()
-
-    def test_editor_opened_during_download_defers_installation(self):
-        window = boot.StartupWindow.__new__(boot.StartupWindow)
-        window.closed = False; window.target = self.target; window.excluded = (123,)
-        window.events = queue.Queue(); window.events.put(("ready", self.target))
-        window.root = Mock(); window.status = Mock()
-        with patch.object(worker, "check_processes", side_effect=RuntimeError("second editor")), \
-             patch.object(worker, "launch_worker") as install:
-            window.poll()
-            install.assert_not_called()
-            self.assertIn("deferred", window.status.set.call_args.args[0])
+    def test_update_worker_entrypoints_still_bypass_editor_startup(self):
+        for arguments, expected in ((["--plan", "plan.json"], ["--plan", "plan.json"]),
+                                    (["--updater-self-test", "report.json"], ["--self-test", "report.json"])):
+            with self.subTest(arguments=arguments), patch.object(worker, "main", return_value=7) as handoff, \
+                 patch.object(worker, "pending_work") as recovery, patch.object(boot, "open_editor") as editor:
+                self.assertEqual(boot.main(arguments, target=self.target), 7)
+                handoff.assert_called_once_with(expected)
+                recovery.assert_not_called()
+                editor.assert_not_called()
 
     def test_new_process_has_independent_pyinstaller_runtime(self):
         with patch.object(worker.subprocess, "Popen") as launch:
@@ -129,3 +132,64 @@ class LauncherTests(unittest.TestCase):
         worker.atomic_json(work / "plan.json", {**plan, "target": str(self.target.parent)})
         with self.assertRaisesRegex(ValueError, "disagrees"):
             worker.pending_work(self.target)
+
+
+class UpdateDiscoveryTests(unittest.TestCase):
+    def release(self, tag="v0.6.50-alpha"):
+        version = tag.removeprefix("v")
+        name = f"Deadlock_Dolly_{version}_Windows_x64.zip"
+        return {"tag_name": tag, "draft": False, "prerelease": False,
+                "html_url": "https://untrusted.example/release-notes",
+                "assets": [{"name": name, "state": "uploaded", "size": 100,
+                            "digest": "sha256:" + "a" * 64,
+                            "browser_download_url": f"https://github.com/{updater.REPOSITORY}/releases/download/{tag}/{name}"}]}
+
+    def test_notes_url_is_bound_to_the_validated_official_release_tag(self):
+        for tag in ("v0.6.50-alpha", "0.6.50-alpha", "v1.2.3-rc.4"):
+            with self.subTest(tag=tag):
+                selected = updater.select_release(self.release(tag), "0.6.49-alpha")
+                self.assertEqual(selected["notes_url"],
+                                 f"https://github.com/cravvnn/deadlock-dolly/releases/tag/{tag}")
+                self.assertEqual(selected["sha256"], "a" * 64)
+
+    def test_api_html_url_never_controls_the_notes_destination(self):
+        for url in (None, "javascript:alert(1)", "file:///C:/notes.html",
+                    "https://github.com/another/publisher/releases/tag/v0.6.50-alpha"):
+            with self.subTest(url=url):
+                release = self.release()
+                release["html_url"] = url
+                self.assertEqual(updater.select_release(release, "0.6.49-alpha")["notes_url"],
+                                 "https://github.com/cravvnn/deadlock-dolly/releases/tag/v0.6.50-alpha")
+
+    def test_unsupported_tags_cannot_become_notes_links(self):
+        for tag in ("latest", "../v0.6.50-alpha", "v0.6.50-alpha?redirect=evil", "https://example.com"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                updater.select_release(self.release(tag), "0.6.49-alpha")
+
+    def test_notes_link_does_not_bypass_release_asset_integrity_checks(self):
+        for key, value in (("digest", None), ("size", True), ("size", updater.MAX_DOWNLOAD + 1),
+                           ("browser_download_url", "https://untrusted.example/dolly.zip")):
+            with self.subTest(key=key):
+                release = self.release()
+                release["assets"][0][key] = value
+                with self.assertRaises(ValueError):
+                    updater.select_release(release, "0.6.49-alpha")
+
+    def test_discovery_fetches_only_metadata_and_never_stages_an_update(self):
+        metadata = BytesIO(json.dumps(self.release()).encode())
+        with patch.object(updater, "open_url", return_value=metadata) as network, \
+             patch.object(updater, "download_update") as download, \
+             patch.object(updater, "extract_verified") as extract:
+            selected = updater.check_latest("0.6.49-alpha")
+            self.assertEqual(selected["version"], "0.6.50-alpha")
+            self.assertTrue(selected["notes_url"].endswith("/tag/v0.6.50-alpha"))
+            network.assert_called_once_with(updater.LATEST_URL)
+            download.assert_not_called()
+            extract.assert_not_called()
+
+    def test_discovery_keeps_the_metadata_size_limit(self):
+        with patch.object(updater, "open_url", return_value=BytesIO(b" " * (2 * 1024 * 1024 + 1))), \
+             patch.object(updater, "download_update") as download:
+            with self.assertRaisesRegex(ValueError, "metadata is too large"):
+                updater.check_latest("0.6.49-alpha")
+            download.assert_not_called()

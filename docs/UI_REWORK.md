@@ -49,6 +49,16 @@ timeline, or seeks to the selected tick when the timeline is in Replay mode.
 **Play cinematic** prepares and starts the shot. You do not need to press Play
 again when preparation finishes.
 
+## Finish a recording before editing cameras
+
+Pausing the replay or reaching the last camera leaves a normal video recording
+open. Use **Finish recording** in the main panel's footer; it stays available on
+every tab while recording. Wait for **Finalizing video...** to finish saving.
+Camera edits, including **Clear All**, become available again afterward.
+
+**Stop / restore** controls playback and restoration. Use **Finish recording**
+to close and save the video take.
+
 ## Find a player or a replay moment
 
 A newly loaded replay starts with the full timeline in view. Dolly reads the

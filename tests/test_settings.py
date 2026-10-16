@@ -81,6 +81,30 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(load_settings(self.path).export_folder, '')
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_update_check_choice_survives_legacy_migrations_without_read_time_writes(self):
+        for version in (5, 6, 7, 8):
+            for enabled in (False, True):
+                with self.subTest(version=version, automatic_checks=enabled):
+                    settings = AppSettings(auto_updates=enabled, ffmpeg_path='E:/tools/ffmpeg.exe')
+                    save_settings(settings, self.path)
+                    raw = json.loads(self.path.read_text('utf-8'))
+                    raw['version'] = version
+                    for since, name in ((6, 'framing_grid_enabled'), (7, 'export_folder'),
+                                        (8, 'pause_after_capture')):
+                        if version < since:
+                            raw.pop(name)
+                    self.write_raw(json.dumps(raw))
+                    before = self.path.read_bytes()
+                    loaded = load_settings(self.path)
+                    self.assertEqual(loaded, settings)
+                    self.assertIs(loaded.auto_updates, enabled)
+                    self.assertEqual(self.path.read_bytes(), before)
+                    self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+                    save_settings(loaded, self.path)
+                    persisted = json.loads(self.path.read_text('utf-8'))
+                    self.assertEqual(persisted['version'], 8)
+                    self.assertIs(persisted['auto_updates'], enabled)
+
     def test_export_folder_survives_reload_even_when_drive_is_unavailable(self):
         from dolly.video_export import default_video_path
         folder = Path(self.directory.name) / 'Unplugged drive' / 'Vidéos'

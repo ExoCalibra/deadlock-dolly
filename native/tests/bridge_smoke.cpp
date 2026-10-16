@@ -1646,6 +1646,60 @@ void editor_framing_checks() {
     require(editor_enqueue(EditorAction::ClearCameraPath,0,&request), "Confirmed Clear cannot enter event ring");
     request[0]=6;
     require(!editor_enqueue(EditorAction::ClearCameraPath,0,&request), "Stale Clear revision was accepted");
+    request[0]=7;
+    dolly::gAcknowledged = dolly::gLastEvent;
+    for (auto action : {EditorAction::Capture, EditorAction::Replace, EditorAction::ResetCameraPath})
+        require(editor_enqueue(action), "Camera guard fixture could not enqueue an idle capture action");
+    {
+        // Without a Present, the real recorder waits in starting and never
+        // loads Media Foundation, creates an encoder, or opens an output file.
+        // Exercise the actual enqueue boundary while replay playback is paused.
+        wchar_t folder[MAX_PATH]{};
+        require(GetTempPathW(MAX_PATH, folder) != 0, "Recorder guard fixture has no temporary directory");
+        const std::wstring output = std::wstring(folder) + L"Dolly.CameraGuard." +
+            std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(GetTickCount64()) + L".mp4";
+        require(GetFileAttributesW(output.c_str()) == INVALID_FILE_ATTRIBUTES,
+                "Recorder guard fixture output already exists");
+        struct RecorderCleanup {
+            ~RecorderCleanup() { video::stop(true); video::shutdown(); }
+        } cleanup;
+        video::Options options{};
+        options.path = output.c_str();
+        require(video::start(options), "Cannot start the no-Present recorder guard fixture");
+        require(editor_recording_status().state == video::State::starting &&
+                    editor_recording_locks_cameras(editor_recording_status().state) &&
+                    editor_snapshot().paused && !editor_snapshot().playing,
+                "The recorder fixture did not keep replay and recording state separate");
+        dolly::gAcknowledged = dolly::gLastEvent;
+        const auto locked_serial = dolly::gLastEvent;
+        for (auto action : {EditorAction::Capture, EditorAction::Replace, EditorAction::ResetCameraPath})
+            require(!editor_enqueue(action), "Paused recording accepted a capture action into the real event ring");
+        for (auto action : {EditorAction::ClearCameraPath, EditorAction::DeleteCamera, EditorAction::UndoShot,
+                            EditorAction::RedoShot, EditorAction::SetCameraTime, EditorAction::SetCameraRoll,
+                            EditorAction::SetFraming, EditorAction::SetAttachTarget,
+                            EditorAction::SetAttachPoint, EditorAction::SetAttachOffsets, EditorAction::SetAttachSmoothing,
+                            EditorAction::SetAttachHide, EditorAction::AttachCycleTarget, EditorAction::AttachCyclePoint,
+                            EditorAction::AttachReset, EditorAction::AttachSnap, EditorAction::SetAttachBone,
+                            EditorAction::SetSourceBlend})
+            require(!editor_enqueue(action, 0, &request),
+                    "Paused recording accepted a camera mutation into the real event ring");
+        require(dolly::gLastEvent == locked_serial,
+                "A rejected recording-time camera mutation advanced the event ring");
+        require(!editor_request_framing_factor(.8), "Paused recording accepted typed framing");
+        const auto locked_aspect = pose[6];
+        dolly::apply_framing_wheel(pose, *config, WHEEL_DELTA);
+        close_to(pose[6], locked_aspect, "Paused recording changed live framing before rejecting its saved edit");
+        require(editor_enqueue(EditorAction::StopVideo) && editor_enqueue(EditorAction::Stop) &&
+                    editor_enqueue(EditorAction::Console),
+                "Recording camera guard blocked Finish, Stop, or console recovery");
+        video::stop(true);
+        video::shutdown();
+        require(!editor_recording_locks_cameras(editor_recording_status().state) &&
+                    GetFileAttributesW(output.c_str()) == INVALID_FILE_ATTRIBUTES,
+                "No-Present recorder did not cancel without producing an output file");
+        require(editor_enqueue(EditorAction::ClearCameraPath, 0, &request),
+                "Finishing the recorder did not restore normal camera editing");
+    }
     std::atomic_store(&dolly::gCameraList,saved_list);
     std::atomic_store(&dolly::gConfig, saved);
     editor_update_view(view.ready, view.paused, view.manual_active, view.pose);

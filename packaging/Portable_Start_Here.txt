@@ -246,12 +246,27 @@ Component notices are in LICENSE.txt and _internal/third_party.
 
 APPLICATION UPDATES
 
-Open Dolly.exe: its startup window checks the published GitHub Latest release.
-Use Open Dolly to skip a slow check. The updater is built into Dolly.exe. Automatic updates
-wait for saved work and a closed game. Settings > Updates has manual checking
-and an automatic-update switch. Shots, settings and external tool paths stay.
+Open Dolly.exe: the desktop app opens immediately and checks the published
+GitHub Latest release in the background when automatic checking is enabled.
+A prominent notice inside the app shows your current and available versions,
+with What's changed, Update now and Later. What's changed expands the short
+Before/After highlights inside the outlined notice. Longer notes scroll; Full
+release notes opens the release page in your browser. Later collapses the notice
+to a header reminder for this session; automatic checking reminds you
+on the next launch. The update stays available in Settings > Updates.
+
+Every update requires Update now. Nothing downloads or installs before that
+click. There is no automatic-install option or countdown. If Dolly asks you to
+save work, close Deadlock, finish a recording or operation, or close a dialog,
+do that first and click Update now again. The request is not queued, and
+becoming idle never starts an update or restart by itself.
+
+Settings > Updates has Check for updates and Automatically check for updates.
+That preference controls release-information checks only; an existing disabled
+preference stays disabled. Shots, settings and external tool paths stay.
 Update files live in a .dolly-update-* folder inside the Dolly folder and are
 removed automatically after a successful update. After an interrupted update,
-close Deadlock and reopen Dolly.exe to recover. Keep the .dolly-update-* folder
+close Deadlock and reopen Dolly.exe for automatic recovery of that approved
+update. Keep the .dolly-update-* folder
 and the _internal folder while a recovery is pending. Update details:
 https://github.com/cravvnn/deadlock-dolly/blob/main/docs/internal/UPDATING.md

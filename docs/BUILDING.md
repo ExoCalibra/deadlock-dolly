@@ -143,7 +143,9 @@ this reviewed profile.
 - Original component notices accompany the binary. Python's installed license
   and PyInstaller's COPYING file are copied from the actual build environment.
 
-The result is an unsigned portable app with the [startup updater](internal/UPDATING.md).
+The result is an unsigned portable app with [desktop update notices](internal/UPDATING.md):
+the editor opens immediately, release checks run in the background, and every
+download and installation requires an explicit **Update now** action.
 No installer or certificate-based code signing is configured. A successful
 bundle startup or native callback test does not establish Deadlock camera
 compatibility. Complete [STAGE1_TESTING.md](internal/STAGE1_TESTING.md) on the supported

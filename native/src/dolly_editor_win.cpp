@@ -727,7 +727,8 @@ bool editor_follow_config(EditorFollowConfig& out) noexcept {
 bool editor_request_framing_factor(double factor) noexcept {
     const auto state = editor_snapshot();
     if (!std::isfinite(factor) || factor <= 0 || !state.ready || !state.paused ||
-        state.busy || state.playing || state.attach_preview || !state.manual_active)
+        state.busy || state.playing || state.attach_preview || !state.manual_active ||
+        editor_recording_locks_cameras(editor_recording_status().state))
         return false;
     gLiteFramingFactor.store(factor);
     return true;
@@ -773,6 +774,9 @@ bool editor_bones_snapshot(EditorBones& out) noexcept {
     out = *bones;
     return true;
 }
+video::Status editor_recording_status() noexcept {
+    return video::status();
+}
 bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_override) noexcept {
     // Menu requests may originate from a render-thread button. They only queue
     // adapter work here; the worker changes input/cursor ownership afterwards.
@@ -788,6 +792,17 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
         return false;
     if (action == EditorAction::SetVideoAeCamera &&
         (state.busy || pose_override || (value != 0 && value != 1)))
+        return false;
+    const bool camera_mutation = action == EditorAction::Capture || action == EditorAction::Replace ||
+        action == EditorAction::ResetCameraPath || action == EditorAction::ClearCameraPath ||
+        action == EditorAction::DeleteCamera || action == EditorAction::UndoShot ||
+        action == EditorAction::RedoShot || action == EditorAction::SetCameraTime ||
+        action == EditorAction::SetCameraRoll ||
+        action == EditorAction::SetFraming ||
+        (action >= EditorAction::SetAttachTarget && action <= EditorAction::AttachReset) ||
+        action == EditorAction::AttachSnap || action == EditorAction::SetAttachBone ||
+        action == EditorAction::SetSourceBlend;
+    if (camera_mutation && editor_recording_locks_cameras(editor_recording_status().state))
         return false;
     if (action == EditorAction::SetPauseAfterCapture &&
         (!state.ready || state.busy || state.owner != EditorOwner::Panel || pose_override ||
@@ -1187,7 +1202,8 @@ double framing_wheel_step(double live, double stored, int camera, double factor)
 void apply_framing_wheel(CameraPose& pose, const EditorConfig& config, long wheel) noexcept {
     const double pending = gLiteFramingFactor.exchange(1.0);
     if ((!wheel && pending == 1.0) || (config.playback_flags & kEditorPlaybackStateMask) ||
-        (gViewFlags.load() & 6) != 6)
+        (gViewFlags.load() & 6) != 6 ||
+        editor_recording_locks_cameras(editor_recording_status().state))
         return;
     // Anchor to the selected camera's stored framing for immediate on-screen
     // feedback. The published event carries only the scale factor: Python owns

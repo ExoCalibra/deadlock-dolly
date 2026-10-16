@@ -24,7 +24,7 @@
 Capture the free camera, shape a shot and play it back with animated framing and
 camera variables.
 
-**Current source: 0.6.49-alpha.** The portable Windows build opens through
+**Current source: 0.6.51-alpha.** The portable Windows build opens through
 `Dolly.exe`. Python and Tcl/Tk are bundled; no separate installation is needed.
 
 **THIS MOD INJECTS CODE INTO DEADLOCK — USE AT YOUR OWN RISK.**
@@ -109,7 +109,7 @@ See [Using the Windows app](#using-the-windows-app) for the full walkthrough.
 ### ReShade and updates
 
 - Optional ReShade color effects, its in-game menu on a configurable F11 key, and the verified scene depth published to ReShade for depth-based effects.
-- Startup update check with manual checks in Settings.
+- Automatic update checks inside Dolly, with **Update now** approval and manual checks in Settings.
 
 ## Using the Windows app
 
@@ -183,12 +183,22 @@ files. Windows EXE build instructions are in [BUILDING.md](docs/BUILDING.md).
 
 ## Application updates
 
-Starting with 0.5.6-alpha, opening Dolly.exe shows a startup update check against
-the published GitHub Latest release and updates automatically when safe. The
-updater is built into Dolly.exe; the editor runtime stays under _internal. Settings, shots and external tool
-paths are preserved. Use Settings / Updates for manual checks or to turn off
-automatic installation. See [Updating Dolly](docs/internal/UPDATING.md) for release
-publishing and interrupted-update recovery.
+Open Dolly.exe and the desktop editor opens immediately. Packaged Windows builds
+check GitHub's published Latest release in the background when automatic checking
+is enabled. A notice inside the app shows your current and available versions,
+with **What's changed**, **Update now**, and **Later**.
+**What's changed** expands the short Before/After highlights inside the notice;
+the panel also offers a link to the full release notes.
+
+Every update requires **Update now**; nothing downloads or installs before that
+click. **Later** collapses it to a header reminder for this session, with another reminder on the
+next launch when automatic checking is enabled. **Settings > Updates** keeps the
+update available and offers manual checks and **Automatically check for updates**.
+That preference controls checks only. If Dolly asks you to save work or close the
+game before updating, do that first and click **Update now** again; the request is
+not queued. Settings, shots and external tool paths are preserved. Interrupted
+update recovery remains automatic. See [Updating Dolly](docs/internal/UPDATING.md)
+for release publishing and recovery details.
 
 ## Video and ReShade
 
@@ -343,7 +353,7 @@ ZIP from **Export diagnostics**. If the app does not open, include
 
 - [@tbhtho](https://github.com/tbhtho) — in-game UI rework and saved panel layouts.
 - [@s34532](https://github.com/s34532) — custom particle effects system, beginning with native confetti rain.
-- [@Hesykhia](https://github.com/Hesykhia) — high-resolution screenshot export with players-only mattes.
+- [@Hesykhia](https://github.com/Hesykhia) — high-resolution screenshot export with players-only mattes; update-control feedback.
 
 ## License
 
@@ -356,6 +366,8 @@ separate terms in [assets/README.md](assets/README.md).
 Recent releases and the complete history live in the [changelog](docs/CHANGELOG.md)
 and the per-version [release notes](docs/).
 
+- **0.6.51-alpha** — explicit update approval and published release highlights inside the desktop app.
+- **0.6.50-alpha** — visible Finish recording controls and safe camera editing while a take is open.
 - **0.6.49-alpha** — refreshed in-game UI by @tbhtho, saved layouts, a pause-after-capture choice and complete F8 panel hiding.
 - **0.6.48-alpha** — replay-effect settling before camera-path playback and exports.
 - **0.6.35-alpha** — every FFmpeg output step (stills, Players layer, alpha combine, clip audio, depth preview) runs hidden in a clean environment.

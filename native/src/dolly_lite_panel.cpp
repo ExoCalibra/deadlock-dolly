@@ -64,6 +64,8 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
     float s = panel_scale;
     if (!lite_campaths_visible(state))
         return;
+    const auto recording = editor_recording_status();
+    const bool recording_locked = editor_recording_locks_cameras(recording.state);
     const bool compact = io.DisplaySize.x < 900 * s || io.DisplaySize.y < 650 * s;
     if (compact && state.owner == EditorOwner::Panel && !compact_paths_) return;
     EditorCameraList list{};
@@ -144,7 +146,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
         previous_camera_total_ = list.total; have_camera_total_ = true;
         // Keep the original live bank-preview behavior, with one outstanding
         // revision-bound change. A release waits for the preceding revision.
-        if (bank_release_pending_ && (state.busy || state.playing || !state.paused || state.attach_preview ||
+        if (bank_release_pending_ && (recording_locked || state.busy || state.playing || !state.paused || state.attach_preview ||
             bank_release_index_<list.first || bank_release_index_>=list.first+list.count ||
             list.rows[bank_release_index_-list.first].time!=bank_anchor_time_))bank_release_pending_=false;
         if (bank_release_pending_ && list.revision != bank_sent_revision_) {
@@ -163,6 +165,10 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
             SameLine(); layout_controls();
         }
         Separator();
+        if (recording_locked)
+            TextWrapped(recording.state == video::State::finalizing ?
+                        "Saving video. Please wait." :
+                        "Finish recording before editing cameras.");
         const float footer = 4 * GetFrameHeightWithSpacing() + GetStyle().ItemSpacing.y + 1;
         const float row_area = std::max(row_height, GetContentRegionAvail().y - footer - header_height);
         const unsigned rows = std::max(1u, unsigned(row_area / row_height));
@@ -207,7 +213,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
                     SetNextItemAllowOverlap();
                     const bool clicked=Selectable("##camera",false,ImGuiSelectableFlags_AllowDoubleClick,
                                                    ImVec2(0,row_height-4*s));
-                    if(clicked && state.ready && !state.busy && !state.playing)
+                    if(clicked && state.ready && !state.busy && !state.playing && !recording_locked)
                         camera_request(IsMouseDoubleClicked(ImGuiMouseButton_Left) ? EditorAction::ViewCamera : EditorAction::SelectCamera,index,list);
                     const float slide=index==animated_camera_ ? 4*s*(1-motion_progress(camera_added_at_,.28)) : 0;
                     SetCursorScreenPos(ImVec2(cell.x+slide,cell.y+2*s));
@@ -215,7 +221,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
                     if(IsItemHovered() && matching && (info.flags&1))SetTooltip("Replay tick %lld",static_cast<long long>(info.ticks[i]));
                     TableSetColumnIndex(1);
                     BeginDisabled(state.owner != EditorOwner::Panel || !state.ready || !state.paused ||
-                                  state.busy || state.playing || state.attach_preview);
+                                  state.busy || state.playing || state.attach_preview || recording_locked);
                     PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2 * s, 2 * s));
                     PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
                     PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
@@ -231,7 +237,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
                     if (IsItemHovered())
                         SetTooltip("Camera %02u arrival. Drag to adjust; Ctrl+click to type.",
                                    index + 1);
-                    if (arrival_edited) {
+                    if (arrival_edited && !recording_locked) {
                         CameraPose request{};
                         request[0] = lite_arrive_edit_revisions_[i];
                         request[1] = lite_arrive_drafts_[i];
@@ -245,13 +251,19 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
                     TableSetColumnIndex(2);Text("%.2f",camera.aspect);
                     TableSetColumnIndex(3);
                     BeginDisabled(state.owner != EditorOwner::Panel || !state.ready || !state.paused ||
-                                  state.busy || state.playing || state.attach_preview);
+                                  state.busy || state.playing || state.attach_preview || recording_locked);
                     SetNextItemWidth(-1);
                     PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(2*s,2*s));
                     PushStyleColor(ImGuiCol_FrameBg,ImVec4(0,0,0,0));
                     DragFloat("##bank",&lite_bank_drafts_[i],.25f,-180,180,"%.1f",ImGuiSliderFlags_AlwaysClamp);
                     bool bank_active=IsItemActive(), bank_commit=IsItemDeactivatedAfterEdit();
                     lite_bank_editing_[i]=bank_active;
+                    if (recording_locked) {
+                        bank_active = bank_commit = false;
+                        lite_bank_editing_[i] = false;
+                        bank_release_pending_ = false;
+                        lite_bank_drafts_[i] = float(camera.roll);
+                    }
                     if (IsItemActivated()) {bank_sent_revision_=0;bank_release_pending_=false;bank_anchor_time_=camera.time;}
                     if ((bank_active || bank_commit) && camera.time != bank_anchor_time_) {
                         ClearActiveID();
@@ -281,13 +293,13 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
             TextColored(color(ui::TEXT), "Your first camera starts here");
             TextWrapped("Frame a view, then capture it. Add another view to create a cinematic path.");
             Spacing();
-            BeginDisabled(!state.ready || !state.paused || state.busy || state.playing || state.attach_preview);
+            BeginDisabled(!state.ready || !state.paused || state.busy || state.playing || state.attach_preview || recording_locked);
             action_button("Capture camera", EditorAction::Capture, -1, 0, true);
             EndDisabled();
         }
         SetCursorPosY(GetWindowSize().y - footer - 12 * s);
         BeginDisabled(!state.ready || !state.paused || state.busy || state.playing ||
-                      state.attach_preview);
+                      state.attach_preview || recording_locked);
         const unsigned row_first = list.first + visible_begin;
         BeginDisabled(row_first == 0 || camera_pending_first_ != ~0u);
         if (ArrowButton("##previous-cameras", ImGuiDir_Left)) {
@@ -320,7 +332,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
         EndDisabled();
         EndDisabled();
         Separator();
-        BeginDisabled(!state.ready || !state.paused || state.busy || state.playing || state.attach_preview);
+        BeginDisabled(!state.ready || !state.paused || state.busy || state.playing || state.attach_preview || recording_locked);
         float history_half = (GetContentRegionAvail().x - 8*s)*.5f;
         BeginDisabled(!(list.flags&1));
         if(Button("Undo",ImVec2(history_half,0)))camera_request(EditorAction::UndoShot,0,list);
@@ -347,7 +359,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
             if (changed)
                 TextUnformatted("Path changed. Cancel and review it again.");
             const bool can_clear = !changed && state.owner == EditorOwner::Panel && state.ready &&
-                                   state.paused && !state.busy && !state.playing && !state.attach_preview;
+                                   state.paused && !state.busy && !state.playing && !state.attach_preview && !recording_locked;
             BeginDisabled(!can_clear);
             // Keep dispatch bound to the path that opened this confirmation,
             // including programmatic keyboard activation of a disabled item.

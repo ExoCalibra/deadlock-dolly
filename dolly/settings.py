@@ -42,6 +42,8 @@ class AppSettings:
     full_editor: bool = False
     ffmpeg_path: str = ""
     export_folder: str = ""
+    # Legacy saved-field name: enables automatic release metadata checks only.
+    # Downloading and installing still require an explicit Update now action.
     auto_updates: bool = True
     framing_grid_enabled: bool = False
     pause_after_capture: bool = False
@@ -182,6 +184,7 @@ def _decode_settings(data: bytes) -> AppSettings:
     if raw["version"] >= 4:
         fields.add("full_editor")
     if raw["version"] >= 5:
+        # Keep either saved value; False remains an automatic-check opt-out.
         fields |= {"ffmpeg_path", "auto_updates"}
     if raw["version"] >= 6:
         fields.add("framing_grid_enabled")

@@ -472,6 +472,7 @@ class DollyApp:
         heading = ttk.Frame(outer)
         heading.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         heading.columnconfigure(0, weight=1)
+        self.update_notice_parent = heading
         ttk.Label(heading, text="DEADLOCK DOLLY", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(heading, textvariable=self.project_text, style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 0))
         status_row = ttk.Frame(heading)
@@ -4326,9 +4327,16 @@ class DollyApp:
 
     def _shot_edit_ready(self):
         video = getattr(self, "video_export", None)
-        recording = video is not None and video.status().get("state") in ACTIVE_STATES
-        if (self.busy or self.playing or recording or getattr(self, "_layer_queue", None)
-                or getattr(self, "_active_layer_take", None) or getattr(self, "_pending_capture", None)
+        recording_state = video.status().get("state") if video is not None else None
+        if recording_state in ACTIVE_STATES:
+            self.status_text.set("Wait for the recording to finish saving before editing cameras."
+                                 if recording_state == "finalizing" else
+                                 "Finish recording before editing cameras.")
+            return False
+        if getattr(self, "_layer_queue", None) or getattr(self, "_active_layer_take", None):
+            self.status_text.set("Finish recording before editing cameras.")
+            return False
+        if (self.busy or self.playing or getattr(self, "_pending_capture", None)
                 or getattr(self, "_bone_picker_context", None) or getattr(self, "preview_attach", False)):
             self.status_text.set("Stop playback/recording and detach any live bone preview before editing the shot.")
             return False

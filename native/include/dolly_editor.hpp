@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include "dolly_path.hpp"
+#include "dolly_video.hpp"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -577,6 +578,13 @@ struct EditorSnapshot {
     char shot_name[96]{}, message[128]{};
 };
 EditorSnapshot editor_snapshot() noexcept;
+// Native recorder state is separate from replay playback. Pausing a replay
+// leaves its recorder open until Finish recording has drained it.
+video::Status editor_recording_status() noexcept;
+inline bool editor_recording_locks_cameras(video::State state) noexcept {
+    return state == video::State::starting || state == video::State::recording ||
+           state == video::State::finalizing;
+}
 // Current binding for one editor action (zeroed when unset/unavailable). Used
 // by the overlay to render a key-cap hint without exposing the whole config.
 EditorBinding editor_binding_snapshot(EditorAction action) noexcept;
