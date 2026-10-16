@@ -363,6 +363,7 @@ class DollyApp:
         self.video_game_audio = tk.BooleanVar(value=False)
         self.video_reconstructed_audio = tk.BooleanVar(value=False)
         self.video_ae_camera = tk.BooleanVar(value=False)
+        self.video_usd_camera = tk.BooleanVar(value=False)
         self.clip_audio = None
         self._pending_auto_play = False
         # Layered takes capture exactly the authored path, so they finish
@@ -627,29 +628,29 @@ class DollyApp:
             self.video_path.set(path)
             self._remember_export_folder()
 
-    def _export_ae_camera(self, video):
-        """Save the camera as an After Effects script."""
-        take = getattr(self, "_ae_camera_take", None)
-        self._ae_camera_take = None
-
-        if take is None:
-            return
-
-        from .camera_export import export_jsx
-        project, fps = take
-        path = video.with_name(video.stem + "_camera.jsx")
-
+    def _export_camera(self, video):
+        """Save the camera beside the video in every ticked format."""
+        from . import camera_export
         camera_data = video.with_name(video.name + ".camera.json")
-        try:
-            warnings = export_jsx(project, path, fps, camera_data=camera_data if camera_data.is_file() else None)
-        except (OSError, ValueError) as exc:
-            # The video is already saved; a camera sidecar failure must not fail the take.
-            self._log("After Effects camera was not saved: " + str(exc))
-            return
-
-        self._log("After Effects camera saved to " + str(path))
-        for warning in warnings:
-            self._log("After Effects camera: " + warning)
+        camera_data = camera_data if camera_data.is_file() else None
+        for attribute, export, suffix, label in (
+                ("_ae_camera_take", "export_jsx", "_camera.jsx", "After Effects camera"),
+                ("_usd_camera_take", "export_usda", "_camera.usda", "USD camera")):
+            take = getattr(self, attribute, None)
+            setattr(self, attribute, None)
+            if take is None:
+                continue
+            project, fps = take
+            path = video.with_name(video.stem + suffix)
+            try:
+                warnings = getattr(camera_export, export)(project, path, fps, camera_data=camera_data)
+            except (OSError, ValueError) as exc:
+                # The video is already saved; a camera sidecar failure must not fail the take.
+                self._log(f"{label} was not saved: {exc}")
+                continue
+            self._log(f"{label} saved to {path}")
+            for warning in warnings:
+                self._log(f"{label}: {warning}")
 
     def _remember_export_folder(self, _event=None):
         """Persist explicit destination edits, never generated per-layer paths."""
@@ -796,8 +797,12 @@ class DollyApp:
             self._commit_camera(bone_project.keyframes, 0.0)
         project = self._pov_project or (Project.from_dict(self.project.to_dict()) if len(self.project.keyframes) >= 2 else None)
         frozen = False if pov else self.frozen.get()
-        ae_camera = getattr(self, "video_ae_camera", None)
-        self._ae_camera_take = ((project, options.fps) if ae_camera is not None and ae_camera.get() and not pov and project is not None else None)
+        # Player POV has no shot camera to export.
+        camera_take = (project, options.fps) if not pov and project is not None else None
+        for attribute, variable in (("_ae_camera_take", "video_ae_camera"),
+                                    ("_usd_camera_take", "video_usd_camera")):
+            ticked = getattr(self, variable, None)
+            setattr(self, attribute, camera_take if ticked is not None and ticked.get() else None)
         self._pending_auto_play = project is not None
         # A layered take ends with its authored path; the queue records one
         # isolated take per selected layer after the color take completes.
@@ -911,7 +916,7 @@ class DollyApp:
                 self._log("Layer alpha saved to " + str(master))
             elif getattr(self, "_active_layer_take", None) is None:
                 self._log("Video saved to " + str(self.video_export.output_path))
-                self._export_ae_camera(self.video_export.output_path)
+                self._export_camera(self.video_export.output_path)
             directory = self._next_take_directory()
             if not directory.is_dir():
                 directory = Path(self.video_path.get()).parent
@@ -925,7 +930,7 @@ class DollyApp:
                 # the selected pass takes start immediately afterwards.
                 self.status_text.set("Color take saved. Recording the selected passes…")
         elif state in ("failed", "cancelled"):
-            self._ae_camera_take = None
+            self._ae_camera_take = self._usd_camera_take = None
             screenshot_ui.abandon(self)
             layered = self.layer_pipeline.failed()
             if layered:
@@ -1311,7 +1316,8 @@ class DollyApp:
             if widget is not None:
                 _set_widget_state(widget, combo_state)
         check_state = "disabled" if active or self.busy else "normal"
-        for widget in (self.video_game_audio_check, self.video_reconstructed_audio_check, getattr(self, "video_ae_camera_check", None)):
+        for widget in (self.video_game_audio_check, self.video_reconstructed_audio_check, getattr(self, "video_ae_camera_check", None),
+                       getattr(self, "video_usd_camera_check", None)):
             if widget is not None:
                 _set_widget_state(widget, check_state)
         _set_widget_state(self.reshade_configure_button,

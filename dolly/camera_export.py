@@ -5,6 +5,11 @@ AE uses left handed cartesian coordinates
 pos:      (x, y, z) -> (x, -z, y)
 rotation: (x, y, z) -> (Rx, Ry, Rz)
 fov:      2 * atan(lens_scale * aspect_ratio)
+
+USD (.usda)
+pos:      (x, y, z) -> (x, y, z)
+rotation: (x, y, z), R = Rz * Ry * Rx
+fov:      (horizontalAperture / 2) / tan(fov / 2)
 """
 # TODO: Fix comp size - only works for 16:9
 
@@ -280,6 +285,124 @@ def export_jsx(project: Project, path: str | Path, fps: float, **options) -> lis
     """Write the script"""
     script, warnings = build_jsx(project, fps, **options)
     write_script(path, script)
+    return warnings
+
+
+# USD (.usda)
+USD_APERTURE = 36.0 # horizontal aperture
+USD_METERS_PER_UNIT = 0.0254 # one unit is about an inch
+
+
+def usd_rotation(pitch: float, yaw: float, roll: float) -> list[tuple[float, float, float]]:
+    """Both rotatation solutions (R = Rz * Ry * Rx, degrees)"""
+    forward, right, up = angle_vectors(pitch, yaw, roll)
+    columns = (right, up, tuple(-v for v in forward)) # USD cameras look down -Z
+    m = [[columns[col][row] for col in range(3)] for row in range(3)]
+    r20 = max(-1.0, min(1.0, m[2][0]))
+    if abs(r20) >= GIMBAL: # Gimbal lock
+        b = -math.copysign(90.0, r20)
+        a = math.degrees(math.atan2(-m[1][2], m[1][1]))
+        return [(a, b, 0.0)]
+    b = -math.asin(r20)
+    a = math.atan2(m[2][1], m[2][2])
+    c = math.atan2(m[1][0], m[0][0])
+    first = (math.degrees(a), math.degrees(b), math.degrees(c))
+    second = (first[0] + 180.0, 180.0 - first[1], first[2] + 180.0)
+    return [first, second]
+
+
+def usd_rotations(frames: list[Frame]) -> list[tuple[float, float, float]]:
+    """Applies USD rotation conversion for eahc frame"""
+    rotations = []
+    previous = None
+    for frame in frames:
+        previous = continuous(usd_rotation(*frame.angles), previous)
+        rotations.append(previous)
+    return rotations
+
+
+def usd_string(text: str) -> str:
+    safe = "".join(c if " " <= c <= "~" else "?" for c in text)
+    return '"' + safe.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def usd_tuple(values) -> str:
+    return "(" + ", ".join(map(number, values)) + ")"
+
+
+def usd_samples(frames: list[Frame], values) -> str:
+    """Samples keyed by video frame."""
+    rows = "".join(f"            {f.frame}: {v},\n" for f, v in zip(frames, values))
+    return "{\n" + rows + "        }"
+
+
+def build_usda(project: Project, fps: float, *, camera_data: str | Path | None = None,
+               width: int | None = None, height: int | None = None) -> tuple[str, list[str]]:
+    """Return the USD stage and accuracy warnings for a shot."""
+    take = load_take(project, fps, camera_data)
+    frames = take.frames
+    default_width, default_height = comp_size(project.standard_aspect)
+    width, height = width or default_width, height or default_height
+    vertical_aperture = USD_APERTURE * height / width
+
+    # Positions are offsets from the first frame's camera.
+    origin = frames[0].position
+    def offset(position):
+        return tuple(value - base for value, base in zip(position, origin))
+
+    translations = (usd_tuple(offset(f.position)) for f in frames)
+    rotations = (usd_tuple(r) for r in usd_rotations(frames))
+    focals = (number(USD_APERTURE / 2 / math.tan(math.radians(f.fov) / 2)) for f in frames)
+    keys = "".join(f'''
+        def Xform "Key_{index:02d}" (
+            doc = "Dolly key {index} @ {key.time:.3f}s"
+        )
+        {{
+            double3 xformOp:translate = {usd_tuple(offset((key.x, key.y, key.z)))}
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }}
+''' for index, key in enumerate(project.keyframes, start=1))
+    layer = f"""#usda 1.0
+(
+    defaultPrim = "Dolly"
+    doc = "Deadlock Dolly Camera"
+    customLayerData = {{
+        string shot = {usd_string(project.name)}
+        double3 origin = {usd_tuple(origin)}
+    }}
+    metersPerUnit = {number(USD_METERS_PER_UNIT)}
+    upAxis = "Z"
+    framesPerSecond = {number(float(fps))}
+    timeCodesPerSecond = {number(float(fps))}
+    startTimeCode = 0
+    endTimeCode = {max(0, take.video_frames - 1)}
+)
+
+def Xform "Dolly"
+{{
+    def Camera "Camera"
+    {{
+        token projection = "perspective"
+        float2 clippingRange = (1, 1000000)
+        float horizontalAperture = {number(USD_APERTURE)}
+        float verticalAperture = {number(vertical_aperture)}
+        float focalLength.timeSamples = {usd_samples(frames, focals)}
+        double3 xformOp:translate.timeSamples = {usd_samples(frames, translations)}
+        float3 xformOp:rotateXYZ.timeSamples = {usd_samples(frames, rotations)}
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }}
+
+    def Xform "Keys"
+    {{{keys}    }}
+}}
+"""
+    return layer, take.warnings
+
+
+def export_usda(project: Project, path: str | Path, fps: float, **options) -> list[str]:
+    """Write the USD stage"""
+    stage, warnings = build_usda(project, fps, **options)
+    write_script(path, stage)
     return warnings
 
 

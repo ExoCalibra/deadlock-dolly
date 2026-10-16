@@ -14,7 +14,7 @@ STATUS_OFFSET = 2 * 1024 * 1024 + 2048
 EDITOR_ABI = 2
 CONFIG_MAGIC = b"DLYEDIT1"
 STATUS_MAGIC = b"DLYEDS01"
-CONFIG = struct.Struct("<8s10I2d52H96s128s2diIdI2H2H2Bf6s")
+CONFIG = struct.Struct("<8s10I2d52H96s128s2diIdI2H2H2Bf4sBx")
 VIDEO_FPS = (30, 60, 120, 300, 600)
 VIDEO_BITRATE_MBPS = (10, 20, 40)
 VIDEO_CODEC_MAX = 10
@@ -54,6 +54,7 @@ EXTRA_ACTIONS += ("focus_replay_player",)
 EXTRA_ACTIONS += ("prepare_cinematic",)
 EXTRA_ACTIONS += ("set_pause_after_capture",)
 EXTRA_ACTIONS += ("set_video_ae_camera",)
+EXTRA_ACTIONS += ("set_video_usd_camera",)
 
 # Optional completion signal in the unused mapping tail; existing offsets stay fixed.
 CINEMATIC_OFFSET = 2 * 1024 * 1024 + 60000
@@ -417,6 +418,10 @@ def pack_config(sequence, owner_sequence, ack_event, values):
             raise ValueError("Video layer must be a boolean")
     if type(values.get("video_ae_camera", False)) is not bool:
         raise ValueError("After Effects camera export must be a boolean")
+    if type(values.get("video_usd_camera", False)) is not bool:
+        raise ValueError("USD camera export must be a boolean")
+    # The video flags byte is full; further camera formats use their own byte.
+    camera_export_flags = 1 if values.get("video_usd_camera") else 0
     video_flags = ((1 if values.get("video_fixed_step") else 0)
                    | (2 if values.get("video_depth") else 0)
                    | (4 if values.get("video_depth_exr") else 0)
@@ -449,8 +454,8 @@ def pack_config(sequence, owner_sequence, ack_event, values):
         playback_rate, 0 if reshade is None else reshade.vk,
         0 if reshade is None else reshade.modifiers,
         video_fps, video_bitrate, video_encoder, video_flags, video_speed,
-        struct.pack("<f2x", _finite(values.get("pov_duration", 10), .1, 120, "POV duration"))
-        if values.get("video_pov") else b"\0" * 6)
+        struct.pack("<f", _finite(values.get("pov_duration", 10), .1, 120, "POV duration"))
+        if values.get("video_pov") else b"\0" * 4, camera_export_flags)
 
 
 def unpack_status(data, ack_event=0):

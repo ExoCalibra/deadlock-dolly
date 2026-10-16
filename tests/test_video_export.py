@@ -794,6 +794,28 @@ class VideoGuiTests(unittest.TestCase):
         self.assertIn("var FRAMES = 2;", text)
         self.assertIn("var frameNumbers = [0,1];", text)
 
+    def test_usd_camera_toggle_saves_a_layer_beside_the_video(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_usd_camera = Var(True)
+        self.app._start_video_recording()
+        self.finish_color_take()
+        layer = Path(self.folder.name) / "shot_camera.usda"
+        self.assertTrue(layer.read_text("ascii").startswith("#usda 1.0"))
+        self.assertEqual(list(Path(self.folder.name).glob("*.jsx")), [])
+        self.app._log.assert_any_call("USD camera saved to " + str(layer))
+        self.assertIsNone(self.app._usd_camera_take)
+
+    def test_both_camera_formats_come_from_one_take(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app.video_usd_camera = Var(True)
+        self.app._start_video_recording()
+        with patch("dolly.camera_export.export_jsx", side_effect=OSError("disk full")):
+            self.finish_color_take()
+        # One format failing must not stop the other.
+        self.app._log.assert_any_call("After Effects camera was not saved: disk full")
+        self.assertTrue((Path(self.folder.name) / "shot_camera.usda").is_file())
+
     def test_ae_camera_is_not_written_when_the_toggle_is_off(self):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(False)

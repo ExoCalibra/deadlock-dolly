@@ -1631,7 +1631,7 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                     double value = 0;
                     std::uint64_t until = 0;
                 };
-                static std::array<Pending, 14> pending;
+                static std::array<Pending, 15> pending;
                 const auto now_ms = GetTickCount64();
                 const auto shown = [&](int id, double current) {
                     auto& edit = pending[id];
@@ -1666,6 +1666,12 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip(
                                 "Save the shot's camera as an After Effects script beside the finished video.");
+                        bool usd_camera = shown(14, state.video_usd_camera ? 1.0 : 0.0) != 0.0;
+                        if (ImGui::Checkbox("Export USD camera (.usda)", &usd_camera))
+                            commit(14, usd_camera ? 1.0 : 0.0, EditorAction::SetVideoUsdCamera);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip(
+                                "Save the shot's camera as a USD layer beside the finished video, for Blender, Davinci Resolve and other 3D apps.");
                     }
                     const bool single_attach = state.camera_count == 1 && state.attach_selected;
                     if (pov || single_attach) {

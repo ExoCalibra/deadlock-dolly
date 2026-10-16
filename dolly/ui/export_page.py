@@ -31,6 +31,7 @@ class ExportState:
     video_source: tk.Variable
     video_status_text: tk.Variable
     video_ae_camera: tk.Variable
+    video_usd_camera: tk.Variable
     codec_choices: tuple[str, ...]
     bitrate_choices: tuple[str, ...]
 
@@ -65,8 +66,12 @@ class ExportPage:
         source = card(body, "Camera source")
         self.video_source_combo = field(source, "Source", state.video_source, values=("Camera path", "Player POV"))
         self.video_source_combo.bind("<<ComboboxSelected>>", commands.video_source_changed)
-        self.video_ae_camera_check = ttk.Checkbutton(source, style="Card.TCheckbutton", text="Export After Effects camera (.jsx)", variable=state.video_ae_camera)
-        self.video_ae_camera_check.pack(anchor="w", pady=(0, GAP))
+        camera_options = ttk.Frame(source, style="Card.TFrame")
+        camera_options.pack(anchor="w", pady=(0, GAP))
+        self.video_ae_camera_check = ttk.Checkbutton(camera_options, style="Card.TCheckbutton", text="Export After Effects camera (.jsx)", variable=state.video_ae_camera)
+        self.video_ae_camera_check.pack(side="left", padx=(0, 18))
+        self.video_usd_camera_check = ttk.Checkbutton(camera_options, style="Card.TCheckbutton", text="Export USD camera (.usda)", variable=state.video_usd_camera)
+        self.video_usd_camera_check.pack(side="left")
         self.video_pov_controls = ttk.Frame(source)
         self.video_pov_duration_combo = field(self.video_pov_controls, "Replay seconds", state.video_pov_duration,
                                            values=("1", "2", "5", "10", "15", "30", "60", "120"))

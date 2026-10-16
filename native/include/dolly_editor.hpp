@@ -143,12 +143,15 @@ enum class EditorAction : std::uint32_t {
     FocusReplayPlayer,
     PrepareCinematic,
     SetPauseAfterCapture,
-    SetVideoAeCamera
+    SetVideoAeCamera,
+    SetVideoUsdCamera
 };
 static_assert(static_cast<std::uint32_t>(EditorAction::SetPauseAfterCapture) == 110,
               "Stable pause-after-capture preference action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoAeCamera) == 111,
               "Stable After Effects camera export action ID");
+static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoUsdCamera) == 112,
+              "Stable USD camera export action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::TakeScreenshot) == 98,
               "Stable screenshot action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::ObjectPickerOpen) == 99 &&
@@ -203,7 +206,9 @@ struct EditorConfig {
     std::uint8_t video_encoder, video_flags; // flags bit 0: fixed-step export
     float video_speed;
     float pov_duration;
-    unsigned char padding[2];
+    // Camera export formats beyond the full video_flags byte. Bit 0: USD (.usda).
+    std::uint8_t camera_export_flags;
+    unsigned char padding[1];
 };
 struct EditorEvent {
     std::uint32_t sequence, action;
@@ -548,6 +553,7 @@ struct EditorSnapshot {
     bool video_layer_players = false;
     bool video_layer_effects = false;
     bool video_ae_camera = false;
+    bool video_usd_camera = false;
     double video_speed = 1;
     double horizontal_fov = 0;
     std::uint32_t view_width = 0, view_height = 0;

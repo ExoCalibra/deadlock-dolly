@@ -2400,6 +2400,32 @@ void run() {
                     editor_snapshot().video_layer_players && editor_snapshot().video_layer_effects,
                 "Depth video flag was rejected with the whole config");
     }
+    // Camera export formats live in their own byte
+    {
+        auto base = std::atomic_load(&dolly::gConfig);
+        auto config = std::make_shared<EditorConfig>(*base);
+        config->sequence += 2;
+        config->video_flags = 255;
+        config->camera_export_flags = 1;
+        std::memcpy(f.mapping.data() + kEditorConfigOffset, config.get(), sizeof(*config));
+        editor_worker_tick(f.mapping.data(), true);
+        auto applied = std::atomic_load(&dolly::gConfig);
+        require(applied && applied->camera_export_flags == 1 && editor_snapshot().video_usd_camera &&
+                    editor_snapshot().video_ae_camera,
+                "USD camera export flag was rejected with the whole config");
+        config->sequence += 2;
+        config->camera_export_flags = 2;
+        std::memcpy(f.mapping.data() + kEditorConfigOffset, config.get(), sizeof(*config));
+        editor_worker_tick(f.mapping.data(), true);
+        require(std::atomic_load(&dolly::gConfig)->camera_export_flags == 1,
+                "An unknown camera export flag was accepted");
+        config->sequence += 2;
+        config->video_flags = 0;
+        config->camera_export_flags = 0;
+        std::memcpy(f.mapping.data() + kEditorConfigOffset, config.get(), sizeof(*config));
+        editor_worker_tick(f.mapping.data(), true);
+        require(!editor_snapshot().video_usd_camera, "USD camera export did not turn off");
+    }
 
     // Run the actual camera callback against the changed view layout. Guard
     // bytes around the new auxiliary block detect writes using old offsets.

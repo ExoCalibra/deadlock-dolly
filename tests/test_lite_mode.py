@@ -27,13 +27,14 @@ class LiteModeTests(unittest.TestCase):
 
     def test_extra_actions_are_appended_without_changing_original_ids(self):
         from dolly.editor_wire import EXTRA_ACTIONS
-        self.assertEqual(EXTRA_ACTIONS[-7:],('save_shot','seek_replay_tick','clear_camera_path','focus_replay_player','prepare_cinematic','set_pause_after_capture','set_video_ae_camera'))
+        self.assertEqual(EXTRA_ACTIONS[-8:],('save_shot','seek_replay_tick','clear_camera_path','focus_replay_player','prepare_cinematic','set_pause_after_capture','set_video_ae_camera','set_video_usd_camera'))
         self.assertEqual(EXTRA_ACTIONS.index('set_framing')+26,40)
         self.assertEqual(EXTRA_ACTIONS.index('save_shot')+26,105)
         self.assertEqual(EXTRA_ACTIONS.index('focus_replay_player')+26,108)
         self.assertEqual(EXTRA_ACTIONS.index('prepare_cinematic')+26,109)
         self.assertEqual(EXTRA_ACTIONS.index('set_pause_after_capture')+26,110)
         self.assertEqual(EXTRA_ACTIONS.index('set_video_ae_camera')+26,111)
+        self.assertEqual(EXTRA_ACTIONS.index('set_video_usd_camera')+26,112)
 
     def test_typed_tick_dispatch_uses_dolly_seek_and_rejects_invalid_input(self):
         from unittest.mock import patch

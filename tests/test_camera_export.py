@@ -8,9 +8,10 @@ import re
 import tempfile
 import unittest
 
-from dolly.camera_export import (angle_vectors, ae_rotation, ae_rotations, build_jsx, comp_size,
-                                 export_jsx, horizontal_fov, sample_camera, sample_camera_data,
-                                 ae_vector)
+from dolly.camera_export import (angle_vectors, ae_rotation, ae_rotations, build_jsx, build_usda,
+                                 comp_size, export_jsx, export_usda, horizontal_fov,
+                                 sample_camera, sample_camera_data, ae_vector, usd_rotation,
+                                 usd_rotations)
 from dolly.path import AttachKey, Keyframe, Project
 
 
@@ -206,6 +207,105 @@ class ScriptTests(unittest.TestCase):
             self.assertIn("var COMP_WIDTH = 3840;", text)
             self.assertIn("var COMP_HEIGHT = 2160;", text)
             self.assertEqual(len(warnings), 1)
+            self.assertEqual(list(Path(folder).iterdir()), [path])
+
+
+def usd_matrix(x, y, z):
+    """USD rotateXYZ: R = Rz · Ry · Rx with standard right-handed matrices, degrees."""
+    a, b, c = (math.radians(v) for v in (x, y, z))
+    rx = [[1, 0, 0], [0, math.cos(a), -math.sin(a)], [0, math.sin(a), math.cos(a)]]
+    ry = [[math.cos(b), 0, math.sin(b)], [0, 1, 0], [-math.sin(b), 0, math.cos(b)]]
+    rz = [[math.cos(c), -math.sin(c), 0], [math.sin(c), math.cos(c), 0], [0, 0, 1]]
+
+    def mul(left, right):
+        return [[sum(left[i][k] * right[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+    return mul(mul(rz, ry), rx)
+
+
+def usd_samples(layer, attribute):
+    block = re.search(re.escape(attribute) + r"\.timeSamples = \{\n(.*?)\n\s*\}", layer, re.S).group(1)
+    samples = {}
+    for line in block.splitlines():
+        frame, value = line.strip().rstrip(",").split(": ", 1)
+        samples[int(frame)] = tuple(float(v) for v in value.strip("()").split(", "))
+    return samples
+
+
+class UsdTests(unittest.TestCase):
+    def assertVector(self, actual, expected, places=7):
+        for a, e in zip(actual, expected):
+            self.assertAlmostEqual(a, e, places=places)
+
+    def test_rotation_reproduces_camera_axes_for_random_poses(self):
+        generator = random.Random(11)
+        poses = [(0, 0, 0), (89, 0, 0), (-89, 45, 0), (90, 30, 10), (-90, -120, 5), (0, 180, 180)]
+        poses += [(generator.uniform(-89, 89), generator.uniform(-360, 360), generator.uniform(-180, 180))
+                  for _ in range(200)]
+        for pose in poses:
+            forward, right, up = angle_vectors(*pose)
+            for candidate in usd_rotation(*pose):
+                matrix = usd_matrix(*candidate)
+                with self.subTest(pose=pose, candidate=candidate):
+                    # A USD camera looks down its local -Z with +Y up, in Source world axes.
+                    self.assertVector(column(matrix, 0), right)
+                    self.assertVector(column(matrix, 1), up)
+                    self.assertVector(column(matrix, 2), tuple(-v for v in forward))
+
+    def test_level_camera_facing_source_forward(self):
+        # Blender's convention for a level camera looking down +X.
+        self.assertVector(usd_rotation(0, 0, 0)[0], (90, 0, -90))
+
+    def test_yaw_across_180_stays_continuous(self):
+        shot = Project(keyframes=[camera(0, yaw=170, roll=20), camera(1, yaw=-170, roll=-20)],
+                       interpolation="linear")
+        rotations = usd_rotations(sample_camera(shot, 60).frames)
+        for previous, current in zip(rotations, rotations[1:]):
+            for a, b in zip(previous, current):
+                self.assertLess(abs(b - a), 5)
+
+    def test_layer_keys_every_frame_in_source_axes(self):
+        shot = Project(name='Quote " and \\ ü', interpolation="linear",
+                       keyframes=[camera(0, x=12000, y=-8000, z=300), camera(1, x=12100, z=350)])
+        layer, warnings = build_usda(shot, 10, width=1920, height=1080)
+        self.assertTrue(layer.startswith("#usda 1.0\n"))
+        layer.encode("ascii")
+        for line in ('upAxis = "Z"', "metersPerUnit = 0.0254", "framesPerSecond = 10",
+                     "timeCodesPerSecond = 10", "startTimeCode = 0", "endTimeCode = 10",
+                     "double3 origin = (12000, -8000, 300)", 'string shot = "Quote \\" and \\\\ ?"',
+                     "float horizontalAperture = 36", "float verticalAperture = 20.25"):
+            self.assertIn(line, layer)
+        translate = usd_samples(layer, "double3 xformOp:translate")
+        self.assertEqual(sorted(translate), list(range(11)))
+        self.assertEqual(translate[0], (0, 0, 0))
+        self.assertEqual(translate[10], (100, 8000, 50))  # Offsets keep Source axes.
+        self.assertEqual(len(usd_samples(layer, "float3 xformOp:rotateXYZ")), 11)
+        self.assertIn("double3 xformOp:translate = (100, 8000, 50)", layer)  # Key 2 marker.
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(layer.count("{"), layer.count("}"))
+
+    def test_focal_length_reproduces_the_horizontal_fov(self):
+        shot = Project(keyframes=[camera(0), camera(1)], interpolation="linear")
+        for key in shot.keyframes:
+            key.lens_scale = math.tan(math.radians(40)) / key.aspect_ratio
+        layer, _ = build_usda(shot, 4)
+        for (focal,) in usd_samples(layer, "float focalLength").values():
+            self.assertAlmostEqual(math.degrees(2 * math.atan(18 / focal)), 80, places=4)
+
+    def test_camera_data_keys_its_own_video_frames(self):
+        rows = [[frame, frame / 60, frame / 60, 10 * frame, 0, 0, 0, 0, 0, 90] for frame in range(3, 6)]
+        with tempfile.TemporaryDirectory() as folder:
+            data = ScriptTests.write_camera_data(folder, rows, frames_written=8)
+            layer, warnings = build_usda(Project(keyframes=[camera(0), camera(1)]), 60, camera_data=data)
+        self.assertEqual(warnings, [])
+        self.assertIn("endTimeCode = 7", layer)
+        self.assertEqual(sorted(usd_samples(layer, "double3 xformOp:translate")), [3, 4, 5])
+        self.assertEqual(usd_samples(layer, "float focalLength")[3], (18,))
+
+    def test_export_writes_the_layer(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "shot_camera.usda"
+            export_usda(Project(keyframes=[camera(0), camera(1)]), path, 30)
+            self.assertTrue(path.read_text("ascii").startswith("#usda 1.0"))
             self.assertEqual(list(Path(folder).iterdir()), [path])
 
 
