@@ -101,7 +101,7 @@ def bundle_self_test(report_path: Path, *, hidden: bool = False) -> int:
         app_ui.full_editor.set(False)
         app_ui._apply_editor_mode()
         root.update()
-        # The in-game capture switch must be reachable before Full editor.
+        # Capture remains reachable beside the always-available desktop pages.
         app_ui.library_page.reveal(app_ui.library_capture_toggle)
         visible("library_capture_toggle")
         report["checks"]["library_capture_switch"] = True
@@ -113,9 +113,10 @@ def bundle_self_test(report_path: Path, *, hidden: bool = False) -> int:
         report["checks"]["citadel_dof_card"] = bool(app_ui.citadel_dof_checkbox.winfo_ismapped())
         app_ui.full_editor.set(False)
         app_ui._apply_editor_mode()
-        assert app_ui.notebook.select() == str(app_ui.setup_tab)
-        assert app_ui.notebook.tab(app_ui.camera_tab, "state") == "hidden"
-        report["checks"]["simple_and_full_editor"] = True
+        assert app_ui.notebook.select() == str(app_ui.camera_tab)
+        assert app_ui.notebook.tab(app_ui.camera_tab, "state") == "normal"
+        assert app_ui.notebook.tab(app_ui.cvar_tab, "state") == "normal"
+        report["checks"]["all_editor_pages_available"] = True
         report["checks"]["export_layout"] = "minimum_window_controls_visible"
         if sys.platform == "win32":
             root.iconbitmap(str(branding.ASSETS / "dolly.ico"))  # No silent PNG fallback in this gate.

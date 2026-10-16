@@ -784,7 +784,7 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
                reshade_request_overlay(!reshade_overlay_open());
     // Appended UI actions retain the original action IDs.
     if (!std::isfinite(value) ||
-        std::uint32_t(action) > std::uint32_t(EditorAction::SetPauseAfterCapture))
+        std::uint32_t(action) > std::uint32_t(EditorAction::SelectCurveCamera))
         return false;
     auto state = editor_snapshot();
     if (!state.enabled)
@@ -793,7 +793,8 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
         action == EditorAction::ResetCameraPath || action == EditorAction::ClearCameraPath ||
         action == EditorAction::DeleteCamera || action == EditorAction::UndoShot ||
         action == EditorAction::RedoShot || action == EditorAction::SetCameraTime ||
-        action == EditorAction::SetCameraRoll ||
+        action == EditorAction::SetCameraRoll || action == EditorAction::SetCameraPosition ||
+        action == EditorAction::SetCameraCurveValue ||
         action == EditorAction::SetFraming ||
         (action >= EditorAction::SetAttachTarget && action <= EditorAction::AttachReset) ||
         action == EditorAction::AttachSnap || action == EditorAction::SetAttachBone ||
@@ -834,6 +835,27 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
     }
     const bool camera_action =
         action >= EditorAction::SelectCamera && action <= EditorAction::SetCameraRoll;
+    const bool curve_action = action == EditorAction::SetCameraCurveValue ||
+                              action == EditorAction::SelectCurveCamera;
+    if (curve_action) {
+        EditorCameraList list{};
+        const auto path = visualization_snapshot();
+        if (!pose_override || !state.ready || !state.focused || !state.paused || state.busy ||
+            state.playing || state.attach_preview || state.owner != EditorOwner::Panel ||
+            !editor_camera_list(list) || list.total != state.camera_count || !path ||
+            path->camera_count() != list.total || path->project_revision() != list.revision ||
+            !valid_visualization_curve_action(*path, value, *pose_override,
+                                             action == EditorAction::SelectCurveCamera))
+            return false;
+    }
+    if (action == EditorAction::SetCameraPosition) {
+        EditorCameraList list{};
+        if (!pose_override || !state.ready || !state.focused || !state.paused || state.busy || state.playing ||
+            state.attach_preview || state.owner != EditorOwner::Panel ||
+            !editor_camera_list(list) || list.total != state.camera_count ||
+            !valid_editor_position_action(list, value, *pose_override))
+            return false;
+    }
     if (camera_action) {
         EditorCameraList list{};
         if (!pose_override || !state.ready || !state.paused || state.busy || state.playing ||
@@ -1029,7 +1051,7 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
                action != EditorAction::SetAttachBone && action != EditorAction::FinishBonePicker &&
                action != EditorAction::StartGameFollow && action != EditorAction::ObjectPlace &&
                action != EditorAction::ObjectTransform && action != EditorAction::ClearCameraPath &&
-               action != EditorAction::PrepareCinematic && !camera_action)
+               action != EditorAction::PrepareCinematic && action != EditorAction::SetCameraPosition && !camera_action && !curve_action)
         return false;
     if (action == EditorAction::SetSpeed) {
         if (value < 1 || value > 10000)

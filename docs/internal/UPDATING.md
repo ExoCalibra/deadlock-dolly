@@ -82,7 +82,7 @@ separate folder. Ordinary recovery needs only Dolly.exe.
 
 The in-app highlights use the same short publish description pasted into the
 GitHub release body. Put the exact release version on its own line, such as
-`**0.6.51-alpha**`, followed by two to four bullets in the form
+`**0.6.52-alpha**`, followed by two to four bullets in the form
 `- **Short title.** *Before:* ... *After:* ...`. Wrapped lines are supported.
 Use the version being published; the example is not an assigned next version.
 No separate summary attachment or package download is needed to read highlights.
@@ -93,8 +93,9 @@ No separate summary attachment or package download is needed to read highlights.
    FFmpeg, and matching native/Python components. Both GUI and updater smoke
    checks must pass.
 3. Create a release from the intended commit on main, using a tag such as
-   `v0.5.14-alpha`. Attach the generated
-   `Deadlock_Dolly_0.5.14-alpha_Windows_x64.zip`, source ZIP and SHA256SUMS.txt.
+   `v0.6.52-alpha`. Attach the generated
+   `Deadlock_Dolly_0.6.52-alpha_Windows_x64.zip`,
+   `Deadlock_Dolly_0.6.52-alpha_Source.zip` and `SHA256SUMS.txt`.
 4. Leave GitHub's pre-release box unchecked and mark the release Latest.
    "alpha" can remain in the title and version. GitHub must expose the uploaded
    Windows asset's SHA-256 digest before the updater accepts it.

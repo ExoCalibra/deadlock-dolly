@@ -1,6 +1,7 @@
 """Public executable startup, safe handoff, recovery and package migration."""
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -42,6 +43,28 @@ class LauncherTests(unittest.TestCase):
                 network.assert_not_called()
                 processes.assert_not_called()
                 install.assert_not_called()
+
+    def test_relaunch_from_new_extracted_folder_keeps_the_same_layout_profile(self):
+        profile = self.target.parent / "Local profile" / "DeadlockDolly"
+        profile.mkdir(parents=True)
+        layout = profile / "ui-layout.ini"
+        layout.write_bytes(b"[DollyUI][Preferences]\nEditorCustom=1\n")
+        override = self.target.parent / "custom layout.ini"
+        override.write_bytes(b"[DollyUI][Preferences]\nReducedMotion=1\n")
+        before = layout.read_bytes(), override.read_bytes()
+        new_target = self.target.parent / "New Dolly version"
+        new_target.mkdir()
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(profile.parent),
+                                     "DOLLY_UI_LAYOUT_FILE": str(override)}):
+            for target in (self.target, new_target):
+                with self.subTest(target=target), patch.object(worker.subprocess, "Popen") as launch:
+                    boot.main(["--updated"], target=target)
+                    environment = launch.call_args.kwargs["env"]
+                    self.assertEqual(environment["LOCALAPPDATA"], str(profile.parent))
+                    self.assertEqual(environment["DOLLY_UI_LAYOUT_FILE"], str(override))
+                    self.assertEqual(environment["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+                    self.assertEqual(launch.call_args.kwargs["cwd"], target.resolve())
+        self.assertEqual((layout.read_bytes(), override.read_bytes()), before)
 
     def test_ordinary_open_does_not_mark_the_editor_as_just_updated(self):
         with patch.object(worker, "launch_program") as launch:

@@ -3,7 +3,15 @@
 // Including the implementation keeps this gate on the production callback, not
 // a second model of its state machine that could pass while the DLL is broken.
 #include "../src/bridge_win.cpp"
+// Focus is an observed input to the editor. Supply a synthetic HWND token for
+// focus-sensitive enqueue tests without activating or controlling any window.
+static HWND editor_foreground_window_stub = nullptr;
+static HWND editor_fixture_foreground_window() noexcept {
+    return editor_foreground_window_stub ? editor_foreground_window_stub : ::GetForegroundWindow();
+}
+#define GetForegroundWindow editor_fixture_foreground_window
 #include "../src/dolly_editor_win.cpp"
+#undef GetForegroundWindow
 
 #include <iostream>
 #include <limits>
@@ -559,6 +567,54 @@ std::shared_ptr<const NativePath> make_path() {
             "Synthetic path must parse through NativePath.load");
     return path;
 }
+
+struct CurveViewerFixture {
+    HANDLE mapping = nullptr;
+    unsigned char* memory = nullptr;
+    std::wstring name = L"Local\\DollyCurveEnqueue." + std::to_wstring(GetCurrentProcessId());
+    CurveViewerFixture() {
+        const auto viewer_name = name + L".viewer";
+        mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                     kVisualizationMappingBytes, viewer_name.c_str());
+        require(mapping != nullptr, "Cannot create synthetic curve mapping");
+        memory = static_cast<unsigned char*>(MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0,
+                                                          kVisualizationMappingBytes));
+        require(memory != nullptr, "Cannot map synthetic curve packet");
+        std::vector<unsigned char> blob{'D','L','Y','P','A','T','H',0};
+        u32(blob, 1); u32(blob, 1); u32(blob, 7); u32(blob, 0);
+        number(blob, 1); number(blob, 0); number(blob, 1);
+        for (double value : first) number(blob, value);
+        for (double value : last) number(blob, value);
+        number(blob, 0); number(blob, 1);
+        for (unsigned channel = 0; channel < 7; ++channel) {
+            u32(blob, 1); u32(blob, 0);
+            number(blob, first[channel]); number(blob, last[channel]);
+            number(blob, 0); number(blob, 0);
+        }
+        VisualizationHeader header{};
+        std::memcpy(header.magic, "DLYVIS01", 8); header.sequence = 2; header.abi = 3;
+        header.enabled = 1; header.selected_camera = 1; header.camera_count = 2;
+        header.path_bytes = std::uint32_t(blob.size()); header.sample_budget = 2048;
+        header.marker_budget = 64; header.project_revision = 7;
+        header.session_id = 0xf123456789abcdefULL; header.key_metadata_bytes = 128;
+        std::memcpy(memory, &header, sizeof(header));
+        std::vector<unsigned char> body; number(body, 0); number(body, 1);
+        for (const auto& pose : {first, last}) {
+            for (double value : pose) number(body, value);
+            u32(body, 0); u32(body, 0);
+        }
+        body.insert(body.end(), blob.begin(), blob.end());
+        std::memcpy(memory + 64, body.data(), body.size());
+        visualization_worker_tick(name.c_str(), true);
+        require(visualization_runtime_state() == VisualizationRuntimeState::Ready,
+                "Real viewer worker rejected the synthetic curve packet");
+    }
+    ~CurveViewerFixture() {
+        visualization_worker_tick(nullptr, false);
+        if (memory) UnmapViewOfFile(memory);
+        if (mapping) CloseHandle(mapping);
+    }
+};
 
 struct Fixture {
     Allocation client{63733760}, engine{0x969000}, view{0x2000};
@@ -1651,6 +1707,67 @@ void editor_framing_checks() {
     for (auto action : {EditorAction::Capture, EditorAction::Replace, EditorAction::ResetCameraPath})
         require(editor_enqueue(action), "Camera guard fixture could not enqueue an idle capture action");
     {
+        const auto saved_window = dolly::gWindow.load();
+        struct RestoreWindow {
+            HWND previous;
+            ~RestoreWindow() { dolly::gWindow = previous; editor_foreground_window_stub = nullptr; }
+        } restore{saved_window};
+        CameraPose position_request{7, 1, 12.125, 0, 0, 0, 0};
+        require(!editor_enqueue(EditorAction::SetCameraPosition, 1, &position_request),
+                "Position gesture ignored lost foreground ownership");
+        editor_foreground_window_stub = reinterpret_cast<HWND>(std::uintptr_t(1));
+        dolly::gWindow = editor_foreground_window_stub;
+        const auto serial = dolly::gLastEvent;
+        require(editor_enqueue(EditorAction::SetCameraPosition, 1, &position_request),
+                "A valid position gesture was rejected after native validation");
+        const auto& position_event = dolly::gEvents[serial % kEditorEventCount];
+        require(position_event.action == 111 && position_event.value == 1 &&
+                    position_event.pose[0] == 7 && position_event.pose[1] == 1 &&
+                    position_event.pose[2] == 12.125 && position_event.pose[3] == 0,
+                "Real enqueue changed the position gesture payload");
+        position_request[0] = 6;
+        require(!editor_enqueue(EditorAction::SetCameraPosition, 1, &position_request),
+                "A stale position gesture bypassed its revision guard");
+        position_request[0] = 7;
+        position_request[1] = .5;
+        require(!editor_enqueue(EditorAction::SetCameraPosition, 1, &position_request),
+                "A fractional position axis entered the real event ring");
+        position_request[1] = 1;
+        position_request[3] = 1;
+        require(!editor_enqueue(EditorAction::SetCameraPosition, 1, &position_request),
+                "A retimed position gesture entered the real event ring");
+        position_request[3] = 0;
+        list->rows[1].source = 1;
+        require(!editor_enqueue(EditorAction::SetCameraPosition, 1, &position_request),
+                "A tracked camera accepted a free-position gesture");
+        list->rows[1].source = 0;
+        require(dolly::gLastEvent == serial + 1,
+                "A rejected position gesture advanced the real event ring");
+        CurveViewerFixture viewer;
+        CameraPose curve_request{7, 4, 721.125, 1, 0x89abcdef, 0xf1234567, 0};
+        const auto curve_serial = dolly::gLastEvent;
+        require(editor_enqueue(EditorAction::SetCameraCurveValue, 1, &curve_request),
+                "Valid unified curve edit did not enter the real event ring");
+        const auto& curve_event = dolly::gEvents[curve_serial % kEditorEventCount];
+        require(curve_event.action == 112 && curve_event.value == 1 && std::equal(std::begin(curve_event.pose), std::end(curve_event.pose), curve_request.begin()),
+                "Real enqueue changed the unified curve authoring/session payload");
+        for (unsigned field : {0u, 3u, 4u, 5u, 6u}) {
+            auto stale = curve_request; stale[field] += 1;
+            require(!editor_enqueue(EditorAction::SetCameraCurveValue, 1, &stale),
+                    "Stale unified curve request entered the real event ring");
+        }
+        auto select_request = curve_request;
+        select_request[1] = select_request[2] = select_request[3] = 0;
+        require(editor_enqueue(EditorAction::SelectCurveCamera, 0, &select_request),
+                "Full-shot graph selection cannot enter the real event ring");
+        const auto& select_event = dolly::gEvents[(curve_serial + 1) % kEditorEventCount];
+        require(select_event.action == 113 && select_event.value == 0 && std::equal(std::begin(select_event.pose), std::end(select_event.pose), select_request.begin()),
+                "Real enqueue changed full-shot selection payload");
+        require(dolly::gLastEvent == curve_serial + 2,
+                "Rejected unified curve gestures advanced the event ring");
+
+    }
+    {
         // Without a Present, the real recorder waits in starting and never
         // loads Media Foundation, creates an encoder, or opens an output file.
         // Exercise the actual enqueue boundary while replay playback is paused.
@@ -1676,7 +1793,7 @@ void editor_framing_checks() {
             require(!editor_enqueue(action), "Paused recording accepted a capture action into the real event ring");
         for (auto action : {EditorAction::ClearCameraPath, EditorAction::DeleteCamera, EditorAction::UndoShot,
                             EditorAction::RedoShot, EditorAction::SetCameraTime, EditorAction::SetCameraRoll,
-                            EditorAction::SetFraming, EditorAction::SetAttachTarget,
+                            EditorAction::SetCameraPosition, EditorAction::SetCameraCurveValue, EditorAction::SetFraming, EditorAction::SetAttachTarget,
                             EditorAction::SetAttachPoint, EditorAction::SetAttachOffsets, EditorAction::SetAttachSmoothing,
                             EditorAction::SetAttachHide, EditorAction::AttachCycleTarget, EditorAction::AttachCyclePoint,
                             EditorAction::AttachReset, EditorAction::AttachSnap, EditorAction::SetAttachBone,

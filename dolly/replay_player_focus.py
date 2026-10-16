@@ -1,4 +1,4 @@
-"""Move native freecam near a verified replay player without changing replay time."""
+"""Resolve replay participants and sample verified player camera views."""
 import struct
 import math
 import logging
@@ -29,6 +29,79 @@ class ReplayPlayerPoseChanged(RuntimeError):
 
 
 POSE_SAMPLE_ATTEMPTS = 3
+
+
+def resolve_participant(monitor, identifier, roster, *, evidence=None):
+    """Resolve the current hero, with a verified backlink fallback.
+
+    A spectator controller can point at its observer pawn. Fresh roster entries
+    are only candidate handles: every accepted hero must independently resolve
+    by serial/backpointer/type and point back to this exact controller handle.
+    No model name, roster position or old pawn handle identifies a participant.
+    """
+    evidence = evidence if evidence is not None else {}
+    try:
+        return resolve_player(monitor, identifier, evidence=evidence)
+    except ReplayPlayerUnavailable as absent:
+        evidence['primary_unavailable'] = str(absent)
+    monitor._owned()
+    reads = []
+    def read(address, size):
+        value = monitor.memory.read(address, size)
+        reads.append((address, value))
+        return value
+    def pointer(address):
+        return struct.unpack('<Q', read(address, 8))[0]
+    def uint(address):
+        return struct.unpack('<I', read(address, 4))[0]
+    system = pointer(monitor.base + profile.ENTITY_LIST)
+    chunk = pointer(system + 8*(identifier >> 9)) if system else 0
+    identity = chunk + profile.IDENTITY_STRIDE*(identifier & 0x1ff) if chunk else 0
+    controller = pointer(identity) if identity else 0
+    controller_handle = uint(identity + profile.IDENTITY_HANDLE) if identity else 0
+    if (not controller or controller_handle & 0x7fff != identifier
+            or pointer(controller + profile.ENTITY_IDENTITY) != identity
+            or pointer(controller) != monitor.base + profile.CONTROLLER_VTABLE):
+        raise RuntimeError('The selected player controller changed. Select the player again.')
+    matches = []
+    seen = set()
+    players = roster.get('players', []) if isinstance(roster, dict) else []
+    from .editor_wire import ROSTER_PLAYERS
+    if not isinstance(players, list) or len(players) > ROSTER_PLAYERS:
+        raise RuntimeError('The current player roster is invalid. Select the player again.')
+    for row in players:
+        handle = row.get('handle') if isinstance(row, dict) else None
+        index = row.get('entity_index') if isinstance(row, dict) else None
+        if (type(handle) is not int or type(index) is not int or handle in seen
+                or not 0 < handle < 0xfffffffe or not 0 < index < 0x7fff
+                or handle & 0x7fff != index):
+            continue
+        seen.add(handle)
+        pawn_chunk = pointer(system + 8*(index >> 9))
+        if not pawn_chunk:
+            continue
+        pawn_identity = pawn_chunk + profile.IDENTITY_STRIDE*(index & 0x1ff)
+        pawn = pointer(pawn_identity)
+        serial = uint(pawn_identity + profile.IDENTITY_HANDLE)
+        if not pawn or serial != handle:
+            continue  # A stale roster candidate is never permission to use it.
+        if (pointer(pawn + profile.ENTITY_IDENTITY) != pawn_identity
+                or pointer(pawn) not in (monitor.base + profile.PLAYER_PAWN_VTABLE,
+                                        monitor.base + profile.FAMILIAR_CLONE_PAWN_VTABLE)):
+            continue
+        if uint(pawn + profile.PAWN_CONTROLLER) == controller_handle:
+            matches.append(dict(handle=handle, entity_index=index, controller_handle=controller_handle))
+    if any(monitor.memory.read(address, len(value)) != value for address, value in reads):
+        raise RuntimeError('The selected player changed during camera sampling. Select them again.')
+    monitor._owned()
+    evidence.update(stage='participant_backlink', controller_handle=controller_handle,
+                    candidates=len(matches))
+    if len(matches) > 1:
+        raise ReplayPlayerUnavailable('This player has more than one possible hero at this tick. Camera unchanged.')
+    if not matches:
+        raise ReplayPlayerUnavailable('This player has no hero at this tick. Camera unchanged.')
+    evidence.update(lookup='pawn_controller_backlink', pawn_handle=matches[0]['handle'])
+    return matches[0]
 
 
 def resolve_player(monitor, identifier, players=None, *, evidence=None):

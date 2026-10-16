@@ -192,8 +192,9 @@ class Stage1GuiTests(unittest.TestCase):
 
     def test_binding_recorder_preserves_f7_and_side_mouse_buttons(self):
         self.assertEqual(_binding_event_key(SimpleNamespace(keysym='F7', num='??')), 'F7')
-        self.assertEqual(_binding_event_key(SimpleNamespace(num=4)), 'Mouse4')
-        self.assertEqual(_binding_event_key(SimpleNamespace(num=5)), 'Mouse5')
+        self.assertIsNone(_binding_event_key(SimpleNamespace(num=4)))
+        self.assertIsNone(_binding_event_key(SimpleNamespace(num=5)))
+        self.assertEqual(_binding_event_key(SimpleNamespace(num=2)), 'MiddleMouse')
         self.assertIsNone(_binding_event_key(SimpleNamespace(num=1)))
         self.assertEqual(_binding_event_key(SimpleNamespace(keysym='k', num='??')), 'K')
 

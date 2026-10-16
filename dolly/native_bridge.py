@@ -1192,7 +1192,7 @@ class NativeBridge(MediaTransport):
         self._viewer_sequence = sequence
         self._viewer_enabled = bool(struct.unpack_from("<I", packet, 16)[0])
 
-    def publish_visualization(self, project=None, *, enabled=True, selected_camera=0):
+    def publish_visualization(self, project=None, *, enabled=True, selected_camera=0, revision=0, session_id=0):
         """Publish optional in-game guides without changing camera transport.
 
         Call only after a shot, selection, or visibility change; compilation
@@ -1207,7 +1207,8 @@ class NativeBridge(MediaTransport):
                 if sequence > 0xFFFFFFFE:
                     sequence = 2
                 packet = wire.build_visualization(project, sequence=sequence,
-                                                   enabled=enabled, selected_camera=selected_camera)
+                                                   enabled=enabled, selected_camera=selected_camera,
+                                                   revision=revision, session_id=session_id)
                 if self._viewer_mapping is None:
                     # A disabled or empty shot needs no additional OS object.
                     if not struct.unpack_from("<I", packet, 16)[0]:

@@ -72,6 +72,39 @@ class ReleaseTests(unittest.TestCase):
 
 
 class TransactionTests(unittest.TestCase):
+    def test_update_success_and_rollback_preserve_shared_layout_and_recovery_copy(self):
+        # The native UI uses this shared profile, independent of each extracted
+        # installation. Exercise actual install/rollback while it contains both
+        # an authored layout and the recovery copy used after an interrupted save.
+        profile = self.root / "Local profile" / "DeadlockDolly"
+        profile.mkdir(parents=True)
+        files = {
+            "ui-layout.ini": b"[Window][Deadlock Dolly]\r\nPos=36,84\r\nSize=800,520\r\n\r\n[DollyUI][Preferences]\r\nCustom=1\r\nEditorCustom=1\r\n",
+            "ui-layout.ini.bak": b"[Window][Deadlock Dolly]\nPos=48,96\n\n[DollyUI][Preferences]\nCustom=1\n",
+        }
+        for name, data in files.items():
+            (profile / name).write_bytes(data)
+        for failed_health in (False, True):
+            with self.subTest(failed_health=failed_health):
+                case = self.root / ("failed update" if failed_health else "successful update")
+                target, work = case / "Dolly", case / ".dolly-update-test"
+                package(target, "1.0.0")
+                package(work / "payload", "1.0.1")
+                plan = {"target": str(target), "work": str(work)}
+                def health_check(_):
+                    if failed_health:
+                        raise RuntimeError("simulated startup failure")
+                with patch.dict(os.environ, {"LOCALAPPDATA": str(profile.parent)}):
+                    if failed_health:
+                        with self.assertRaisesRegex(RuntimeError, "simulated startup failure"):
+                            w.install(plan, health_check)
+                    else:
+                        w.install(plan, health_check)
+                self.assertEqual({p.name: p.read_bytes() for p in profile.iterdir()}, files)
+                journal = json.loads((work / "journal.json").read_text(encoding="utf-8"))
+                self.assertFalse(any("ui-layout" in name for name in journal["before"]))
+                self.assertEqual((target / "Dolly.exe").read_text(), "1.0.0" if failed_health else "1.0.1")
+
     def test_update_preserves_user_export_folder_preference(self):
         settings_path = self.root / 'Roaming' / 'DeadlockDolly' / 'settings.json'
         settings = AppSettings(export_folder=str(self.root / 'My exports'), full_editor=True)

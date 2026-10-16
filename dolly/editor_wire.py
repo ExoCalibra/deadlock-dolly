@@ -53,6 +53,8 @@ EXTRA_ACTIONS += ("save_shot", "seek_replay_tick", "clear_camera_path")
 EXTRA_ACTIONS += ("focus_replay_player",)
 EXTRA_ACTIONS += ("prepare_cinematic",)
 EXTRA_ACTIONS += ("set_pause_after_capture",)
+EXTRA_ACTIONS += ("set_camera_position",)
+EXTRA_ACTIONS += ("set_camera_curve_value", "select_curve_camera")
 
 # Optional completion signal in the unused mapping tail; existing offsets stay fixed.
 CINEMATIC_OFFSET = 2 * 1024 * 1024 + 60000

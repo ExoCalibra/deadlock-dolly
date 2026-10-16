@@ -15,7 +15,7 @@ LOG = logging.getLogger("dolly.editor_session")
 from .editor_view import VIDEO_FPS, VIDEO_BITRATE_MBPS, CODEC_MAX
 
 
-from .editor_publication import _value
+from .editor_publication import _value, visualization_session
 from .editor_view import codec_label as _codec_label
 
 
@@ -163,7 +163,7 @@ def dispatch(app, event, bridge, *, publish):
     previous = getattr(app, "_history_edit_group", None)
     app._history_edit_group = ((action, app._selection_index(app.camera_tree),
                                 float(_value(app, "shot_time", 0) or 0))
-                               if action.startswith("set_") else None)
+                               if action.startswith("set_") and action not in ("set_camera_position", "set_camera_curve_value") else None)
     try:
         return _dispatch(app, event, bridge, publish=publish)
     finally:
@@ -216,6 +216,12 @@ def _dispatch(app, event, bridge, *, publish):
             raise ValueError("Stop path playback before resetting the camera path.")
         # The native panel confirms replacement before sending this snapshot.
         app._capture_view("start", native_snapshot=event, replacement_confirmed=True)
+    elif action in ("set_camera_curve_value", "select_curve_camera"):
+        if _edit_camera_curve(app, event, bridge, select=action == "select_curve_camera"):
+            publish()
+    elif action == "set_camera_position":
+        if _edit_camera_position(app, event, bridge):
+            publish()
     elif action in ("select_camera", "view_camera", "delete_camera", "undo_shot", "redo_shot",
                     "camera_page", "set_camera_time", "set_camera_roll"):
         history = getattr(app, "shot_history", None)
@@ -431,7 +437,7 @@ def _dispatch(app, event, bridge, *, publish):
             raise ValueError("Pause the shot and detach the camera before seeking")
         _native_operation(app, "Seeking replay tick", lambda: app.controller.seek_replay_tick(int(value)), bridge)
     elif action == "focus_replay_player":
-        from .replay_player_focus import focus_replay_player, ReplayPlayerUnavailable, ReplayPlayerDeferred
+        from .replay_player_focus import ReplayPlayerUnavailable, ReplayPlayerDeferred
         value = event['value']
         index = getattr(app, '_replay_events_cache', None)
         if (isinstance(value, bool) or not isinstance(value, (int, float))
@@ -442,7 +448,7 @@ def _dispatch(app, event, bridge, *, publish):
             raise ValueError('Choose an available replay player and detach the bone camera.')
         def focus():
             try:
-                return focus_replay_player(app.controller, int(value), dict(getattr(app, 'attach_fields', None) or {}))
+                return app.controller.follow_replay_player(int(value))
             except (ReplayPlayerUnavailable,ReplayPlayerDeferred) as exc:
                 return str(exc)
 
@@ -451,7 +457,7 @@ def _dispatch(app, event, bridge, *, publish):
                 app.status_text.set(message)
                 publish()
 
-        _native_operation(app, 'Moving camera to player', focus, bridge, complete=focused)
+        _native_operation(app, 'Following replay player', focus, bridge, complete=focused)
     elif action == "seek_shot":
         value = event["value"]
         if (not math.isfinite(value) or not app.project.keyframes
@@ -813,6 +819,114 @@ def _dispatch(app, event, bridge, *, publish):
         publish()
     else:
         raise ValueError("The native editor requested an unsupported UI action")
+    return True
+
+
+def _edit_camera_curve(app, event, bridge, *, select=False):
+    """Commit one full-shot value gesture, with no game seek or live preview."""
+    pose, index = event.get("pose"), event.get("value")
+    if (not isinstance(pose, (tuple, list)) or len(pose) != 7
+            or any(isinstance(item, bool) or not isinstance(item, (int, float))
+                   or not math.isfinite(item) for item in pose)
+            or isinstance(index, bool) or not isinstance(index, (int, float))
+            or not math.isfinite(index) or index != int(index) or pose[6] != 0
+            or any(part != int(part) or not 0 <= part <= 0xFFFFFFFF for part in pose[4:6])):
+        raise ValueError("Invalid in-game curve edit")
+    revision, channel, value, anchor = pose[:4]
+    session_id = int(pose[4]) | int(pose[5]) << 32
+    history = getattr(app, "shot_history", None)
+    if (history is None or revision != history.revision or not session_id
+            or session_id != visualization_session(app)):
+        raise ValueError("The shot changed. Select the camera again.")
+    if (channel != int(channel) or not 0 <= channel <= 6
+            or abs(value) > 1e8 or not 0 <= index < len(app.project.keyframes)
+            or (select and (channel != 0 or value != 0))
+            or (not select and channel == 6 and not .5 <= value <= 4)):
+        raise ValueError("Choose a valid camera curve value (aspect ratio 0.5 to 4).")
+    index, channel = int(index), int(channel)
+    key = app.project.keyframes[index]
+    if key.time != anchor:
+        raise ValueError("The camera timing changed. Select the camera again.")
+    if not select and key.source != "free":
+        raise ValueError("Curves edit free-camera keys. Use attachment offsets for a tracked camera.")
+    if not app._shot_edit_ready():
+        return False
+    state = bridge.editor_status()
+    if (not state.get("enabled") or not state.get("ready") or not state.get("focused")
+            or not state.get("paused") or state.get("input_mode") != "panel"):
+        app.status_text.set("Curve edit cancelled. Pause the replay and return to Dolly's controls.")
+        return False
+    if select:
+        from .editor_wire import CAMERA_LIST_COUNT
+        app._native_camera_page = index // CAMERA_LIST_COUNT * CAMERA_LIST_COUNT
+        _select(app, index, view=False)
+        return True
+    selected = app._selection_index(app.camera_tree)
+    selected = selected if selected is not None and 0 <= selected < len(app.project.keyframes) else 0
+    if selected != index:
+        app.status_text.set("Curve edit cancelled because the selected camera changed.")
+        return False
+    from .path import channel_value
+    from .native_path import CHANNELS
+    name = CHANNELS[channel]
+    if abs(channel_value(key, name)) > 1e8:
+        raise ValueError("This authored value is outside the in-game curve editor range.")
+    if value == channel_value(key, name):
+        return False
+    keys = copy.deepcopy(app.project.keyframes)
+    # Rotation editing authors a curve override. Captured angles, calibrated
+    # lens scale and every other camera property remain intact.
+    field = "curve_" + name if 3 <= channel <= 5 else name
+    setattr(keys[index], field, float(value))
+    app._commit_camera(keys, key.time)
+    unit = " units" if channel < 3 else (" degrees" if channel < 6 else "")
+    app.status_text.set(f"Camera {index + 1:02d} {name.replace('_', ' ')} set to {value:g}{unit}. Preview to check the move.")
+    return True
+
+
+def _edit_camera_position(app, event, bridge):
+    """Commit one revision-bound XYZ gesture; never move or seek the live camera."""
+    pose = event.get("pose")
+    index = event.get("value")
+    if (not isinstance(pose, (tuple, list)) or len(pose) != 7
+            or any(isinstance(item, bool) or not isinstance(item, (int, float))
+                   or not math.isfinite(item) for item in pose)
+            or isinstance(index, bool) or not isinstance(index, (int, float))
+            or not math.isfinite(index) or index != int(index) or any(pose[4:])):
+        raise ValueError("Invalid in-game position edit")
+    revision, axis, value, anchor = pose[:4]
+    history = getattr(app, "shot_history", None)
+    if history is None or revision != history.revision:
+        raise ValueError("The camera list changed. Select the camera again.")
+    if axis not in (0, 1, 2) or abs(value) > 1e8 or not 0 <= index < len(app.project.keyframes):
+        raise ValueError("Choose a camera and a finite X, Y or Z position within 100 million units.")
+    index = int(index)
+    key = app.project.keyframes[index]
+    if key.time != anchor:
+        raise ValueError("The camera timing changed. Select the camera again.")
+    if key.source != "free":
+        raise ValueError("Position curves edit free-camera keys. Use attachment offsets for a tracked camera.")
+    if not app._shot_edit_ready():
+        return False
+    state = bridge.editor_status()
+    if (not state.get("enabled") or not state.get("ready") or not state.get("focused")
+            or not state.get("paused") or state.get("input_mode") != "panel"):
+        app.status_text.set("Position edit cancelled. Pause the replay and return to Dolly's controls.")
+        return False
+    selected = app._selection_index(app.camera_tree)
+    # Publication presents camera zero when a newly opened tree has no row
+    # selected. Match that contract while still refusing a different valid row.
+    selected = selected if selected is not None and 0 <= selected < len(app.project.keyframes) else 0
+    if selected != index:
+        app.status_text.set("Position edit cancelled because the selected camera changed.")
+        return False
+    channel = ("x", "y", "z")[int(axis)]
+    if value == getattr(key, channel):
+        return False
+    keys = copy.deepcopy(app.project.keyframes)
+    setattr(keys[index], channel, float(value))
+    app._commit_camera(keys, key.time)
+    app.status_text.set(f"Camera {index + 1:02d} {channel.upper()} set to {value:.2f} units. Preview to check the move.")
     return True
 
 

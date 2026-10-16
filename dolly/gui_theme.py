@@ -61,7 +61,8 @@ def initialize(root):
     style.map("Primary.TButton", background=[("active", ACCENT_HOVER), ("disabled", DISABLED_BG)],
               foreground=[("disabled", DISABLED_FG)])
     style.configure("Quiet.TButton", background=PANEL, padding=(8, 5))
-    style.configure("TMenubutton", background=PANEL, foreground=MUTED, padding=(5, 2), borderwidth=0)
+    style.configure("TMenubutton", background=PANEL, foreground=MUTED,
+                    arrowcolor=MUTED, padding=(5, 2), borderwidth=0)
     style.configure("TEntry", fieldbackground=FIELD, foreground=TEXT, insertcolor=TEXT,
                     bordercolor=EDGE, lightcolor=EDGE, darkcolor=EDGE, padding=5)
     style.configure("TCombobox", fieldbackground=FIELD, background=BUTTON, foreground=TEXT,
@@ -114,13 +115,19 @@ def _rgb(color):
     return tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
 
 
-def _photo(root, width, height, pixel):
+def _photo(root, width, height, pixel, *, surface=None):
     """Small RGBA assets with smooth edges, generated without a runtime library."""
     raw = bytearray()
+    backdrop = _rgb(surface) if surface is not None else None
     for y in range(height):
         raw.append(0)
         for x in range(width):
-            raw.extend(pixel(x + .5, y + .5))
+            color = pixel(x + .5, y + .5)
+            if backdrop is not None:
+                alpha = color[3]
+                color = (*((value * alpha + parent * (255 - alpha) + 127) // 255
+                           for value, parent in zip(color[:3], backdrop)), 255)
+            raw.extend(color)
     def chunk(kind, data):
         return struct.pack("!I", len(data)) + kind + data + struct.pack("!I", zlib.crc32(kind + data))
     png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!2I5B", width, height, 8, 6, 0, 0, 0))
@@ -138,11 +145,12 @@ def _segment_distance(x, y, a, b):
     return math.hypot(x - a[0] - t * dx, y - a[1] - t * dy)
 
 
-def rounded_image(root, fill, outline, radius=6, *, size=64, line=1, checked=None):
+def rounded_image(root, fill, outline, radius=6, *, size=64, line=1, checked=None, surface=None):
     fill, outline = _rgb(fill), _rgb(outline)
     tick = _rgb(checked) if checked else None
+    width, height = (size, size) if isinstance(size, int) else size
     def pixel(x, y):
-        qx, qy = abs(x - size / 2) - (size / 2 - radius), abs(y - size / 2) - (size / 2 - radius)
+        qx, qy = abs(x - width / 2) - (width / 2 - radius), abs(y - height / 2) - (height / 2 - radius)
         distance = math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - radius
         alpha = _coverage(distance)
         if not alpha:
@@ -154,7 +162,7 @@ def rounded_image(root, fill, outline, radius=6, *, size=64, line=1, checked=Non
             ink = _coverage(min(_segment_distance(x, y, a, b), _segment_distance(x, y, b, c)) - size * .055)
             color = tuple(round(a * (1 - ink) + b * ink) for a, b in zip(color, tick))
         return *color, round(255 * alpha)
-    return _photo(root, size, size, pixel)
+    return _photo(root, width, height, pixel, surface=surface)
 
 
 def apply(root):
@@ -165,53 +173,119 @@ def apply(root):
     bg, panel, text, muted, accent = t["bg"], t["panel"], t["text"], t["muted"], t["accent"]
     edge, field = t["edge"], t["field"]
     control_radius, card_radius = round(5 * scale), round(6 * scale)
-    def rounded(name, fill, outline, radius=control_radius, min_width=16, **states):
-        normal = rounded_image(root, fill, outline, radius, line=scale)
-        images.append(normal)
-        alternatives = []
-        for state, (color, line) in states.items():
-            image = rounded_image(root, color, line, radius, line=scale)
-            images.append(image)
-            alternatives.append((state, image))
-        # A wide center prevents tiny repeating tiles from slowing window paints.
-        style.element_create(name, "image", normal, *alternatives, border=radius,
-                             padding=0, width=min_width, height=16, sticky="nsew")
+    surfaces = {}
+    minimum_images = {}
+    def rounded(name, fill, outline, radius=control_radius, min_width=16, surface=bg, **states):
+        paints = [(None, fill, outline), *((state, *colors) for state, colors in states.items())]
+        if scale > 2:
+            # Clam's field has two border pixels. Preserve the original precise
+            # stroke above 200% until an equivalent native primitive is proven.
+            variants = [rounded_image(root, color, edge, radius, line=scale, surface=surface)
+                        for _, color, edge in paints]
+            images.extend(variants)
+            style.element_create(name, "image", variants[0],
+                                 *((state, image) for (state, _, _), image in zip(paints[1:], variants[1:])),
+                                 border=radius, padding=0, width=min_width, height=16, sticky="nsew")
+            return
+        # A native fill paints the large center once. Image elements only stamp
+        # the four small antialiased corners; no nine-slice center is tiled.
+        style.element_create(name, "from", "clam", "background")
+        style.element_create(name + ".fill", "from", "clam", "field")
+        minimum = minimum_images.get(min_width)
+        if minimum is None:
+            minimum = tk.PhotoImage(master=root, width=min_width, height=16)
+            minimum_images[min_width] = minimum
+            images.append(minimum)
+        style.element_create(name + ".minimum", "image", minimum,
+                             width=min_width, height=16, sticky="")
+        corners = {key: [] for key in ("nw", "ne", "sw", "se")}
+        for state, color, edge in paints:
+            original = rounded_image(root, color, edge, radius, line=scale, surface=surface)
+            width, height = original.width(), original.height()
+            for key, (x, y) in {"nw": (0, 0), "ne": (width-radius, 0),
+                                "sw": (0, height-radius), "se": (width-radius, height-radius)}.items():
+                corner = tk.PhotoImage(master=root, width=radius, height=radius)
+                root.tk.call(str(corner), "copy", str(original), "-from", x, y, x+radius, y+radius)
+                images.append(corner)
+                corners[key].append((state, corner))
+        for key, variants in corners.items():
+            style.element_create(name + "." + key, "image", variants[0][1],
+                                 *((state, image) for state, image in variants[1:]),
+                                 width=radius, height=radius, sticky=key)
+        surfaces[name] = paints
     rounded("Dolly.card", panel, edge, card_radius)
+    rounded("Dolly.card.notice", panel, edge, card_radius, surface=t["selected"])
     style.layout("Rounded.Card.TFrame", [("Dolly.card", {"sticky": "nsew"})])
     style.configure("Rounded.Card.TFrame", background=bg)
-    rounded("Dolly.button", t["button"], t["button"], disabled=(t["disabled_bg"], t["edge"]),
-            pressed=(t["button_active"], accent), active=(t["button_hover"], accent), focus=(panel, accent))
-    rounded("Dolly.primary", accent, accent, disabled=(t["disabled_bg"], t["edge"]),
-            pressed=(t["accent_active"], t["accent_active"]), active=(t["accent_hover"], t["accent_hover"]),
-            focus=(accent, t["selected_ink"]))
+    style.layout("UpdateNotice.Notes.TFrame", [("Dolly.card.notice", {"sticky": "nsew"})])
+    style.configure("UpdateNotice.Notes.TFrame", background=t["selected"])
+    # Large image elements repaint often. Precompose their antialiased edges
+    # onto the exact parent surface so Tk can use its opaque image path.
+    # Card variants are separate: page-coloured corners would leave halos.
+    for suffix, surface in (("", bg), (".card", panel), (".notice", t["selected"])):
+        rounded("Dolly.button" + suffix, t["button"], t["button"], surface=surface,
+                disabled=(t["disabled_bg"], t["edge"]), pressed=(t["button_active"], accent),
+                focus=(t["button"], accent), active=(t["button_hover"], accent))
+        rounded("Dolly.primary" + suffix, accent, accent, surface=surface,
+                disabled=(t["disabled_bg"], t["edge"]), focus=(accent, t["selected_ink"]),
+                pressed=(t["accent_active"], t["accent_active"]), active=(t["accent_hover"], t["accent_hover"]))
     def button_layout(element):
         return [(element, {"sticky": "nsew", "children": [("Button.padding", {
             "sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})]
     style.layout("TButton", button_layout("Dolly.button"))
     style.layout("Primary.TButton", button_layout("Dolly.primary"))
+    style.layout("Card.TButton", button_layout("Dolly.button.card"))
+    style.layout("Card.Quiet.TButton", button_layout("Dolly.button.card"))
+    style.layout("Card.Primary.TButton", button_layout("Dolly.primary.card"))
+    style.layout("UpdateNotice.TButton", button_layout("Dolly.button.notice"))
+    style.layout("UpdateNotice.Primary.TButton", button_layout("Dolly.primary.notice"))
     style.configure("TButton", padding=(10, 5))
     style.configure("Quiet.TButton", padding=(10, 5))
+    # Curve axes are local selectors: keep inactive channels quiet and give the
+    # active channel the same filled, outlined state as the in-game editor.
+    rounded("Dolly.curve.axis", panel, panel, surface=panel,
+            disabled=(panel, panel), focus=(panel, accent), active=(t["button"], t["edge"]))
+    rounded("Dolly.curve.axis.selected", t["selected"], t["selected_edge"], surface=panel,
+            disabled=(t["disabled_bg"], t["edge"]), focus=(t["selected"], accent),
+            active=(t["selected"], t["selected_edge"]))
+    for name, element in (("Curve.Axis.TButton", "Dolly.curve.axis"),
+                          ("Curve.Selected.Axis.TButton", "Dolly.curve.axis.selected")):
+        style.layout(name, button_layout(element))
+        style.configure(name, padding=(10, 3), background=panel,
+                        foreground=t["selected_ink"] if "Selected" in name else text)
+        style.map(name, background=[("active", panel), ("disabled", panel)],
+                  foreground=[("disabled", t["disabled_fg"])])
     for name, surface in (("TButton", bg), ("Primary.TButton", bg), ("Quiet.TButton", bg),
                           ("Card.TButton", panel), ("Card.Primary.TButton", panel), ("Card.Quiet.TButton", panel)):
         style.configure(name, background=surface)
         style.map(name, background=[("active", surface), ("disabled", surface)])
-    rounded("Dolly.nav", bg, bg, active=(panel, edge), focus=(bg, accent))
-    rounded("Dolly.nav.selected", bg, accent)
+    rounded("Dolly.nav", bg, bg, focus=(bg, accent), active=(panel, edge))
+    rounded("Dolly.nav.selected", bg, accent, focus=(panel, accent))
+    rounded("Dolly.nav.current", bg, bg, focus=(panel, panel), active=(panel, panel))
     style.layout("Nav.TButton", button_layout("Dolly.nav"))
     style.layout("Selected.Nav.TButton", button_layout("Dolly.nav.selected"))
+    # The sidebar draws the selection outline. Focus on that selected button
+    # adds a quiet fill, rather than a second outline inside the first.
+    style.layout("Current.Nav.TButton", button_layout("Dolly.nav.current"))
     style.configure("Nav.TButton", anchor="w", padding=(12, 8), background=bg)
     style.configure("Selected.Nav.TButton", foreground=accent)
-    for name in ("Nav.TButton", "Selected.Nav.TButton"):
+    style.configure("Current.Nav.TButton", foreground=accent)
+    for name in ("Nav.TButton", "Selected.Nav.TButton", "Current.Nav.TButton"):
         style.map(name, background=[("active", bg)], foreground=[("active", accent)])
     for label, surface in (("Disclosure.TButton", bg), ("Disclosure.Card.TButton", panel)):
         style.layout(label, [("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "w"})]})])
         style.configure(label, background=surface, foreground=text, padding=(0, 5), borderwidth=0)
         style.map(label, background=[("active", surface)], foreground=[("active", accent)])
 
-    rounded("Dolly.field", field, edge, disabled=(t["disabled_bg"], t["edge"]),
-            focus=(field, accent), active=(field, t["accent_active"]))
-    style.layout("TEntry", [("Dolly.field", {"sticky": "nsew", "children": [
-        ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})])
+    for suffix, surface in (("", bg), (".card", panel)):
+        rounded("Dolly.field" + suffix, field, edge, surface=surface,
+                disabled=(t["disabled_bg"], t["edge"]), focus=(field, accent), active=(field, t["accent_active"]))
+    def entry_layout(element):
+        return [(element, {"sticky": "nsew", "children": [
+            ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})]
+    style.layout("TEntry", entry_layout("Dolly.field"))
+    style.layout("Card.TEntry", entry_layout("Dolly.field.card"))
+    style.layout("Numeric.TEntry", entry_layout("Dolly.field.card"))
     def arrow_pixel(x, y):
         ink = _coverage(min(_segment_distance(x, y, (3, 5), (7, 9)),
                             _segment_distance(x, y, (7, 9), (11, 5))) - .7)
@@ -219,10 +293,30 @@ def apply(root):
     arrow = _photo(root, 14, 14, arrow_pixel)
     images.append(arrow)
     style.element_create("Dolly.Combobox.downarrow", "image", arrow, width=20, sticky="")
-    style.layout("TCombobox", [("Dolly.field", {"sticky": "nsew", "children": [
-        ("Combobox.padding", {"sticky": "nsew", "children": [
-            ("Dolly.Combobox.downarrow", {"side": "right", "sticky": "ns"}),
-            ("Combobox.textarea", {"sticky": "nsew"})]})]})])
+    def combo_layout(element):
+        return [(element, {"sticky": "nsew", "children": [
+            ("Combobox.padding", {"sticky": "nsew", "children": [
+                ("Dolly.Combobox.downarrow", {"side": "right", "sticky": "ns"}),
+                ("Combobox.textarea", {"sticky": "nsew"})]})]})]
+    def menu_layout(element):
+        return [(element, {"sticky": "nsew", "children": [
+            ("Menubutton.padding", {"sticky": "nsew", "children": [
+                ("Dolly.Combobox.downarrow", {"side": "right", "sticky": "ns"}),
+                ("Menubutton.label", {"sticky": "nsew"})]})]})]
+    for prefix, suffix, surface in (("", "", bg), ("Card.", ".card", panel)):
+        style.layout(prefix + "TCombobox", combo_layout("Dolly.field" + suffix))
+        rounded("Dolly.menu" + suffix, panel, edge, surface=surface, disabled=(t["disabled_bg"], edge),
+                focus=(panel, accent), pressed=(t["button_active"], accent), active=(t["button_hover"], edge))
+        style.layout(prefix + "TMenubutton", menu_layout("Dolly.menu" + suffix))
+    # Image corners are transparent. The widget rectangle behind them must
+    # stay on its parent surface even when clam marks a dropdown active or
+    # readonly; its inherited pale background otherwise creates square boxes.
+    for prefix, surface in (("", bg), ("Card.", panel)):
+        for control in ("TEntry", "TCombobox", "TMenubutton"):
+            style.configure(prefix + control, background=surface)
+            style.map(prefix + control, background=[("disabled", surface), ("!disabled", surface)])
+    style.configure("TMenubutton", borderwidth=0, relief="flat")
+    style.map("TMenubutton", foreground=[("disabled", t["disabled_fg"])])
     for name in ("TEntry", "TCombobox"):
         style.configure(name, fieldbackground=field, background=bg, foreground=text,
                         borderwidth=0, padding=(10, 5))
@@ -231,6 +325,7 @@ def apply(root):
         style.configure("Card." + name, background=panel)
 
     style.configure("Numeric.TEntry", padding=(4, 1), background=panel)
+    style.map("Numeric.TEntry", background=[("disabled", panel), ("!disabled", panel)])
 
     size = round(14 * scale)
     indicator = rounded_image(root, field, edge, round(3 * scale), size=size, line=scale)
@@ -239,9 +334,12 @@ def apply(root):
     disabled = rounded_image(root, t["disabled_bg"], t["edge"], round(3 * scale), size=size, line=scale)
     disabled_checked = rounded_image(root, t["accent_active"], t["accent_active"], round(3 * scale), size=size, line=scale, checked=muted)
     images.extend((indicator, checked, hover, disabled, disabled_checked))
+    focused_checked = rounded_image(root, accent, text, round(3 * scale), size=size, line=scale, checked=bg)
+    images.append(focused_checked)
     style.element_create("Dolly.Checkbutton.indicator", "image", indicator,
                          ("disabled selected", disabled_checked), ("disabled", disabled),
-                         ("selected", checked), ("active", hover), ("focus", hover), sticky="w", width=size + 8)
+                         ("focus selected", focused_checked), ("focus", hover),
+                         ("selected", checked), ("active", hover), sticky="w", width=size + 8)
     style.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nsew", "children": [
         ("Dolly.Checkbutton.indicator", {"side": "left", "sticky": "w"}),
         ("Checkbutton.label", {"sticky": "nsew"})]})])
@@ -255,8 +353,15 @@ def apply(root):
 
     def match_surface(event):
         widget = event.widget
+        # Tk creates combobox popdown scrollbars in Tcl rather than through
+        # tkinter; those Map events carry a path, not a Python widget.
+        if not isinstance(widget, ttk.Widget):
+            return
         name = str(widget.cget("style")) or widget.winfo_class()
-        if name not in ("TEntry", "TCombobox", "TButton", "Primary.TButton", "Quiet.TButton", "TCheckbutton"):
+        if name in ("TScrollbar", "TScale"):
+            name = ("Vertical" if str(widget.cget("orient")) == "vertical" else "Horizontal") + "." + name
+        if name not in ("TEntry", "TCombobox", "TMenubutton", "TButton", "Primary.TButton", "Quiet.TButton", "TCheckbutton",
+                        "Vertical.TScrollbar", "Horizontal.TScrollbar", "Vertical.TScale", "Horizontal.TScale"):
             return
         parent = widget.master
         while parent is not None:
@@ -268,16 +373,111 @@ def apply(root):
                 if style.lookup(parent_style, "background") == bg:
                     return
             parent = getattr(parent, "master", None)
-    for cls in ("TEntry", "TCombobox", "TButton", "TCheckbutton"):
+    for cls in ("TEntry", "TCombobox", "TMenubutton", "TButton", "TCheckbutton", "TScrollbar", "TScale"):
         root.bind_class(cls, "<Map>", match_surface, add="+")
 
-    rounded("Dolly.scroll.thumb", t["edge"], t["edge"], radius=4, min_width=8,
-            active=(t["scroll_hover"], t["scroll_hover"]), pressed=(accent, accent))
-    style.layout("Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
-        ("Dolly.scroll.thumb", {"sticky": "nsew", "expand": "1"})]})])
-    style.configure("Vertical.TScrollbar", background=bg, troughcolor=bg, bordercolor=bg,
-                    lightcolor=bg, darkcolor=bg, borderwidth=0, arrowsize=10, width=10)
+    # Keep the native *thumb/*trough names: ttk uses them to distinguish
+    # dragging from page clicks. Matching the trough to its parent avoids an
+    # inset square rail, while opaque assets avoid repeated alpha blending.
+    thickness, minimum = round(10 * scale), round(16 * scale)
+    radius = max(1, round(4 * scale))
+    for direction in ("Vertical", "Horizontal"):
+        vertical = direction == "Vertical"
+        # ttk tiles its image centers. Keep a long transparent strip along
+        # the scrolling axis, with exactly the rail's cross-axis thickness;
+        # a 1px tile is expensive and a square asset can widen the layout.
+        strip_size = (thickness, 64) if vertical else (64, thickness)
+        size = (thickness, max(64, minimum)) if vertical else (max(64, minimum), thickness)
+        for prefix, surface in (("", bg), ("Card.", panel)):
+            rail = _photo(root, *strip_size, lambda x, y: (0, 0, 0, 0), surface=surface)
+            thumbs = [rounded_image(root, color, color, radius, size=size, line=0, surface=surface)
+                      for color in (edge, t["scroll_hover"], accent, t["disabled_bg"])]
+            images.extend((rail, *thumbs))
+            trough = "Dolly." + prefix + direction + ".Scrollbar.trough"
+            thumb = "Dolly." + prefix + direction + ".Scrollbar.thumb"
+            style.element_create(trough, "image", rail, width=1, height=1, sticky="nsew")
+            style.element_create(thumb, "image", thumbs[0], ("disabled", thumbs[3]),
+                                 ("pressed", thumbs[2]), ("active", thumbs[1]), ("focus", thumbs[2]),
+                                 width=thickness if vertical else minimum,
+                                 height=minimum if vertical else thickness,
+                                 border=(0, radius) if vertical else (radius, 0), sticky="nsew")
+            style.layout(prefix + direction + ".TScrollbar", [(trough, {"sticky": "nsew", "children": [
+                (thumb, {"sticky": "nsew", "expand": "1"})]})])
+            name = prefix + direction + ".TScrollbar"
+            style.configure(name, background=surface, troughcolor=surface, bordercolor=surface,
+                            lightcolor=surface, darkcolor=surface, borderwidth=0, arrowsize=thickness,
+                            width=thickness)
+            style.map(name, background=[("disabled", surface), ("!disabled", surface)])
+
+    # A scale remains a native ttk Scale: its own *slider/*trough targets keep
+    # click increments, dragging, keyboard navigation and value callbacks.
+    # Center a thin rail in the handle's hit area instead of painting a box.
+    track_width, handle_width, handle_height = round(4 * scale), round(12 * scale), round(18 * scale)
+    for direction in ("Horizontal", "Vertical"):
+        horizontal = direction == "Horizontal"
+        track_size = (64, track_width) if horizontal else (track_width, 64)
+        handle_size = (handle_width, handle_height) if horizontal else (handle_height, handle_width)
+        handles = [rounded_image(root, fill, outline, round(5 * scale), size=handle_size, line=scale)
+                   for fill, outline in ((accent, accent), (t["accent_hover"], accent),
+                                         (accent, t["selected_ink"]), (t["disabled_fg"], t["edge"]))]
+        images.extend(handles)
+        slider = "Dolly." + direction + ".Scale.slider"
+        style.element_create(slider, "image", handles[0], ("disabled", handles[3]),
+                             ("focus", handles[2]), ("pressed", handles[1]), ("active", handles[1]), sticky="")
+        for prefix, surface in (("", bg), ("Card.", panel)):
+            track = rounded_image(root, t["track"], t["track"], max(1, track_width // 2),
+                                  size=track_size, line=0, surface=surface)
+            images.append(track)
+            trough = "Dolly." + prefix + direction + ".Scale.trough"
+            style.element_create(trough, "image", track,
+                                 border=(track_width // 2, 0) if horizontal else (0, track_width // 2),
+                                 width=1 if horizontal else track_width,
+                                 height=track_width if horizontal else 1,
+                                 sticky="ew" if horizontal else "ns")
+            style.layout(prefix + direction + ".TScale", [(trough, {"sticky": "nsew", "children": [
+                (slider, {"side": "left" if horizontal else "top", "sticky": ""})]})])
+            name = prefix + direction + ".TScale"
+            style.configure(name, background=surface, borderwidth=0, relief="flat")
+            style.map(name, background=[("disabled", surface), ("!disabled", surface)])
     style.configure("Treeview", borderwidth=0, relief="flat", bordercolor=panel, lightcolor=panel, darkcolor=panel)
+    def surface_layout(layout):
+        result = []
+        for element, options in layout:
+            options = dict(options)
+            children = surface_layout(options.pop("children", []))
+            if element in surfaces:
+                # Sibling decoration does not borrow the field's 2px client
+                # inset. All original content padding/hit areas stay intact.
+                decorations = [(element + ".fill", {"sticky": "nsew"}),
+                               *((element + "." + key, {"sticky": key}) for key in ("nw", "ne", "sw", "se")),
+                               (element + ".minimum", {"sticky": ""})]
+                children = decorations + children
+            if children:
+                options["children"] = children
+            result.append((element, options))
+        return result
+    def inner_edge(fill, outline):
+        amount = min(1., scale - 1.)
+        return "#" + "".join(f"{round(a*(1-amount)+b*amount):02x}"
+                            for a, b in zip(_rgb(fill), _rgb(outline)))
+    surface_styles = ("Rounded.Card.TFrame", "UpdateNotice.Notes.TFrame", "TButton", "Primary.TButton",
+                      "Card.TButton", "Card.Quiet.TButton", "Card.Primary.TButton", "UpdateNotice.TButton",
+                      "UpdateNotice.Primary.TButton", "Curve.Axis.TButton", "Curve.Selected.Axis.TButton",
+                      "Nav.TButton", "Selected.Nav.TButton", "Current.Nav.TButton", "TEntry", "Card.TEntry", "Numeric.TEntry",
+                      "TCombobox", "Card.TCombobox", "TMenubutton", "Card.TMenubutton", "FullEditor.TCheckbutton")
+    for name in surface_styles:
+        layout = style.layout(name)
+        paints = surfaces.get(layout[0][0])
+        if paints is None:
+            continue
+        _, fill, outline = paints[0]
+        style.configure(name, fieldbackground=fill, bordercolor=outline,
+                        lightcolor=inner_edge(fill, outline), darkcolor=inner_edge(fill, outline))
+        style.map(name, fieldbackground=[(state, color) for state, color, _ in paints[1:]],
+                  bordercolor=[(state, edge) for state, _, edge in paints[1:]],
+                  lightcolor=[(state, inner_edge(color, edge)) for state, color, edge in paints[1:]],
+                  darkcolor=[(state, inner_edge(color, edge)) for state, color, edge in paints[1:]])
+        style.layout(name, surface_layout(layout))
     root._dolly_theme_images = images
 
 

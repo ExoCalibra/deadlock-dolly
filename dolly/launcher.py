@@ -34,6 +34,7 @@ from .file_ops import _atomic_write
 from .keyvalues import _Token, _Entry, _tokens, _parse, _named
 from .runtime import application_root, resource_root, external_program_environment
 from .native_bridge import NativeBridge, ABI as NATIVE_ABI
+from .panorama_assets import verify_stock_ui_assets
 from . import __version__ as DOLLY_VERSION
 from .compatibility import (
     CompatibilityError,
@@ -50,7 +51,7 @@ EDITING_ROOT = resource_root(Path(__file__).resolve().parent.parent) / "assets" 
 CONFETTI_PACK = NATIVE_ROOT / "assets" / "confetti" / "pak01_dir.vpk"
 CONFETTI_PACK_SHA256 = "99c0325fe333bfa12c3f23a2808767c2fd27b49fe0e5abe4531fa472519f8ae6"
 UI_OVERRIDE_PACK = NATIVE_ROOT / "assets" / "ui" / "pak02_dir.vpk"
-UI_OVERRIDE_PACK_SHA256 = "160c23f2b4ef670469833a193b2fa3d4ed5f027a4b9310607391008f39054cc0"
+UI_OVERRIDE_PACK_SHA256 = "0af30912a471efc984e653ebc57a4c05f210e07f707f42d3bec997fc945b2fe1"
 UNLOCKER_SHA256 = "e20bfec1af110df35750663c5039ebeb46d86fd6c7357aaf90d74082d65195c8"
 # Accepted game-module SHA-256 pins come from native/profiles/manifest.json, the
 # single source of truth shared with the native bridge and its build tests.
@@ -796,6 +797,14 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         except OSError as exc:
             raise LaunchError(f"Console port {port} is busy. Close the previous Dolly/game session or choose another port.") from exc
     dll = _verified_unlocker()
+    # Keep previous-session recovery above intact. Verify the same-path stock
+    # UI inputs before creating a new bridge, session journal or deployment.
+    ui_override_pack = _verified_ui_override_pack() if native else None
+    if native:
+        try:
+            verify_stock_ui_assets(paths.citadel_dir)
+        except (OSError, ValueError) as exc:
+            raise LaunchError(str(exc)) from exc
     process = None
     bridge = None
     ident = time.strftime("%Y%m%d_%H%M%S", time.gmtime()) + "_" + uuid.uuid4().hex[:10]
@@ -821,9 +830,9 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
             # This mounted game search path exists before Deadlock starts, so
             # Source 2 resolves the custom particle systems as native assets.
             shutil.copyfile(_verified_confetti_pack(), target.parents[1] / "pak01_dir.vpk")
-            # The UI override pack loads beside it and hides the development
-            # HUD overlay's client-status mark and match/server debug label.
-            shutil.copyfile(_verified_ui_override_pack(), target.parents[1] / "pak02_dir.vpk")
+            # The verified pack also presents the Panorama shader-loading card
+            # and hides the development client-status/debug capture overlays.
+            shutil.copyfile(ui_override_pack, target.parents[1] / "pak02_dir.vpk")
             (target / "dolly_native.cfg").write_text(
                 f"DOLLY_NATIVE_1\n{bridge.token}\n{bridge.editor_pid}\n",
                 encoding="ascii", newline="\n")

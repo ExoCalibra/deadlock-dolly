@@ -30,11 +30,11 @@ void OverlayPanel::style_panel() {
     style.FramePadding = ImVec2(10, 5);
     style.ItemSpacing = ImVec2(8, 6);
     style.ItemInnerSpacing = ImVec2(8, 6);
-    style.WindowRounding = 8;
-    style.ChildRounding = 6;
-    style.FrameRounding = 5;
-    style.PopupRounding = 6;
-    style.GrabRounding = 5;
+    style.WindowRounding = 6;
+    style.ChildRounding = 4;
+    style.FrameRounding = 4;
+    style.PopupRounding = 4;
+    style.GrabRounding = 4;
     style.ScrollbarRounding = 6;
     style.WindowBorderSize = 1;
     style.ChildBorderSize = 1;
@@ -47,10 +47,12 @@ void OverlayPanel::style_panel() {
     style.TabRounding = 4;
     style.TabBarBorderSize = 0;
     style.TabBarOverlineSize = 2;
-    style.Colors[ImGuiCol_WindowBg] = panel_color(ui::BG, .97f);
+    // Opaque matte surfaces keep the same contrast over every replay scene.
+    style.Colors[ImGuiCol_WindowBg] = panel_color(ui::BG);
     style.Colors[ImGuiCol_ChildBg] = panel_color(ui::PANEL);
     style.Colors[ImGuiCol_PopupBg] = panel_color(ui::PANEL);
     style.Colors[ImGuiCol_Border] = panel_color(ui::EDGE);
+    style.Colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
     style.Colors[ImGuiCol_Text] = panel_color(ui::TEXT);
     style.Colors[ImGuiCol_TextDisabled] = panel_color(ui::MUTED);
     style.Colors[ImGuiCol_Button] = panel_color(ui::BUTTON);
@@ -538,17 +540,22 @@ bool OverlayPanel::begin_panel_card(const char* name) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8 * panel_scale, (compact_controls_ ? 2.f : 6.f) * panel_scale * card_vertical_scale_));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * panel_scale, (compact_controls_ ? 2.f : 5.f) * panel_scale * card_vertical_scale_));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, panel_color(dolly::ui::PANEL));
-    if(section_extra_draw_[index]>0)
-        ImGui::SetNextWindowSizeConstraints(ImVec2(0,section_heights_[lite_page_][index]*panel_scale+section_extra_draw_[index]),ImVec2(FLT_MAX,FLT_MAX));
+    if(layout_columns_>1 || section_extra_draw_[index]>0)
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0,section_draw_heights_[index]),ImVec2(FLT_MAX,FLT_MAX));
     return ImGui::BeginChild(name, ImVec2(width - 20 * panel_scale * (1 - progress), 0),
                              ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY |
-                                 ImGuiChildFlags_AlwaysUseWindowPadding,
+                                 ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AlwaysAutoResize,
                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 }
 void OverlayPanel::end_panel_card() {
     if (!card_open_) return;
     auto* window = ImGui::GetCurrentWindow();
-    const float height = window->DC.CursorMaxPos.y - window->Pos.y + window->WindowPadding.y;
+    // Match ImGui's natural AutoResizeY content/ideal measurement. Neither
+    // cursor extent includes the minimum added for neighboring cards.
+    const float content_height=std::trunc(std::max(window->DC.CursorMaxPos.y,window->DC.IdealMaxPos.y)-
+                                          window->DC.CursorStartPos.y);
+    const float height=content_height+2*window->WindowPadding.y+window->DecoOuterSizeY1+
+                       window->DecoOuterSizeY2-window->ScrollbarSizes.y;
     section_heights_[lite_page_][card_index_]=height/(panel_scale*card_vertical_scale_);
     card_column_y_[card_column_]=std::max(card_column_y_[card_column_],card_target_y_+std::max(height,window->Size.y)+12*panel_scale);
     const ImRect bounds(window->Pos,ImVec2(window->Pos.x+window->Size.x,window->Pos.y+window->Size.y));
@@ -586,6 +593,7 @@ void OverlayPanel::end_panel_card() {
     }
     if(layout_editing_) {
         const auto cursor=ImGui::GetCursorScreenPos();const auto cursor_max=ImGui::GetCurrentWindow()->DC.CursorMaxPos;
+        const auto ideal_max=window->DC.IdealMaxPos;const bool cursor_was_set=window->DC.IsSetPos;
         ImGui::PushID(int(card_index_));ImGui::PushItemFlag(ImGuiItemFlags_Disabled,false);
         ImGui::SetCursorScreenPos(ImVec2(bounds.Max.x-16*panel_scale,bounds.Max.y-16*panel_scale));
         ImGui::InvisibleButton("##section-resize",ImVec2(16*panel_scale,16*panel_scale),ImGuiButtonFlags_FlattenChildren);
@@ -611,7 +619,12 @@ void OverlayPanel::end_panel_card() {
             }
         }
         if(ImGui::IsItemDeactivated()) {section_resize_=-1;save_layout();}
-        ImGui::PopItemFlag();ImGui::PopID();ImGui::SetCursorScreenPos(cursor);ImGui::GetCurrentWindow()->DC.CursorMaxPos=cursor_max;
+        ImGui::PopItemFlag();ImGui::PopID();ImGui::SetCursorScreenPos(cursor);
+        window->DC.CursorMaxPos=cursor_max;window->DC.IdealMaxPos=ideal_max;
+        // Restoring a cursor is decoration, not a content-size request. If
+        // IsSetPos leaks from this helper, End() adds trailing item spacing
+        // back into natural content and makes the resize grip enlarge cards.
+        window->DC.IsSetPos=cursor_was_set;
     }
     ImGui::EndChild();
     ImGui::PopStyleColor();
@@ -758,23 +771,51 @@ static const char* video_codec_label(std::uint32_t id) noexcept {
         return "Auto (hardware when available)";
     }
 }
+static constexpr char export_sources[] = "Camera path / Bone camera\0Player POV\0";
 void OverlayPanel::draw_panel(const EditorSnapshot& state) {
+    for(auto& rect:main_tab_rects_) rect=ImVec4();
     auto& io = ImGui::GetIO();
     const float margin =
         std::min(20.0f * panel_scale, std::min(io.DisplaySize.x, io.DisplaySize.y) * .04f);
     const bool compact = io.DisplaySize.x < 900 * panel_scale || io.DisplaySize.y < 650 * panel_scale;
-    if (compact && compact_paths_) return;
+    const bool compressed=io.DisplaySize.y<650*panel_scale;
+    if(compressed) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(4*panel_scale,3*panel_scale));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(ImGui::GetStyle().WindowPadding.x,8*panel_scale));
+    }
     const auto export_recording = editor_recording_status();
     const bool recording_locked = editor_recording_locks_cameras(export_recording.state);
     const bool editor_arranged=layout_custom_ || editor_custom_;
     const float left = compact || editor_arranged ? margin : 284 * panel_scale;
+    const float maximum_width=std::max(1.f,io.DisplaySize.x-left-margin);
+    const float desired_width=std::min(940*panel_scale,compact ? maximum_width : std::min(maximum_width,io.DisplaySize.x-500*panel_scale));
+    const char* pages[] = {"Camera###CAMERA", "Follow###FOLLOW", "Bone Picker###BONE PICKER", "Look###LOOK", "Export###EXPORT"};
+    const char* status=state.busy ? "Working" : !state.ready ? "Waiting for replay" : state.playing ? "Playing shot" : state.paused ? "Paused" : "Playing";
+    float header_width=ImGui::CalcTextSize("Deadlock Dolly").x+ImGui::CalcTextSize(status).x+30*panel_scale;
+    for(const auto* page:pages) header_width+=ImGui::CalcTextSize(page,nullptr,true).x+2*ImGui::GetStyle().FramePadding.x;
+    header_width+=ImGui::CalcTextSize("Layout").x+2*ImGui::GetStyle().FramePadding.x;
+    if(compact) header_width+=ImGui::CalcTextSize("Paths").x+2*ImGui::GetStyle().FramePadding.x;
+    header_width+=(compact ? 8.f : 7.f)*ImGui::GetStyle().ItemSpacing.x;
+    float header_available_width=desired_width;
+    if(editor_arranged && !(layout_reset_&1)) {
+        if(const auto* previous=ImGui::FindWindowByName("Deadlock Dolly")) header_available_width=previous->Size.x;
+        else if(const auto* saved=ImGui::FindWindowSettingsByID(ImHashStr("Deadlock Dolly")); saved && saved->Size.x>0)
+            header_available_width=float(saved->Size.x);
+        header_available_width=std::clamp(header_available_width,std::min(640*panel_scale,maximum_width),maximum_width);
+    }
+    const bool single_header=compressed && header_width<=header_available_width-2*ImGui::GetStyle().WindowPadding.x;
+    layout_single_header_=single_header;
+    const float header_height=std::max(ImGui::GetFrameHeight(),ImGui::GetTextLineHeight()+10*panel_scale)+
+        (single_header ? 0.f : ImGui::GetFrameHeightWithSpacing());
+    layout_main_minimum_=2*ImGui::GetStyle().WindowPadding.y+header_height+40*panel_scale+
+        ImGui::GetFrameHeightWithSpacing()+3*ImGui::GetStyle().ItemSpacing.y+14*panel_scale;
+    if(compact && compact_paths_) { if(compressed) ImGui::PopStyleVar(2); return; }
+    const float top=editor_arranged && !(layout_reset_&1) ? margin : layout_top_inset();
     const ImVec2 maximum(std::max(1.0f, io.DisplaySize.x - left - margin),
-                         std::max(1.0f, io.DisplaySize.y - lite_timeline_height() - 2 * margin - 12 * panel_scale));
-    const ImVec2 size(std::min(940 * panel_scale, compact ? maximum.x : std::min(maximum.x, io.DisplaySize.x - 500 * panel_scale)), std::min(520*panel_scale,maximum.y));
-    const auto* previous_window = ImGui::FindWindowByName("Deadlock Dolly");
-    const float previous_height = previous_window ? std::min(previous_window->Size.y, maximum.y) : size.y;
-    ImGui::SetNextWindowPos(editor_position_pending_ ? editor_position_ : ImVec2(std::max(left, (io.DisplaySize.x-size.x)*.5f),
-                                  std::max(margin,(io.DisplaySize.y-lite_timeline_height()-previous_height)*.5f)),
+                         std::max(1.0f, io.DisplaySize.y-lite_timeline_height()-
+                             (editor_arranged && !(layout_reset_&1) ? 2*margin+12*panel_scale : top+28*panel_scale)));
+    const ImVec2 size(desired_width, std::min(520*panel_scale,maximum.y));
+    ImGui::SetNextWindowPos(editor_position_pending_ ? editor_position_ : ImVec2(io.DisplaySize.x-size.x-margin,top),
                               editor_position_pending_ || !editor_arranged || (layout_reset_ & 1) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
     editor_position_pending_=false;
     // Keep all tabs at one height, and constrain older tall saved layouts.
@@ -803,27 +844,29 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                  ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z,ImGuiInputFlags_RouteAlways)))
                 editor_enqueue(EditorAction::RedoShot, 0, &request);
         }
-        ImGui::PushFont(title_font);
+        ImGui::PushFont(single_header ? panel_font : title_font);
         ImGui::TextUnformatted("Deadlock Dolly");
         ImGui::PopFont();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem)) ImGui::SetTooltip("%s",state.shot_name[0] ? state.shot_name : "Untitled shot");
         ImGui::SameLine();
         replay_badge(state);
-        if (compact) {
+        if (compact && !single_header) {
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 62 * panel_scale);
             layout_controls();
         }
-        const char* pages[] = {"Camera###CAMERA", "Follow###FOLLOW", "Bone Picker###BONE PICKER", "Look###LOOK", "Export###EXPORT"};
         for (int page = 0; page < 5; ++page) {
-            if (page) ImGui::SameLine();
+            if (page || single_header) ImGui::SameLine();
             if (page == lite_page_) ImGui::PushStyleColor(ImGuiCol_Button, panel_color(ui::SELECTED));
             if (ImGui::Button(pages[page])) lite_pending_page_ = page;
+            const auto tab_min=ImGui::GetItemRectMin(),tab_max=ImGui::GetItemRectMax();
+            main_tab_rects_[page]=ImVec4(tab_min.x,tab_min.y,tab_max.x,tab_max.y);
             if (page == lite_page_) ImGui::PopStyleColor();
         }
         if (compact) {
             ImGui::SameLine();
-            if (ImGui::Button("Paths")) compact_paths_ = true;
-        } else {
+            if (ImGui::Button("Paths")) { compact_paths_ = true; save_layout(); }
+        }
+        if(!compact || single_header) {
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 62 * panel_scale);
             layout_controls();
         }
@@ -833,26 +876,70 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                 tab_changed_at_ = ImGui::GetTime();
             }
             lite_page_ = lite_pending_page_; lite_pending_page_ = -1;
+            save_layout();
         }
         ImGui::Separator();
         ImGui::Spacing();
         // All cards share one continuous tab. Fit the presentation to the
         // available workspace; no section pager or alternate detail screens.
         const float footer_height = ImGui::GetFrameHeightWithSpacing() + 10 * panel_scale;
-        const float body_height = std::max(40 * panel_scale,
-            ImGui::GetContentRegionAvail().y - footer_height);
+        // Very small/high-DPI viewports may not have forty logical pixels
+        // left. Use the actual remainder rather than pushing the fixed
+        // Stop/Finish footer outside the window; the body remains scrollable.
+        const float body_height = std::max(1.f,ImGui::GetContentRegionAvail().y - footer_height);
         compact_controls_ = body_height < 440 * panel_scale;
         const float content_width = ImGui::GetContentRegionAvail().x;
         layout_columns_ = content_width >= 400 * panel_scale && lite_page_ >= 3 ? 3 :
                           content_width >= 460 * panel_scale ? 2 : 1;
         const float base_scale = panel_scale;
         // One workspace scale for every tab. Inline expansion never changes it.
-        const float content_scale = std::min({1.f,body_height / (320 * base_scale),content_width / (550 * base_scale)});
+        // Curves can deliberately reserve a larger bottom workspace. Keep the
+        // existing controls readable and scroll their content instead of
+        // shrinking all camera options into the remaining few pixels.
+        layout_scroll_content_=curve_view_ || (!editor_arranged && body_height<320*base_scale);
+        const float content_scale = layout_scroll_content_ ? 1.f :
+            std::min({1.f,body_height / (320 * base_scale),content_width / (550 * base_scale)});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-        if (ImGui::BeginChild("##editor-content", ImVec2(0, body_height), ImGuiChildFlags_None,
-                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        // Aligned rows can be taller than the former independent columns.
+        // Keep their final controls reachable without changing the font scale.
+        if (ImGui::BeginChild("##editor-content", ImVec2(0, body_height), ImGuiChildFlags_None)) {
             ImGui::SetWindowFontScale(content_scale);
             panel_scale *= content_scale;
+            if (lite_page_ == 4) {
+                // A full source name needs room for both its text and the
+                // combo arrow. Reflow Export before its cards are placed,
+                // including custom column weights and the tab-entry inset.
+                // Reserve the existing maximum vertical card expansion too:
+                // ImGui sizes a combo's arrow from its whole frame height.
+                const float source_width = ImGui::CalcTextSize(export_sources).x +
+                    ImGui::GetTextLineHeight() +
+                    2 * (compact_controls_ ? 2.f : 5.f) * panel_scale * 1.8f +
+                    2 * 10 * panel_scale;
+                const float minimum_card = std::ceil(source_width +
+                    (2 * 12 + 20) * panel_scale + 1.f);
+                const float gap = 12 * panel_scale;
+                const float available = ImGui::GetContentRegionAvail().x;
+                while (layout_columns_ > 1) {
+                    const float total = available - gap * (layout_columns_ - 1);
+                    const float minimum = std::min(total / layout_columns_,
+                        (layout_columns_ == 3 ? 160.f : 240.f) * panel_scale);
+                    const float flexible = std::max(0.f, total - minimum * layout_columns_);
+                    float weight = 0;
+                    for (unsigned column = 0; column < layout_columns_; ++column)
+                        weight += column_weights_[lite_page_][column];
+                    float used = 0;
+                    bool fits = true;
+                    for (unsigned column = 0; column < layout_columns_; ++column) {
+                        const float width = column + 1 == layout_columns_ ? total - used :
+                            std::floor(minimum + flexible *
+                                column_weights_[lite_page_][column] / weight + .5f);
+                        fits &= width >= minimum_card;
+                        used += width;
+                    }
+                    if (fits) break;
+                    --layout_columns_;
+                }
+            }
             layout_card_index_ = 0;
             card_origin_y_ = ImGui::GetCursorPosY();
             std::fill(std::begin(card_column_y_), std::end(card_column_y_), card_origin_y_);
@@ -897,12 +984,17 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                     if (!compact_controls_) ImGui::TextDisabled(state.attach_preview ? "Detach to step with a fixed camera."
                                                              : "Tick steps keep the camera fixed.");
                     ImGui::EndDisabled();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextDisabled("Speed");
-                    ImGui::SameLine(58 * panel_scale);
-                    ImGui::SetNextItemWidth(-1);
                     char speed_label[24]{};
                     std::snprintf(speed_label, sizeof(speed_label), "%.3g x", state.playback_speed);
+                    const float speed_width = std::max(ImGui::CalcTextSize(speed_label).x,
+                        ImGui::CalcTextSize("0.05 x").x) + ImGui::GetFrameHeight() +
+                        2 * ImGui::GetStyle().FramePadding.x;
+                    const bool inline_speed = 58 * panel_scale - ImGui::GetCursorPosX() +
+                        speed_width <= ImGui::GetContentRegionAvail().x;
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("Speed");
+                    if (inline_speed) ImGui::SameLine(58 * panel_scale);
+                    ImGui::SetNextItemWidth(-1);
                     if (ImGui::BeginCombo("##playback-speed", speed_label, ImGuiComboFlags_HeightLargest)) {
                         for (double speed : {.05, .1, .25, .5, 1.0, 2.0, 4.0}) {
                             char label[24]{};
@@ -1636,7 +1728,7 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                     int source = state.video_pov ? 1 : 0;
                     ImGui::TextUnformatted("Source");
                     ImGui::SetNextItemWidth(-1);
-                    if (ImGui::Combo("##export-source", &source, "Camera path / Bone camera\0Player POV\0"))
+                    if (ImGui::Combo("##export-source", &source, export_sources))
                         editor_enqueue(EditorAction::SetVideoSource, source);
                     const bool single_attach = state.camera_count == 1 && state.attach_selected;
                     if (state.video_pov || single_attach) {
@@ -1656,7 +1748,7 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                         }
                         if (!compact_controls_ && single_attach && !state.video_pov)
                             ImGui::TextWrapped(
-                                "Record saves an end time for this bone camera and records the attached shot. Offsets and smoothing are preserved.");
+                                "Record uses this duration for the bone camera take. Your saved camera, offsets and smoothing are preserved.");
                         else if (!compact_controls_)
                             ImGui::TextWrapped(
                                 "Select a hero with Game Follow or F9, then pause at the start. F8: return here. Record POV hides the HUD and stops after this segment.");
@@ -1926,6 +2018,7 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
             ImGui::SetTooltip("Open Deadlock's console. Customize editor shortcuts in the launcher.");
     }
     ImGui::End();
+    if(compressed) ImGui::PopStyleVar(2);
 }
 
 } // namespace dolly

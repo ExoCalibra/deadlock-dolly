@@ -1,9 +1,8 @@
-"""Editable framing graphs using the same sampler as shot playback.
+"""Editable camera graphs using the same sampler as shot playback.
 
-The aspect-ratio and rotation graphs share one timeline view, so zooming one
-zooms both. Graph edits stay local until release. Dragging changes framing
-only; camera timestamps remain untouched. This keeps a framing adjustment from
-accidentally retiming the replay or changing a camera path.
+Position, rotation and aspect share one horizontal timeline. Drag previews
+stay local until release and change only the selected value at its existing
+camera timestamp. Graph edits never retime the replay.
 """
 
 from __future__ import annotations
@@ -27,6 +26,9 @@ MUTED = _TOKEN["muted"]
 ACCENT = _TOKEN["accent"]
 ROTATION_ACCENT = _TOKEN["warn"]
 CHANNEL_LABELS = {"pitch": "Pitch", "yaw": "Yaw", "roll": "Roll"}
+# Position edits replace existing camera coordinates; they are not curve_* overrides.
+POSITION_CHANNELS = ("x", "y", "z")
+POSITION_LIMIT = 1e8  # Existing native path visualization validity limit.
 
 
 def clamp_aspect(value: float) -> float:
@@ -139,7 +141,8 @@ def sample_channel(project: Project, name: str, start: float, end: float,
             times.add(key_time)
             if interpolation == "step" and key_time > start:
                 times.add(math.nextafter(key_time, -math.inf))
-    return [(time, float(project.evaluate(time)[name])) for time in sorted(times)]
+    channel = project.camera_channel_samples(name)
+    return [(time, channel.evaluate(time)) for time in sorted(times)]
 
 
 def sample_curve(project: Project, duration: float, samples: int = 160,
@@ -642,5 +645,341 @@ class RotationCurve(_GraphViewMixin, ttk.Frame):
         value = round(channel_value(key, self.channel) + increment, 2)
         if abs(value - channel_value(key, self.channel)) > 1e-6:
             self.on_change(self.selected_index, self.channel, value)
+        self._redraw()
+        return "break"
+
+
+@dataclass(frozen=True)
+class PositionBounds(PlotBounds):
+    """World-unit mapping that also handles very large finite saved coordinates."""
+
+    def point(self, time: float, value: float) -> tuple[float, float]:
+        scale = max(abs(self.low), abs(self.high), 1.0)
+        fraction = (value / scale - self.low / scale) / (self.high / scale - self.low / scale)
+        span = self.end - self.start if self.end > self.start else 1.0
+        return (self.left + (time - self.start) / span * (self.right - self.left),
+                self.bottom - fraction * (self.bottom - self.top))
+
+    def value_at(self, y: float) -> float:
+        scale = max(abs(self.low), abs(self.high), 1.0)
+        fraction = (self.bottom - y) / (self.bottom - self.top)
+        return scale * (self.low / scale + fraction * (self.high / scale - self.low / scale))
+
+
+def position_bounds(width: float, height: float, project: Project, channel: str,
+                    view: TimelineView | None = None, samples: int = 120) -> PositionBounds:
+    """Fit the evaluated XYZ curve, including overshoot, in world units."""
+    if channel not in POSITION_CHANNELS:
+        raise ValueError("Choose X, Y or Z for the position graph")
+    total = project.duration if project.duration > 0 else 1.0
+    start, end = (view or TimelineView()).window(total)
+    values = [value for _, value in sample_channel(project, channel, start, end, samples)
+              if math.isfinite(value)]
+    values.extend(float(getattr(key, channel)) for key in project.keyframes
+                  if start <= key.time <= end)
+    low, high = (min(values), max(values)) if values else (0.0, 0.0)
+    scale = max(abs(low), abs(high), 1.0)
+    middle = (low / scale + high / scale) / 2
+    span = max(high / scale - low / scale, 20.0 / scale, 1e-12)
+    limit = float.fromhex("0x1.fffffffffffffp+1023") / scale
+    low = max(-limit, middle - span * .65) * scale
+    high = min(limit, middle + span * .65) * scale
+    return PositionBounds(62.0, 19.0, max(84.0, width - 18.0), max(46.0, height - 28.0),
+                          start, end, low, high)
+
+
+class PositionCurve(_GraphViewMixin, ttk.Frame):
+    """XYZ values at fixed camera times, using the saved path's evaluator.
+
+    A drag is a private graph preview. Only release or an explicit numeric
+    commit calls ``on_change(index, axis, value)``; opening/selecting does not
+    seek or move the game camera. Attached keys remain readable but not editable.
+    """
+
+    def __init__(self, parent, on_change, on_select, *, height=130, view=None,
+                 on_view=None, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.on_change, self.on_select, self.on_view = on_change, on_select, on_view
+        self.view = view if view is not None else TimelineView()
+        self.project = Project()
+        self.channel = "x"
+        self.selected_index = None
+        self.current_time = 0.0
+        self._enabled = True
+        self._bounds, self._points = None, []
+        self._editing_value = False
+        self._value_origin = None
+        self._clear_drag()
+        header = ttk.Frame(self)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+        header.columnconfigure(1, weight=1)
+        ttk.Label(header, text="POSITION", foreground=MUTED,
+                  font=(ui_theme.FONT_FAMILY, _FONT["tiny"])).grid(row=0, column=0, sticky="w")
+        self.channel_box = ttk.Combobox(header, values=("X", "Y", "Z"), state="readonly", width=3)
+        self.channel_box.current(0)
+        self.channel_box.grid(row=0, column=1, sticky="e", padx=(5, 8))
+        self.channel_box.bind("<<ComboboxSelected>>", self._channel_changed)
+        self.value_text = tk.StringVar(self, "")
+        self.value_entry = ttk.Entry(header, textvariable=self.value_text, width=11)
+        self.value_entry.grid(row=0, column=2, sticky="e")
+        self.value_entry.bind("<FocusIn>", self._begin_value)
+        self.value_entry.bind("<Return>", self._apply_value)
+        self.value_entry.bind("<Escape>", self._cancel_value)
+        self.value_entry.bind("<FocusOut>", self._cancel_value)
+        ttk.Label(header, text="units", foreground=MUTED,
+                  font=(ui_theme.FONT_FAMILY, _FONT["small"])).grid(row=0, column=3, padx=(4, 0))
+        self.canvas = tk.Canvas(self, background=BACKGROUND, highlightthickness=0,
+                                borderwidth=0, height=height, width=300, takefocus=True)
+        self.canvas.grid(row=1, column=0, sticky="nsew")
+        self.hint = ttk.Label(self, foreground=MUTED, font=(ui_theme.FONT_FAMILY, _FONT["small"]))
+        self.hint.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+        self.canvas.bind("<Configure>", self._schedule_redraw)
+        self.canvas.bind("<ButtonPress-1>", self._press)
+        self.canvas.bind("<B1-Motion>", self._motion)
+        self.canvas.bind("<ButtonRelease-1>", self._release)
+        self.canvas.bind("<KeyPress-Up>", self._key)
+        self.canvas.bind("<KeyPress-Down>", self._key)
+        self.canvas.bind("<KeyPress-Escape>", self._cancel)
+        self.canvas.bind("<FocusOut>", self._cancel)
+        self.bind("<Unmap>", self._cancel)
+        self._install_view_bindings()
+        self._sync_value()
+
+    def _view_duration(self):
+        return self.project.duration if self.project.duration > 0 else 1.0
+
+    def _editable(self, index=None):
+        index = self.selected_index if index is None else index
+        return (self._enabled and isinstance(index, int) and not isinstance(index, bool)
+                and 0 <= index < len(self.project.keyframes)
+                and self.project.keyframes[index].source == "free")
+
+    def _sync_value(self):
+        selected = (isinstance(self.selected_index, int) and not isinstance(self.selected_index, bool)
+                    and 0 <= self.selected_index < len(self.project.keyframes))
+        if self._editing_value and not self._value_current():
+            self._editing_value, self._value_origin = False, None
+        if not self._editing_value:
+            self.value_text.set(repr(getattr(self.project.keyframes[self.selected_index], self.channel))
+                                if selected else "")
+        state = "normal" if self._editable() else "disabled"
+        self.value_entry.configure(state=state)
+        self.channel_box.configure(state="readonly" if self._enabled else "disabled")
+        if not self._enabled:
+            message = "Pause playback to edit position"
+        elif selected and not self._editable():
+            message = "Authored free-camera position; attached keys follow their target"
+        elif not selected:
+            message = "Select a free-camera key to edit position in world units"
+        elif self._editing_value:
+            message = "Enter applies position; Escape or leaving the field cancels"
+        else:
+            message = "Drag value \u00b7 Up/Down 1 unit \u00b7 Shift 10 \u00b7 wheel zoom"
+        self.hint.configure(text=message)
+
+    def set_project(self, project: Project, selected_index=None, current_time=0.0):
+        if self._drag_index is not None and (
+                project is not self._drag_project or project != self._drag_snapshot
+                or selected_index != self._drag_index):
+            self._clear_drag()
+        self.project = project
+        self.selected_index = (selected_index if isinstance(selected_index, int)
+                               and not isinstance(selected_index, bool)
+                               and 0 <= selected_index < len(project.keyframes) else None)
+        self.current_time = max(0.0, float(current_time))
+        self._sync_value()
+        self._redraw()
+
+    def set_enabled(self, enabled):
+        enabled = bool(enabled)
+        if enabled == self._enabled:
+            return
+        self._enabled = enabled
+        if not self._enabled:
+            self._clear_drag()
+        self._sync_value()
+        self._redraw()
+
+    def set_current_time(self, current_time):
+        self.current_time = max(0.0, float(current_time))
+        self._draw_playhead()
+
+    def _after_view_change(self):
+        self._clear_drag()
+        super()._after_view_change()
+
+    def _channel_changed(self, _event=None):
+        self._clear_drag()
+        self._cancel_value()
+        index = self.channel_box.current()
+        self.channel = POSITION_CHANNELS[index] if 0 <= index < 3 else "x"
+        self._sync_value()
+        self._redraw()
+
+    def _begin_value(self, _event=None):
+        if self._editable() and not self._editing_value:
+            self._editing_value = True
+            self._value_origin = (self.project, copy.deepcopy(self.project),
+                                  self.selected_index, self.channel)
+            self._sync_value()
+
+    def _value_current(self):
+        if not self._editing_value or self._value_origin is None:
+            return False
+        project, snapshot, index, channel = self._value_origin
+        return (self._editable() and self.project is project and self.project == snapshot
+                and self.selected_index == index and self.channel == channel)
+
+    def _cancel_value(self, _event=None):
+        self._editing_value, self._value_origin = False, None
+        self._sync_value()
+        return "break"
+
+    def _apply_value(self, _event=None):
+        if not self._value_current():
+            self._cancel_value()
+            return "break"
+        try:
+            value = float(self.value_text.get())
+        except (ValueError, OverflowError):
+            value = math.nan
+        if not math.isfinite(value) or abs(value) > POSITION_LIMIT:
+            self.hint.configure(text="Enter a position between -100,000,000 and 100,000,000 world units")
+            return "break"
+        self._clear_drag()
+        self._editing_value, self._value_origin = False, None
+        index = self.selected_index
+        if value != getattr(self.project.keyframes[index], self.channel):
+            self.on_change(index, self.channel, value)
+        self._sync_value()
+        self._redraw()
+        return "break"
+
+    def _redraw(self, _event=None):
+        canvas = self.canvas
+        canvas.delete("all")
+        width, height = canvas.winfo_width(), canvas.winfo_height()
+        if width < 100 or height < 55:
+            return
+        project = self._preview or self.project
+        bounds = self._drag_bounds or position_bounds(width, height, project, self.channel, self.view)
+        self._bounds = bounds
+        for index in range(4):
+            y = bounds.bottom - (bounds.bottom - bounds.top) * index / 3
+            value = bounds.value_at(y)
+            canvas.create_line(bounds.left, y, bounds.right, y, fill=GRID)
+            canvas.create_text(bounds.left - 8, y, text=f"{value:.4g}", anchor="e",
+                               fill=MUTED, font=(ui_theme.FONT_FAMILY, _FONT["tiny"]))
+        for index in range(5):
+            timestamp = bounds.start + (bounds.end - bounds.start) * index / 4
+            x, _ = bounds.point(timestamp, bounds.low)
+            canvas.create_line(x, bounds.top, x, bounds.bottom, fill=GRID)
+            canvas.create_text(x, bounds.bottom + 13, text=f"{timestamp:g}s", fill=MUTED,
+                               font=(ui_theme.FONT_FAMILY, _FONT["tiny"]))
+        canvas.create_text(bounds.left, 7, text=f"{self.channel.upper()} \u00b7 WORLD UNITS", anchor="w",
+                           fill=MUTED, font=(ui_theme.FONT_FAMILY, _FONT["tiny"]))
+        samples = sample_channel(project, self.channel, bounds.start, bounds.end,
+                                 max(40, int(width / 4)))
+        coordinates = [coordinate for time, value in samples if math.isfinite(value)
+                       for coordinate in bounds.point(time, value)]
+        if len(coordinates) >= 4:
+            canvas.create_line(*coordinates, fill=ACCENT, width=2)
+        self._points = [bounds.point(key.time, getattr(key, self.channel)) for key in project.keyframes]
+        for index, (x, y) in enumerate(self._points):
+            if not bounds.left <= x <= bounds.right:
+                continue
+            radius = 6 if index == self.selected_index else 4
+            fill = TEXT if index == self.selected_index else ACCENT
+            if project.keyframes[index].source != "free":
+                fill = BACKGROUND
+            canvas.create_oval(x - radius, y - radius, x + radius, y + radius,
+                               fill=fill, outline=ACCENT, width=2)
+        self._draw_playhead()
+
+    def _draw_playhead(self):
+        self.canvas.delete("playhead")
+        if self._bounds is not None and self._bounds.start <= self.current_time <= self._bounds.end:
+            x, _ = self._bounds.point(self.current_time, self._bounds.low)
+            self.canvas.create_line(x, self._bounds.top, x, self._bounds.bottom, fill=MUTED,
+                                    width=1, dash=(2, 3), tags="playhead")
+
+    def _press(self, event):
+        if not self._enabled:
+            return
+        self.canvas.focus_set()
+        self._cancel_value()
+        self._clear_drag()
+        index = hit_key(self._points, event.x, event.y)
+        if index is None:
+            return
+        self.selected_index = index
+        self.on_select(index)
+        self._sync_value()
+        if self._editable(index):
+            self._drag_index, self._drag_bounds = index, self._bounds
+            self._drag_project = self.project
+            self._drag_snapshot = copy.deepcopy(self.project)
+            self._drag_channel = self.channel
+            self._drag_press_y = event.y
+            self._drag_origin_value = getattr(self.project.keyframes[index], self.channel)
+        self._redraw()
+
+    def _gesture_current(self):
+        return (self._drag_index is not None and self._editable(self._drag_index)
+                and self.project is self._drag_project and self.project == self._drag_snapshot
+                and self.channel == self._drag_channel and self.selected_index == self._drag_index)
+
+    def _motion(self, event):
+        if not self._gesture_current() or self._drag_bounds is None:
+            self._cancel()
+            return
+        delta = self._drag_bounds.value_at(event.y) - self._drag_bounds.value_at(self._drag_press_y)
+        value = self._drag_origin_value + delta
+        if not math.isfinite(value) or abs(value) > POSITION_LIMIT:
+            self._cancel()
+            return
+        self._drag_value = value
+        self._preview = copy.copy(self.project)
+        self._preview.keyframes = list(self.project.keyframes)
+        self._preview.keyframes[self._drag_index] = replace(
+            self.project.keyframes[self._drag_index], **{self.channel: self._drag_value})
+        self._redraw()
+
+    def _release(self, _event=None):
+        valid = self._gesture_current()
+        index, value, channel = self._drag_index, self._drag_value, self._drag_channel
+        self._clear_drag()
+        try:
+            if valid and value is not None and value != getattr(self.project.keyframes[index], channel):
+                self.on_change(index, channel, value)
+        finally:
+            self._sync_value()
+            self._redraw()
+
+    def _clear_drag(self):
+        self._drag_index = self._drag_value = self._drag_bounds = self._preview = None
+        self._drag_project = self._drag_snapshot = self._drag_channel = None
+        self._drag_press_y = self._drag_origin_value = None
+
+    def _cancel(self, _event=None):
+        self._clear_drag()
+        self._cancel_value()
+        if hasattr(self, "canvas"):
+            self._redraw()
+        return "break"
+
+    def _key(self, event):
+        if not self._editable() or self._drag_index is not None:
+            return "break"
+        increment = 10.0 if event.state & 1 else 1.0
+        if event.keysym == "Down":
+            increment = -increment
+        value = getattr(self.project.keyframes[self.selected_index], self.channel) + increment
+        if (math.isfinite(value) and abs(value) <= POSITION_LIMIT
+                and value != getattr(self.project.keyframes[self.selected_index], self.channel)):
+            self.on_change(self.selected_index, self.channel, value)
+        self._sync_value()
         self._redraw()
         return "break"

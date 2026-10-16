@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from time import monotonic
+import secrets
 
 
 @dataclass
@@ -26,6 +27,9 @@ class ShotHistory:
         return ShotState(deepcopy(project), selected_time, size)
 
     def reset(self, project):
+        # An opened/replaced shot needs a distinct identity even if its revision
+        # and key timestamps match a previously opened project.
+        self.session_id = secrets.randbits(64) or 1
         self._states = [self._state(project)]
         self._index = 0
         self._saved = deepcopy(project)

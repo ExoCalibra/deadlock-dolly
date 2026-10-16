@@ -69,12 +69,15 @@ void close_mapping() noexcept {
 }
 
 bool header_bytes(const VisualizationHeader& h, std::size_t& bytes) noexcept {
-    if (std::memcmp(h.magic, "DLYVIS01", 8) || h.abi != kVisualizationAbi || h.enabled > 1 ||
+    if (std::memcmp(h.magic, "DLYVIS01", 8) || (h.abi < 1 || h.abi > kVisualizationAbi) || h.enabled > 1 ||
         h.camera_count > NativePath::max_camera_keys || h.path_bytes > NativePath::max_bytes ||
         h.sequence == 0 || (h.sequence & 1))
         return false;
     const std::size_t times = std::size_t(h.camera_count) * sizeof(double);
-    bytes = kVisualizationHeaderBytes + times + std::size_t(h.path_bytes);
+    const std::size_t metadata = h.abi == 3 ? h.key_metadata_bytes : 0;
+    if (h.abi == 3 && (metadata != std::size_t(h.camera_count) * 64 ||
+                       (h.flags & ~1u) || h.reserved)) return false;
+    bytes = kVisualizationHeaderBytes + times + metadata + std::size_t(h.path_bytes);
     return bytes <= kVisualizationMappingBytes;
 }
 

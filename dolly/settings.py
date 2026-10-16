@@ -126,7 +126,7 @@ def validate_reshade_binding(binding, bindings):
 def _migrate_reshade_binding(bindings, warnings):
     binding = DEFAULT_RESHADE_BINDING
     if binding in bindings.values():
-        warnings.append("Your existing F11 binding was kept. ReShade menu is unbound; choose a key in Keybinds.")
+        warnings.append("Your existing F11 binding was kept. ReShade menu is unbound; choose a key in Controls.")
         return None
     return binding
 
@@ -173,7 +173,7 @@ def _decode_settings(data: bytes) -> AppSettings:
         for name, binding in bindings.items():
             if name != "capture" and binding == bindings["capture"]:
                 bindings[name] = None
-                warnings.append(f"Your existing capture key {capture.label} was kept. {ACTION_LABELS[name]} is unbound because its new default conflicts; choose a replacement in Keybinds.")
+                warnings.append(f"Your existing capture key {capture.label} was kept. {ACTION_LABELS[name]} is unbound because its new default conflicts; choose a replacement in Controls.")
         reshade_binding = _migrate_reshade_binding(bindings, warnings)
         return AppSettings(capture_binding=capture, action_bindings=bindings,
                            reshade_binding=reshade_binding, migration_warnings=tuple(warnings))

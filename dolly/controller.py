@@ -243,6 +243,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         self._follow_mode_original = None
         self._follow_mode_session = None
         self._follow_settings = None
+        self._participant_follow = None
         self._console_open = None
         self._native_last_status = {}
         self._native_handoff_details = {}
@@ -317,7 +318,10 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             publish = getattr(bridge, "configure_shader_loading", None)
             if callable(publish):
                 try:
-                    publish(changes["startup_stage"] in ("waiting_preload_intro", "preloading"))
+                    # Panorama owns the loading card. Clear only the duplicate
+                    # native presentation bit through its normal publisher;
+                    # controller readiness and preload stages remain intact.
+                    publish(False)
                 except (RuntimeError, ValueError, OSError):
                     LOG.debug("Startup notice unavailable", exc_info=True)
         LOG.info(message)
@@ -336,6 +340,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         state["health_panel_restore_pending"] = self._game_ui_restore.get(OWN_HEALTH_HUD) == 0
         state["native_dof_unavailable"] = bool(self._native_dof_unavailable)
         state["game_follow_active"] = self._follow_active
+        participant = self._participant_follow_current() if self._alive() else None
+        state["participant_follow_player_id"] = participant['identifier'] if participant is not None else None
         state["game_running"] = self._alive()
         if self._session and not self._alive():
             exit_code = self._session.process.poll()
@@ -1371,7 +1377,167 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             self._require_demo(require_tick=False)
         return self._follow_monitor.sample()
 
-    def start_selected_game_follow(self, settings, player):
+    def _participant_follow_current(self):
+        intent = self._participant_follow
+        if intent is not None and (self._session is not intent['session'] or self._demo != intent['demo']):
+            self._participant_follow = None
+            return None
+        return intent
+
+    def _check_participant_follow(self, intent):
+        if self._participant_follow_current() is not intent:
+            raise RuntimeError('Player following changed or was cancelled.')
+        self._check_position_cancelled()
+
+    def follow_replay_player(self, identifier, *, _intent=None):
+        """Follow a replay participant, resolving the current pawn each time."""
+        from .follow_camera import FollowSettings
+        from .follow_target import FollowTargetMonitor
+        from .replay_player_focus import resolve_participant, ReplayPlayerUnavailable
+        if type(identifier) is not int or not 0 < identifier < 0x7fff:
+            raise ValueError('Choose a valid replay player.')
+        with self._op_lock:
+            self._require_quiet_session('following a replay player')
+            bridge = self._native_bridge()
+            require_capability = getattr(bridge, 'require_capability', None)
+            if callable(require_capability):
+                require_capability('follow')
+            before = bridge.status()
+            self._require_native_demo(before, allow_idle=True)
+            if not before.get('paused') or self._recorder_active():
+                raise RuntimeError('Pause the replay and finish recording before selecting a player.')
+            held_pose = self._native_pose(before, 'applied_pose' if self._native_active else 'original_pose')
+            previous = self._participant_follow_current()
+            if _intent is None:
+                self._stop_event.clear()
+                settings = self._follow_settings if isinstance(self._follow_settings, FollowSettings) else FollowSettings()
+                intent = dict(session=self._session, demo=self._demo, identifier=identifier, settings=settings)
+                self._participant_follow = intent
+            else:
+                intent = _intent
+                self._check_participant_follow(intent)
+                if identifier != intent['identifier']:
+                    raise RuntimeError('The requested player differs from the pending Follow target.')
+            evidence = dict(player_id=identifier, tick=before.get('tick'), stage='participant_lookup')
+            monitor = None
+            handed_off = False
+            try:
+                monitor = FollowTargetMonitor(self._session)
+                for attempt in range(6):
+                    self._check_participant_follow(intent)
+                    current = bridge.status()
+                    self._require_native_demo(current, allow_idle=True)
+                    if not current.get('paused') or current.get('tick') != before.get('tick') or self._recorder_active():
+                        raise RuntimeError('The replay changed while selecting a Follow player.')
+                    roster = bridge.editor_roster()
+                    try:
+                        selected = resolve_participant(monitor, identifier, roster, evidence=evidence)
+                        rows = [row for row in (roster or {}).get('players', [])
+                                if row.get('handle') == selected['handle']
+                                and row.get('entity_index') == selected['entity_index']
+                                and row.get('model_path') and row.get('model')]
+                        if len(rows) != 1:
+                            raise ReplayPlayerUnavailable('This player has no current hero in the roster. Camera unchanged.')
+                        player = dict(rows[0])
+                        break
+                    except ReplayPlayerUnavailable:
+                        self._check_participant_follow(intent)
+                        if attempt == 5:
+                            raise
+                        self._stop_event.wait(.04)
+                self._check_participant_follow(intent)
+                # Resolve again at the write boundary, including the fallback's
+                # full serial/controller backlink checks. A changed pawn is a
+                # new request, not permission to retarget an old one.
+                if resolve_participant(monitor, identifier, bridge.editor_roster(), evidence=evidence) != selected:
+                    raise RuntimeError('The selected player changed before Follow handoff.')
+                self._check_participant_follow(intent)
+                current = bridge.status()
+                self._require_native_demo(current, allow_idle=True)
+                if (not current.get('paused') or current.get('tick') != before.get('tick')
+                        or self._recorder_active()):
+                    raise RuntimeError('The replay changed before Follow handoff.')
+                handed_off = True
+                self.start_selected_game_follow(intent['settings'], player, _participant=intent)
+                self._check_participant_follow(intent)
+                self._message('Following the selected player. Seeking keeps this target; Fly camera leaves Follow.')
+                LOG.info('Replay participant follow completed: %s', evidence)
+            except BaseException as exc:
+                LOG.info('Replay participant follow unavailable or rejected: %s', evidence, exc_info=True)
+                if handed_off and self._session is intent['session']:
+                    try:
+                        self.stop_game_follow()
+                    except (RuntimeError, ValueError, OSError):
+                        LOG.exception('Could not finish restoring the cancelled participant Follow rig')
+                if self._participant_follow is intent:
+                    if not handed_off and isinstance(exc, ReplayPlayerUnavailable):
+                        if _intent is None:
+                            self._hold_participant_view(intent, held_pose, str(exc))
+                            return self.status()['message']
+                        # A seek may wait for this participant at a later tick.
+                    else:
+                        self._participant_follow = (previous if not handed_off and self._follow_active
+                                                    and previous is not None else None)
+                        if self._participant_follow is previous and previous is not None:
+                            raise RuntimeError(str(exc) + ' The previous player is still being followed; '
+                                               'select another player or choose Fly camera.') from exc
+                raise
+            finally:
+                if monitor is not None:
+                    monitor.close()
+
+    def _hold_participant_view(self, intent, pose, reason):
+        try:
+            self._check_participant_follow(intent)
+            self.enter_native_flight(pose=pose, owner='panel', cancelled=self._paused_cancelled,
+                                     _participant=intent)
+            self._check_participant_follow(intent)
+        except BaseException:
+            if self._participant_follow is intent:
+                self._participant_follow = None
+            if self._session is intent['session'] and self._native_active:
+                try:
+                    self._release_native_camera()
+                except (RuntimeError, ValueError, OSError):
+                    LOG.exception('Could not release the cancelled participant Follow hold')
+            raise
+        self._message(reason + ' Follow is waiting for this player; '
+                      'seek to an available tick or choose Fly camera.')
+
+    def _resume_participant_follow(self, intent, pose):
+        from .replay_player_focus import ReplayPlayerUnavailable
+        self._check_participant_follow(intent)
+        try:
+            self.follow_replay_player(intent['identifier'], _intent=intent)
+            return True
+        except ReplayPlayerUnavailable as exc:
+            # Keep the requested participant for a later seek, but never write
+            # an absent/stale pawn or keep chasing the previous player's rig.
+            self._hold_participant_view(intent, pose, str(exc))
+            return False
+
+    def _seek_replay_camera(self, target, pose, *, owner='panel', **seek_options):
+        intent = self._participant_follow_current()
+        try:
+            if intent is not None:
+                self._halt(native_action='release', _preserve_participant=True)
+            else:
+                self._halt(native_action='release')
+            self._invalidate_paused_camera()
+            self._check_paused_cancelled()
+            self._stop_event.clear()
+            settled = self._seek_tick(target, **seek_options)
+            self._check_position_cancelled()
+            if intent is None:
+                frame = self.enter_native_flight(pose=pose, owner=owner)
+                return settled, None, frame
+            following = self._resume_participant_follow(intent, pose)
+            return settled, following, None
+        except BaseException:
+            self._participant_follow = None
+            raise
+
+    def start_selected_game_follow(self, settings, player, *, _participant=None):
         """Select a fresh roster pawn through the stock command, then verify it."""
         from .follow_target import FollowTargetMonitor
         from .replay_camera import ReplayCameraMonitor
@@ -1389,6 +1555,13 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             if self._recorder_active() or not bridge.status().get('paused'):
                 raise RuntimeError('Pause the replay before selecting a Follow hero.')
             def current_player():
+                if _participant is not None:
+                    self._check_participant_follow(_participant)
+                    state = bridge.status()
+                    self._require_native_demo(state, allow_idle=True)
+                    if (not state.get('paused') or state.get('tick') != expected_tick
+                            or self._recorder_active()):
+                        raise RuntimeError('The replay changed while confirming the Follow player.')
                 roster = bridge.editor_roster()
                 matches = [row for row in (roster or {}).get('players', [])
                            if all(row.get(key) == player.get(key)
@@ -1400,12 +1573,19 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                         or not 0 < player['entity_index'] < 0x7fff
                         or player['handle'] & 0x7fff != player['entity_index']):
                     raise RuntimeError('The selected Follow hero is no longer in the current roster.')
+            expected_tick = bridge.status().get('tick')
             current_player()
             monitor = FollowTargetMonitor(self._session)
             try:
                 monitor.sample()
                 monitor.sample_selection_context()
-                self.toggle_game_ui(True)  # Restores any old rig before releasing the pose writer.
+                if _participant is not None:
+                    self._check_participant_follow(_participant)
+                    self.toggle_game_ui(True, _preserve_participant=True)
+                    self._stop_event.clear()  # The owned handoff stopped its old writer.
+                    self._check_participant_follow(_participant)
+                else:
+                    self.toggle_game_ui(True)  # Restores any old rig before releasing the pose writer.
                 # Programmatic hero selection must not flash the replay UI:
                 # release the pose writer, then hide the game HUD/cursor while
                 # keeping the stock camera context that Follow needs.
@@ -1422,6 +1602,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._verify_game_ui_values({'citadel_spectator_mode': 2})
                 deadline = time.monotonic() + 5
                 while True:
+                    if _participant is not None:
+                        self._check_participant_follow(_participant)
                     self._require_demo(require_tick=False)
                     current_player()
                     selected = monitor.sample_target(require_chase=False)
@@ -1436,6 +1618,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     if time.monotonic() >= deadline:
                         raise RuntimeError('The game did not confirm the selected Follow hero camera.')
                     time.sleep(.05)
+                if _participant is not None:
+                    current_player()
                 self.start_game_follow(settings)
                 try:
                     current_player()
@@ -1511,9 +1695,11 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self.stop_game_follow()
                 raise
 
-    def stop_game_follow(self):
+    def stop_game_follow(self, *, _preserve_participant=False):
         """Restore the complete rig before another camera can take ownership."""
         with self._op_lock:
+            if not _preserve_participant:
+                self._participant_follow = None
             self._follow_active = False
             transaction = self._follow_transaction
             if transaction is not None:
@@ -1890,7 +2076,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
     def _sample_paused_native_view(self):
         """Desktop capture takes its pose and timestamp from one rendered frame."""
         if not self._native_manual:
-            self._halt(native_action="native_hold")
+            self._halt(native_action="native_hold", preserve_follow=(
+                self._follow_active and self._participant_follow_current() is not None))
         self._require_demo(require_tick=False)
         bridge = self._native_bridge()
         before = bridge.status()
@@ -1941,7 +2128,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             # to the input event; later render updates cannot mutate this key.
             # An authored path still stops before becoming an editing capture.
             if not self._native_manual and pause:
-                self._halt(native_action="native_hold")
+                self._halt(native_action="native_hold", preserve_follow=(
+                    self._follow_active and self._participant_follow_current() is not None))
             if pause:
                 self._request("demo_pause")
                 current = self._wait_paused_native_view(bridge, current["frame_count"])
@@ -2778,7 +2966,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         bridge = self._native_bridge()
         return bridge is not None and callable(getattr(bridge, "start_flight", None))
 
-    def enter_native_flight(self, pose=None, *, cancelled=None, owner="flight"):
+    def enter_native_flight(self, pose=None, *, cancelled=None, owner="flight", _participant=None):
         """Let the in-game view callback own input and manual camera movement.
 
         The replay keeps its current pause state: a paused replay gives the
@@ -2789,7 +2977,14 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             if not self._supports_native_flight():
                 raise RuntimeError("Native free camera requires the matching native editor build.")
             self._require_probe()
-            self._halt(native_action="native_hold")
+            if _participant is not None:
+                self._check_participant_follow(_participant)
+                self._halt(native_action="native_hold", _preserve_participant=True)
+                self._check_paused_cancelled()
+                self._stop_event.clear()
+                self._check_participant_follow(_participant)
+            else:
+                self._halt(native_action="native_hold")
             self._require_demo()
             restoration_error = self._restore_playback_settings()
             if restoration_error:
@@ -2816,6 +3011,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 armed = bridge.start_flight(self._demo.name, pose=pose, cancelled=cancelled,
                                             playback=None, **options)
                 self._native_active = self._native_manual = True
+                if _participant is not None:
+                    self._check_participant_follow(_participant)
                 self._detach_spectator_view()
             except Exception:
                 if armed is not None:
@@ -2852,6 +3049,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             self._set_paused_pose(frame, int(current["tick"]))
             self._paused_details.update(source="native_render_input", runtime_verified_in_Deadlock=False)
             self._stop_event.clear()
+            if _participant is not None:
+                self._check_participant_follow(_participant)
             self._game_ui_visible = False
             self._message("Free camera ready. Use the in-game movement controls; F7 opens the console." if playback
                           else "Paused camera ready. Use the in-game movement controls; F7 opens the console.",
@@ -3244,16 +3443,16 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     target = max(current, int(index.ticks[-1]))
             self._check_position_cancelled()
             if target != current:
-                self._halt(native_action="release")
-                self._invalidate_paused_camera()
-                self._stop_event.clear()
-                settled = self._seek_tick(target, allow_start_boundary=True)
+                settled, following, _frame = self._seek_replay_camera(target, pose, allow_start_boundary=True)
                 target = int(settled["tick"])
-                self.enter_native_flight(pose=pose, owner="panel")
+            else:
+                following = True if self._participant_follow_current() is not None and self._follow_active else None
             bridge.configure_editor(owner="panel")
             moved = target - current
             detail = " (nearest recorded tick)" if target != requested else ""
-            self._message(f"Replay tick {target}: moved {moved:+d} ticks{detail}. Camera held fixed.")
+            if following is not False:
+                camera = 'Following the selected player.' if following else 'Camera held fixed.'
+                self._message(f"Replay tick {target}: moved {moved:+d} ticks{detail}. " + camera)
             return {"tick": target, "requested_tick": requested, "moved_ticks": moved}
 
     def seek_replay_tick(self, target):
@@ -3272,13 +3471,11 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             view = bridge.status()
             self._require_native_demo(view, allow_idle=True)
             pose = self._native_pose(view, "applied_pose" if self._native_active else "original_pose")
-            self._halt(native_action="release")
-            self._invalidate_paused_camera()
-            self._stop_event.clear()
-            settled = self._seek_tick(int(target), allow_start_boundary=True)
-            self.enter_native_flight(pose=pose, owner="panel")
+            settled, following, _frame = self._seek_replay_camera(int(target), pose, allow_start_boundary=True)
             bridge.configure_editor(owner="panel")
-            self._message(f"Replay tick {settled['tick']}. Camera held fixed.")
+            if following is not False:
+                self._message(f"Replay tick {settled['tick']}. " +
+                              ('Following the selected player.' if following else 'Camera held fixed.'))
             return settled
 
     def seek_relative(self, seconds, tick_rate=None):
@@ -3306,12 +3503,10 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 target = min(target, max(0, int(info["total_ticks"]) - 1))
             # A held native view must release before a seek, including replay
             # rewind. Preserve its visual pose explicitly for the return trip.
-            self._halt(native_action="release")
-            self._invalidate_paused_camera()
-            self._stop_event.clear()
-            self._seek_tick(target)
-            result = self.enter_native_flight(pose=pose)
-            self._message("Replay paused at the new time; camera position retained.")
+            _settled, _following, frame = self._seek_replay_camera(target, pose, owner='flight')
+            result = frame if frame is not None else self.status()
+            if self._participant_follow_current() is None:
+                self._message("Replay paused at the new time; camera position retained.")
             return result
 
     def apply(self, project, shot_time):
@@ -4085,6 +4280,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         previous_frame = None
         first_frame = None
         previous_tick = None
+        previous_paused = None
+        paused_clock = None
         previous_phase = start
         previous_poll = began
         expected_effects = len(project.evaluate(start)["cvars"])
@@ -4099,6 +4296,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._require_connection()
                 now = time.perf_counter()
                 status = bridge.status()
+                if self._stop_event.is_set():
+                    break
                 self._native_last_status = status
                 self._require_native_demo(status)
                 if status.get("state") not in ("playing", "completed"):
@@ -4107,6 +4306,27 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 if not math.isfinite(phase) or phase < previous_phase - 1e-5 or phase > project.duration + 1e-5:
                     raise RuntimeError("Native camera time changed unexpectedly. Playback stopped before following that seek.")
                 tick = int(status["tick"])
+                frame_count = int(status["frame_count"])
+                if previous_frame is not None and frame_count < previous_frame:
+                    raise RuntimeError("The native view callback restarted unexpectedly. Relaunch the editing session.")
+                if frame_count != previous_frame:
+                    last_fresh = now
+                    if first_frame is None:
+                        first_frame = frame_count
+                elif now - last_fresh > 3:
+                    raise RuntimeError("The native camera stopped receiving rendered views. Restore the game window and export diagnostics.")
+                if now >= next_identity:
+                    observed_demo = self._require_demo(require_tick=not frozen)
+                    if (paused_clock is not None and status.get("paused") is True
+                            and int(observed_demo["tick"]) != paused_clock[1]):
+                        raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
+                    next_identity = time.perf_counter() + .5
+                evaluated = project.evaluate(min(project.duration, max(0, phase)))
+                if status.get("effect_count", 0) != expected_effects:
+                    raise RuntimeError("Native effect count does not match the shot. Rebuild the complete Windows package.")
+                if expected_effects and (status.get("effect_error", 0) or
+                        abs(float(status.get("effect_phase", -1)) - phase) > 1e-9):
+                    raise RuntimeError("Native effects did not acknowledge the camera phase. Playback stopped.")
                 if previous_tick is not None:
                     # A live speed change updates the demo timescale; keep the
                     # jump bound scaled to the speed actually playing.
@@ -4119,28 +4339,42 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                             live_speed = float(candidate)
                     allowed = max(128, project.tick_rate * 2,
                                   max(0, now - previous_poll) * project.tick_rate * live_speed * 2 + 4)
+                    if status.get("paused") is not True:
+                        paused_clock = None
+                    elif paused_clock is not None:
+                        # Never learn an anomalous rendered tick as the replay
+                        # clock. Cache the independently confirmed paused tick;
+                        # a changed render sample must reconfirm that same tick.
+                        if tick != paused_clock[0]:
+                            replay_tick = int(self._require_demo()["tick"])
+                            if replay_tick != paused_clock[1]:
+                                raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
+                            paused_clock = (tick, replay_tick)
+                        tick = paused_clock[1]
                     if tick < previous_tick or tick - previous_tick > allowed:
-                        raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
+                        # The native path holds its phase during pause. Confirm
+                        # replay continuity independently at that boundary only;
+                        # active jumps, Frozen, stale views and effect failures
+                        # retain their ordinary guards.
+                        continuous_pause = False
+                        if not frozen and previous_paused is False and status.get("paused") is True:
+                            replay_tick = int(self._require_demo()["tick"])
+                            continuous_pause = previous_tick <= replay_tick <= previous_tick + allowed
+                            check = dict(previous_tick=previous_tick, native_tick=tick,
+                                         replay_tick=replay_tick, phase=phase,
+                                         previous_phase=previous_phase, allowed_ticks=allowed,
+                                         accepted=continuous_pause)
+                            if self._playback_details is not None:
+                                checks = self._playback_details.setdefault("pause_clock_checks", [])
+                                checks.append(check)
+                                del checks[:-8]
+                            if continuous_pause:
+                                paused_clock = (tick, replay_tick)
+                                tick = replay_tick
+                        if not continuous_pause:
+                            raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
                     if frozen and tick != previous_tick:
                         raise RuntimeError("The scene resumed during native Frozen preview. Camera playback stopped.")
-                frame_count = int(status["frame_count"])
-                if previous_frame is not None and frame_count < previous_frame:
-                    raise RuntimeError("The native view callback restarted unexpectedly. Relaunch the editing session.")
-                if frame_count != previous_frame:
-                    last_fresh = now
-                    if first_frame is None:
-                        first_frame = frame_count
-                elif now - last_fresh > 3:
-                    raise RuntimeError("The native camera stopped receiving rendered views. Restore the game window and export diagnostics.")
-                if now >= next_identity:
-                    self._require_demo(require_tick=not frozen)
-                    next_identity = time.perf_counter() + .5
-                evaluated = project.evaluate(min(project.duration, max(0, phase)))
-                if status.get("effect_count", 0) != expected_effects:
-                    raise RuntimeError("Native effect count does not match the shot. Rebuild the complete Windows package.")
-                if expected_effects and (status.get("effect_error", 0) or
-                        abs(float(status.get("effect_phase", -1)) - phase) > 1e-9):
-                    raise RuntimeError("Native effects did not acknowledge the camera phase. Playback stopped.")
                 pose = self._native_pose(status)
                 pose.update(time=phase, cvars=dict(evaluated.get("cvars", {})))
                 self._applied_pose = pose
@@ -4148,7 +4382,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 elapsed = max(0, time.perf_counter() - began)
                 with self._state_lock:
                     self._state.update(time=phase, tick=tick)
-                    self._playback_samples.append(dict(status, time=phase, camera_backend="native"))
+                    self._playback_samples.append(dict(status, time=phase, monitor_tick=tick,
+                                                       camera_backend="native"))
                     self._playback_metrics = {"camera_backend": "native", "updates": updates,
                         "monitor_updates_per_second": rate, "elapsed_seconds": elapsed,
                         "rendered_view_updates": frame_count - first_frame,
@@ -4163,6 +4398,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     finished = True
                     break
                 previous_frame, previous_tick, previous_phase, previous_poll = frame_count, tick, phase, now
+                previous_paused = bool(status.get("paused"))
                 waiter.wait(max(0, 1 / rate - (time.perf_counter() - now)), self._stop_event)
         except Exception as exc:
             LOG.exception("Native camera playback stopped")
@@ -4376,10 +4612,13 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             elif finished:
                 self._message("Shot finished. Replay paused and playback settings restored; Stop restores lens/cvar values.", playing=False)
 
-    def _halt(self, *, native_action="handoff", preserve_follow=False):
+    def _halt(self, *, native_action="handoff", preserve_follow=False, _preserve_participant=False):
         self._restore_replay_hud()
         if not preserve_follow:
-            self.stop_game_follow()
+            if _preserve_participant:
+                self.stop_game_follow(_preserve_participant=True)
+            else:
+                self.stop_game_follow()
         self._stop_event.set()
         worker = self._thread
         if worker and worker is not threading.current_thread():
@@ -4499,6 +4738,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         and deployment cleanup are owned by ``close()``; here every in-console
         step is best-effort so the editor can always return to a clean state.
         """
+        self._participant_follow = None
         self._recording_replay = None
         self._recording_warmup = None
         self._recording_pending = False
@@ -4559,6 +4799,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             self._follow_session = self._follow_demo = None
             self._follow_mode_original = self._follow_mode_session = None
             self._follow_active = self._native_active = self._native_manual = False
+            self._participant_follow = None
             self._game_ui_visible = self._pov_active = False
             self._recording_replay = None
             self._recording_warmup = None

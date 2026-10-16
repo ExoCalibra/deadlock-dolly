@@ -83,13 +83,13 @@ class AutoStartupTests(unittest.TestCase):
         self.assertNotIn('cvar_unhide', self.console.requests)
         self.assertFalse(any(command.startswith('playdemo ') for command in self.console.sent))
 
-    def test_shader_notice_tracks_preload_stage_only(self):
+    def test_panorama_notice_keeps_native_duplicate_clear_without_changing_stages(self):
         self.controller._session = self.session
         self.bridge.configure_shader_loading = MagicMock()
-        self.controller._message('loading', startup_stage='preloading')
-        self.bridge.configure_shader_loading.assert_called_with(True)
-        self.controller._message('ready', startup_stage='preload_ready')
-        self.bridge.configure_shader_loading.assert_called_with(False)
+        for stage in ('waiting_preload_intro', 'preloading', 'preload_ready', 'editing_ready', 'failed'):
+            self.controller._message(stage, startup_stage=stage)
+            self.bridge.configure_shader_loading.assert_called_with(False)
+            self.assertEqual(self.controller.status()['startup_stage'], stage)
 
     def test_one_click_waits_for_hideout_then_unlocks_once_before_replay(self):
         result = self.start()

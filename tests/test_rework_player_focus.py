@@ -30,7 +30,8 @@ class ReworkPlayerFocusTests(unittest.TestCase):
                 pass
             self.assertEqual(operation.call_count, 1, 'Player selection must reach the verified camera handoff')
             operation.call_args.args[2]()
-            focus.assert_called_once_with(app.controller, 2, {})
+            app.controller.follow_replay_player.assert_called_once_with(2)
+            focus.assert_not_called()  # The one-shot freecam API remains separate.
 
     def test_missing_world_or_fractional_player_cannot_move_camera(self):
         app = self.app()
@@ -622,7 +623,7 @@ class ReworkPlayerFocusTests(unittest.TestCase):
         def publish():
             configure(app)
             app.closed = True  # Stop the GUI poll after exercising its actual done/callback path.
-        with patch('dolly.replay_player_focus.focus_replay_player',side_effect=ReplayPlayerUnavailable(notice)):
+        with patch.object(app.controller, 'follow_replay_player', side_effect=ReplayPlayerUnavailable(notice)):
             _dispatch(app,{'action':'focus_replay_player','value':1},bridge,publish=publish)
             app.operations.jobs.put(None)
             app.operations.run(lambda:'error')
@@ -640,7 +641,7 @@ class ReworkPlayerFocusTests(unittest.TestCase):
         def publish():
             configure(app)
             app.closed=True
-        with patch('dolly.replay_player_focus.focus_replay_player',side_effect=ReplayPlayerDeferred(notice)):
+        with patch.object(app.controller, 'follow_replay_player', side_effect=ReplayPlayerDeferred(notice)):
             _dispatch(app,{'action':'focus_replay_player','value':1},bridge,publish=publish)
             app.operations.jobs.put(None)
             app.operations.run(lambda:'error')
@@ -649,32 +650,40 @@ class ReworkPlayerFocusTests(unittest.TestCase):
         self.assertEqual(bridge.configure_editor.call_args.kwargs['message'],notice)
         app._error.assert_not_called()
 
-    def test_real_dispatch_worker_exhaustion_is_quiet_without_camera_writes(self):
+    def test_real_dispatch_worker_absence_keeps_pending_participant_without_target_writes(self):
         from dolly.gui import DollyApp
+        from tests import test_follow_controller
         app, publication_bridge = self.dispatch_queue_fixture()
-        c, console, bridge, monitor, values, _, offsets, pawn, node=self.live_fixture()
-        self.mutate_pose_field(monitor,values,offsets,pawn,node,'player_origin',persistent=True)
+        fixture = SimpleNamespace(addCleanup=self.addCleanup)
+        test_follow_controller.FollowControllerTests.setUp(fixture)
+        c, console, bridge = fixture.c, fixture.console, fixture.bridge
         app.controller=c
-        app.attach_fields=offsets
-        original=list(bridge.pose)
+        bridge.editor_roster = Mock(return_value={'players': []})
+        monitor = Mock()
+        original=list(bridge.original)
         published=[]
         def publish():
             published.append(app.status_text.get())
             app.closed=True
-        with patch('dolly.replay_player_focus.FollowTargetMonitor',return_value=monitor):
+        with patch('dolly.follow_target.FollowTargetMonitor',return_value=monitor), \
+                patch('dolly.replay_player_focus.resolve_participant', side_effect=ReplayPlayerUnavailable('no hero')) as resolve:
             _dispatch(app,{'action':'focus_replay_player','value':1},bridge,publish=publish)
             app.operations.jobs.put(None)
             app.operations.run(lambda:'error')
         DollyApp._poll_once(app)
-        self.assertIn('still settling',app.status_text.get())
+        self.assertIn('Follow is waiting',app.status_text.get())
         self.assertEqual(published,[app.status_text.get()])
-        self.assert_camera_unchanged(console,bridge,original)
+        self.assertEqual(bridge.pose, original)
+        self.assertEqual(c._participant_follow['identifier'], 1)
+        self.assertFalse(c._follow_active)
+        self.assertFalse(any(event.startswith('spec_target ') for event in console.events))
+        self.assertEqual(resolve.call_count, 6)
         app._error.assert_not_called()
         self.assertIsNone(getattr(c,'_freecam_player_evidence',None))
 
     def test_unexpected_focus_error_still_reaches_real_operation_error_channel(self):
         app, bridge = self.dispatch_queue_fixture()
-        with patch('dolly.replay_player_focus.focus_replay_player',side_effect=RuntimeError('Integrity check failed')):
+        with patch.object(app.controller, 'follow_replay_player', side_effect=RuntimeError('Integrity check failed')):
             _dispatch(app,{'action':'focus_replay_player','value':1},bridge,publish=lambda:None)
             app.operations.jobs.put(None)
             with self.assertLogs('dolly',level='ERROR'):

@@ -10,6 +10,8 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from dolly import launcher
+from dolly import panorama_assets
+from test_panorama_assets import write_vpk
 
 
 GAMEINFO = '''\ufeff"GameInfo"
@@ -830,7 +832,59 @@ class LauncherTests(unittest.TestCase):
         (native_root / "build_info.json").write_text(json.dumps({
             "abi": launcher.NATIVE_ABI, "sha256": hashlib.sha256(binary).hexdigest()}))
         editing_fixture(self.paths, self.folder)
+        stock = {name: ('reviewed stock UI fixture ' + name).encode('ascii')
+                 for name in panorama_assets.STOCK_UI_SHA256}
+        write_vpk(self.paths.citadel_dir / 'pak01_dir.vpk', stock)
+        stock_pins = {name: hashlib.sha256(payload).hexdigest() for name, payload in stock.items()}
+        stock_patch = patch.object(panorama_assets, 'STOCK_UI_SHA256', stock_pins)
+        stock_patch.start(); self.addCleanup(stock_patch.stop)
         return native_root, pins, dll
+
+    def test_native_ui_refusal_preserves_old_recovery_before_any_new_deployment(self):
+        native_root, pins, _ = self._native_fixture()
+        original = self.paths.gameinfo.read_bytes()
+        self.paths.gameinfo.write_bytes(b'pending old owned session')
+        index = self.paths.citadel_dir / 'pak01_dir.vpk'
+        damaged = bytearray(index.read_bytes()); damaged[-1] ^= 1; index.write_bytes(damaged)
+        def recover(root):
+            self.assertEqual(root, self.paths.root)
+            self.paths.gameinfo.write_bytes(original)
+        with patch.object(launcher, '_check_runtime'), \
+             patch.object(launcher, 'running_processes', return_value={'steam.exe'}), \
+             patch.object(launcher, 'NATIVE_ROOT', native_root), \
+             patch.object(launcher, 'NATIVE_GAME_SHA256', pins), \
+             patch.object(launcher, 'PACKAGE_ROOT', self.package), \
+             patch.object(launcher, 'recover_pending', side_effect=recover) as recovered, \
+             patch.object(launcher.NativeBridge, 'create') as create, \
+             patch.object(launcher.subprocess, 'Popen') as popen:
+            with self.assertRaisesRegex(launcher.LaunchError, 'shader loading UI'):
+                launcher.launch(self.paths.root, native=True)
+        recovered.assert_called_once_with(self.paths.root)
+        create.assert_not_called(); popen.assert_not_called()
+        self.assertEqual(self.paths.gameinfo.read_bytes(), original)
+        self.assertFalse(self.package.exists())
+        self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
+
+    def test_native_bundled_ui_hash_refused_before_new_bridge_or_mount(self):
+        native_root, pins, _ = self._native_fixture()
+        original = self.paths.gameinfo.read_bytes()
+        bad_pack = self.folder / 'bad-ui.vpk'; bad_pack.write_bytes(b'changed UI pack')
+        with patch.object(launcher, '_check_runtime'), \
+             patch.object(launcher, 'running_processes', return_value={'steam.exe'}), \
+             patch.object(launcher, 'NATIVE_ROOT', native_root), \
+             patch.object(launcher, 'NATIVE_GAME_SHA256', pins), \
+             patch.object(launcher, 'PACKAGE_ROOT', self.package), \
+             patch.object(launcher, 'UI_OVERRIDE_PACK', bad_pack), \
+             patch.object(launcher, 'recover_pending') as recovered, \
+             patch.object(launcher.NativeBridge, 'create') as create, \
+             patch.object(launcher.subprocess, 'Popen') as popen:
+            with self.assertRaisesRegex(launcher.LaunchError, 'UI override pack failed its SHA-256'):
+                launcher.launch(self.paths.root, native=True)
+        recovered.assert_called_once_with(self.paths.root)
+        create.assert_not_called(); popen.assert_not_called()
+        self.assertEqual(self.paths.gameinfo.read_bytes(), original)
+        self.assertFalse(self.package.exists())
+        self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
 
     def test_native_game_hash_mismatch_is_refused_before_any_recovery_or_mount(self):
         native_root, pins, dll = self._native_fixture()

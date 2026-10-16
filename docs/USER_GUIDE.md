@@ -1,19 +1,18 @@
 # Deadlock Dolly — user guide
 
 Dolly connects its desktop editor and in-game panel to the same camera project.
-Version 0.6.10-alpha corrects Game Follow and health-panel verification on
-Deadlock build 6745, including the pending-restoration error that could block
-shot playback. It keeps the native camera,
-automatic replay loading, Game Follow and health verification, particles such
-as confetti, the cvar unlocker and game audio, all reviewed for that build.
-Game Follow attaches for every hero, including the new familiar/clone pawn
-family. Selecting a hero no longer carries their death grayscale or red damage
-vignette into Dolly's camera, and F9 still returns the replay timeline
-reliably. Player-layer/depth capture remains disabled on this build until its
-scene producer is re-certified. The in-game camera list and shared Undo/Redo,
-captured lens settings, and the assertion-dialog and native depth-of-field
-safeguards are unchanged. Real-time game audio, fixed-step silent layers and
-optional ReShade are available.
+Version [0.6.52-alpha](RELEASE_NOTES_0.6.52-alpha.md) brings matte UI polish,
+shared Position / Rotation / Framing curves, a dedicated desktop Controls page
+and a timeline that fits its controls near the bottom of the game screen.
+The [in-game editor guide](UI_REWORK.md) covers curve editing, player selection
+and saved layouts, building on the UI rework contributed by
+[@tbhtho](https://github.com/tbhtho).
+
+Native camera playback, Game Follow, Bone Picker, real-time game audio,
+fixed-step silent layers and optional ReShade remain available. Players/Depth
+exports retain their documented alpha limitations. See the current
+[compatibility notes](../README.md#compatibility); a Deadlock update can require
+a matching Dolly update.
 
 [Video and ReShade setup](VIDEO_AND_RESHADE.md) covers output settings, F11,
 installation and current limits. Windows/Deadlock validation is recorded in
@@ -27,14 +26,15 @@ installation and current limits. Windows/Deadlock validation is recorded in
 2. Extract the **whole Windows ZIP** into a fresh writable folder. Keep
    `Dolly.exe` and `_internal` together. The portable package includes Python.
    Source users need Python 3.10+ with Tcl/Tk and a built native helper; see
-   [BUILDING.md](BUILDING.md). Do not mix ABI 3 with earlier helper/editor files.
+   [BUILDING.md](BUILDING.md). The current native helper uses ABI 4; keep it with
+   the matching editor files from the same build.
 3. Open Steam and sign in. Use **DirectX 11** in Deadlock's graphics settings.
 4. Open **Dolly.exe**. In **Replay → Launch setup**, choose `game/bin/win64/deadlock.exe` and a
    local, decompressed `.dem`. Older `citadel.exe` installations and Steam
    libraries on another drive are accepted; do not rename game files.
 5. Alternatively, open **Replay**, refresh the replay list and select
    a file. It lists local `.dem` files; it does not download or decompress demos.
-   Review **Settings → Controls & keybinds** before launch if you want a mouse-button capture key.
+   Review **Controls** before launch if you want a mouse-button capture key.
 6. Click **Open replay in Dolly**. Dolly connects to the game process it launched,
    waits for rendered pre-replay scene and unlocker-registration evidence,
    executes `cvar_unhide` once, and requires both completion summaries.
@@ -121,7 +121,7 @@ older workflow without the Stage 1 DX11 panel/native flight.
 During **flight**, Dolly owns movement and mouse look. **F8** releases mouse
 look for clicking its panel. The panel provides capture/replace, saved-camera
 selection, replay/path playback and movement-speed controls. Change movement speed and sensitivity from desktop
-**Settings → Controls & keybinds**; the in-game speed control updates the same saved setting.
+**Controls**; the in-game speed control updates the same saved setting.
 
 **F7** gives the console input ownership before the open command is dispatched,
 so typing cannot create keys or move the camera. F7 or Escape closes it and
@@ -137,12 +137,14 @@ recovery path instead of repeatedly issuing camera actions.
 
 ## Customize bindings
 
-Open **Settings → Controls & keybinds**, select an action and choose a keyboard key, Mouse4, Mouse5
-or MiddleMouse. You can use **Press a key / mouse button…**, optional modifiers,
-or **Unbound**. Click **Save binding**. Exact duplicate bindings are rejected;
-F7 is always reserved for console access. Movement modifier keys can be assigned
-in their movement context. Mouse software that translates a side button to a
-keyboard key should use that resulting key in Dolly.
+Open **Controls** in the desktop sidebar. Search by action or shortcut, click its shortcut button,
+and press a key or mouse button with any modifiers. Review the result and choose **Save shortcut**.
+Conflicts name the other action and leave both shortcuts unchanged. **Clear** unbinds one action;
+**Reset** restores its default. **Reset all shortcuts** restores the defaults after confirmation.
+Escape cancels recording; **Use Escape as the shortcut** lets you assign Escape itself
+(hold any modifiers when clicking it). Movement actions also accept a modifier key by itself.
+Mouse 4 and Mouse 5 are captured while this window has focus. F7 stays reserved for the console.
+Mouse software that translates a side button to a keyboard key should use that resulting key in Dolly.
 
 Bindings, movement speed and sensitivity are saved in
 `%APPDATA%/DeadlockDolly/settings.json`. No manual configuration editing is
@@ -159,7 +161,7 @@ legacy Console workflow; it is disabled during native editing.
 The **In-game capture** switch is on the **Replay** page beside
 **Open replay in Dolly**, so it can be turned on without enabling the Full
 editor; the same switch is also on the Camera toolbar. Set its shortcut in
-**Settings → Controls & keybinds**.
+**Controls**.
 
 ## Switch and move cameras while paused
 
@@ -272,8 +274,11 @@ inspect an animation while keeping the current camera fixed. The panel stays
 open and shows the actual replay tick. Some recordings omit intermediate ticks;
 Dolly chooses the nearest recorded tick in the requested direction and reports
 the actual movement. Seek here follows the shot camera; tick steps hold your
-current view. Detach an active player-camera preview before fixed-camera tick
-stepping. Desktop replay library and launch controls remain under Replay.
+current view. When following a participant selected on the Replay timeline,
+replay seeks and tick steps resolve that player's current hero and keep following.
+Use **Fly camera** to return to a fixed view. Detach an active player-camera
+preview before fixed-camera tick stepping. Desktop replay library and launch
+controls remain under Replay.
 
 To replace the current camera path without leaving the game, choose **Reset
 camera path** in the Camera card, then **Reset here**. Dolly captures the current
@@ -440,11 +445,11 @@ this version so you can distinguish the current window from an old one.
 
 **Replay** combines replay selection, one-click startup and shot file actions.
 **Export** contains destination, output passes, capture quality and recording.
-**Settings** contains saved paths, controls/keybinds, ReShade and troubleshooting.
+**Controls** contains shortcuts, camera sensitivity and movement speed.
+**Settings** contains saved paths, ReShade and troubleshooting.
 
-The prominent **Full editor** switch adds **Camera**, **Look** and the shot
-timeline. It remembers the layout without changing the shot or session. Cameras
-keeps the list, framing graph, selected-camera controls and XY path overview.
+**Camera**, **Look** and the shot timeline are always available. Camera keeps
+the list, framing graph, selected-camera controls and XY path overview.
 Look contains DOF and numeric camera-variable tracks. Coordinate entry and
 advanced timing remain in **More → Coordinates / timing…**. Playback options
 hold preview, seek, update rate and renderer relief; Console smoothing appears

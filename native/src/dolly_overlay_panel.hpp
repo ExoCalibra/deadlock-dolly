@@ -5,6 +5,7 @@
 #include "dolly_visualization.hpp"
 #include "imgui.h"
 #include <memory>
+#include <string>
 struct ImGuiSettingsHandler;
 
 namespace dolly {
@@ -22,6 +23,9 @@ public:
     bool lite_mode() const noexcept { return lite_mode_; }
     void style_panel();
     void initialize_layout();
+    // Commit completed layout gestures after Render, never through ImGui's
+    // truncate-in-place file writer. force also flushes pending shutdown state.
+    bool flush_layout(bool force = false) noexcept;
     void load_panel_fonts(float scale);
     // Font pointers borrow the current ImGui atlas. Guide preference and widget
     // edit caches deliberately survive device recreation, as they did before.
@@ -39,7 +43,13 @@ public:
     bool lite_campaths_visible(const EditorSnapshot& state) const noexcept;
     void draw_lite_campaths(const EditorSnapshot& state);
     void draw_lite_timeline(const EditorSnapshot& state);
+    void cancel_position_graph() noexcept;
     void draw_panel(const EditorSnapshot& state);
+    ImVec4 main_tab_rect(unsigned page) const noexcept { return page<5 ? main_tab_rects_[page] : ImVec4(); }
+    ImVec4 main_card_heights(unsigned index) const noexcept {
+        return index<4 ? ImVec4(section_heights_[lite_page_][index],section_draw_heights_[index],
+                                section_minimum_[lite_page_][index],section_extra_draw_[index]) : ImVec4();
+    }
     void draw_bone_picker(const EditorSnapshot& state, const PickerPortrait& portrait);
     // The Object Picker is its own mode and its own right-side window, entered
     // only by its bindable key. It needs no GPU resource (proxy wireframes).
@@ -55,6 +65,36 @@ public:
     std::uint64_t timeline_drags() const noexcept { return timeline_drags_; }
     float timeline_view_start() const noexcept { return timeline_view_start_; }
     float timeline_view_end() const noexcept { return timeline_view_end_; }
+    unsigned timeline_mode() const noexcept { return curve_view_ ? 2u : lite_campath_timeline_ ? 1u : 0u; }
+    ImVec2 position_graph_selected_point() const noexcept { return position_graph_selected_point_; }
+    int curve_group() const noexcept { return curve_group_; }
+    bool curve_compare() const noexcept { return curve_compare_; }
+    unsigned curve_lane_count() const noexcept { return curve_lane_count_; }
+    double curve_view_start() const noexcept { return curve_view_start_; }
+    double curve_view_end() const noexcept { return curve_view_end_; }
+    bool curve_editing() const noexcept { return position_graph_dragging_ || position_value_editing_; }
+    std::uint32_t curve_before_revision() const noexcept { return curve_before_ ? curve_before_->project_revision() : 0; }
+    std::uint64_t curve_before_session() const noexcept { return curve_before_ ? curve_before_->session_id() : 0; }
+    ImVec4 curve_plot_rect(unsigned channel) const noexcept { return channel < 7 ? curve_plot_rects_[channel] : ImVec4(); }
+    ImVec4 curve_value_rect() const noexcept { return curve_value_rect_; }
+    ImVec4 curve_frame_all_rect() const noexcept { return curve_frame_all_rect_; }
+    ImVec4 curve_axis_rect(unsigned channel) const noexcept { return channel<7 ? curve_axis_rects_[channel] : ImVec4(); }
+    ImVec4 curve_graphs_rect() const noexcept { return curve_graphs_rect_; }
+    bool curve_group_controls_visible() const noexcept { return curve_group_controls_visible_; }
+    bool curve_lane_compact_axes(unsigned group) const noexcept { return group<3 && curve_lane_compact_axes_[group]; }
+    ImVec2 curve_selected_point(unsigned channel) const noexcept { return channel < 7 ? curve_selected_points_[channel] : ImVec2(); }
+    ImVec2 curve_draft_point() const noexcept { return curve_draft_point_; }
+    bool curve_draft_outside() const noexcept { return curve_draft_outside_; }
+    int curve_snapped_neighbor() const noexcept { return curve_snapped_neighbor_; }
+    double curve_draft_value() const noexcept { return position_graph_draft_; }
+    double curve_scale_low(unsigned channel) const noexcept { return channel<7 ? curve_scales_[channel].low : 0; }
+    double curve_scale_high(unsigned channel) const noexcept { return channel<7 ? curve_scales_[channel].high : 0; }
+    ImVec2 curve_before_selected_point(unsigned channel) const noexcept { return channel < 7 ? curve_before_points_[channel] : ImVec2(); }
+    double curve_before_display_offset(unsigned channel) const noexcept { return channel < 7 ? curve_before_offsets_[channel] : 0; }
+    double curve_before_value(unsigned channel, unsigned index) const noexcept {
+        return curve_before_ && channel < 7 && index < curve_before_->graph_keys().size()
+            ? curve_before_->graph_keys()[index].authored_pose[channel] : 0;
+    }
 
 private:
     bool layout_editing_ = false, reduced_motion_ = false, classic_layout_ = false, layout_custom_ = false;
@@ -69,7 +109,10 @@ private:
     unsigned section_columns_[4]{}, card_index_ = 0;
     int section_column_pref_[5][4]={{-1,-1,-1,-1},{-1,-1,-1,-1},{-1,-1,-1,-1},{-1,-1,-1,-1},{-1,-1,-1,-1}};
     float column_weights_[5][3]={{1,1,1},{1,1,1},{1,1,1},{1,1,1},{1,1,1}};
-    float section_minimum_[5][4]{}, section_extra_draw_[4]{}, section_widths_[4]{}, column_widths_[3]{}, column_x_[3]{};
+    // Natural content measurements never include the padding used to align a
+    // visual row. Only an explicit resize changes section_minimum_.
+    float section_minimum_[5][4]{}, section_extra_draw_[4]{}, section_draw_heights_[4]{};
+    float section_widths_[4]{}, column_widths_[3]{}, column_x_[3]{};
     ImVec2 section_canvas_{}, section_ghost_{};
     const char* section_names_[4]{};
     bool section_ghost_active_ = false;
@@ -98,12 +141,22 @@ private:
     double camera_pending_at_ = -10;
     bool have_camera_total_ = false, cinematic_preparing_ = false;
     std::uint32_t cinematic_revision_ = 0, cinematic_token_ = 0;
-    char layout_file_[512]{};
+    std::wstring layout_file_;
+    std::string layout_last_saved_;
+    bool layout_save_requested_ = false;
+    bool layout_save_failed_ = false;
+    double layout_save_retry_at_ = 0;
     void layout_controls();
     void panel_handle(const char* label, bool editor = false);
     void constrain_panel();
     float motion_progress(double started, double duration = .22) const;
     float lite_timeline_height() const;
+    bool lite_timeline_compact(float width) const;
+    float layout_top_inset() const;
+    float layout_main_minimum_ = 200.f;
+    bool layout_scroll_content_ = false;
+    bool layout_single_header_ = false;
+    ImVec4 main_tab_rects_[5]{};
     static void* read_layout_open(ImGuiContext*, ImGuiSettingsHandler*, const char*);
     static void read_layout_line(ImGuiContext*, ImGuiSettingsHandler*, void*, const char*);
     static void write_layout(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer*);
@@ -134,6 +187,42 @@ private:
     double bank_anchor_time_ = 0;
     bool pause_capture_pending_value_ = false;
     std::uint64_t pause_capture_pending_until_ = 0;
+    bool position_graph_dragging_ = false;
+    bool position_value_editing_ = false, position_graph_escape_ = false;
+    int position_graph_axis_ = 0;
+    std::uint32_t position_graph_revision_ = 0, position_graph_index_ = 0;
+    double position_graph_time_ = 0, position_graph_original_ = 0, position_graph_draft_ = 0;
+    float position_graph_mouse_y_ = 0, position_graph_units_per_pixel_ = 1;
+    ImVec2 position_graph_selected_point_{};
+    bool curve_view_ = false, curve_compare_ = false, curve_show_before_ = false;
+    bool curve_fit_pending_ = true, curve_resize_pending_ = false, curve_panning_ = false;
+    int curve_group_ = 0, curve_axes_[3]{0, 4, 6};
+    unsigned curve_lanes_ = 3, curve_lane_count_ = 1;
+    std::uint64_t curve_session_ = 0, curve_edit_session_ = 0;
+    double curve_view_start_ = 0, curve_view_end_ = 1, curve_duration_seen_ = -1, curve_start_seen_ = 0;
+    std::size_t curve_key_count_seen_ = 0;
+    double curve_pan_mouse_ = 0, curve_pan_start_ = 0, curve_pan_end_ = 1;
+    double curve_angle_seed_[2]{}, curve_before_offsets_[7]{};
+    bool curve_angle_seeded_ = false, curve_angles_unwrapped_ = false;
+    struct CurveScale { double low = 0, high = 1; bool fitted = false; std::uint32_t revision = 0; };
+    CurveScale curve_scales_[7]{};
+    ImVec4 curve_plot_rects_[7]{};
+    ImVec4 curve_value_rect_{};
+    ImVec4 curve_frame_all_rect_{};
+    ImVec4 curve_axis_rects_[7]{}, curve_graphs_rect_{};
+    bool curve_group_controls_visible_ = true, curve_lane_compact_axes_[3]{};
+    bool curve_value_pending_ = false, curve_frame_after_value_ = false;
+    std::uint32_t curve_value_pending_revision_ = 0;
+    std::uint64_t curve_value_pending_session_ = 0;
+    double curve_value_pending_until_ = 0;
+    ImVec2 curve_selected_points_[7]{};
+    ImVec2 curve_draft_point_{};
+    bool curve_draft_outside_ = false;
+    int curve_snapped_neighbor_ = -1;
+    ImVec2 curve_before_points_[7]{};
+    std::shared_ptr<const VisualizationPath> curve_before_;
+    void draw_curve_workspace(const EditorSnapshot& state, const EditorCameraList& list);
+    bool draw_timeline_modes();
     unsigned layout_card_index_ = 0;
     int replay_player_filter_ = -1;
     static void roster_label(const EditorRosterEntry& entry, char* out, std::size_t capacity);

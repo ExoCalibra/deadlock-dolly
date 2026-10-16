@@ -34,55 +34,50 @@ class DesktopLayoutTests(unittest.TestCase):
             self.root.tk.call("after", "cancel", timer)
         self.root.destroy()
 
-    def test_startup_keeps_export_folder_and_binds_explicit_edits(self):
-        path = Path(self.app.video_path.get())
-        self.assertEqual(path.parent, self.export_folder)
-        self.assertEqual(path.suffix, '.mp4')
-        self.assertFalse(self.export_folder.exists())
-        self.assertTrue(self.app.video_path_entry.bind('<FocusOut>'))
-        self.assertTrue(self.app.video_path_entry.bind('<Return>'))
-
-    def test_layout_switch_preserves_shot_and_export_settings(self):
+    def test_old_reduced_preference_does_not_hide_pages_or_change_shot(self):
+        from tkinter import ttk
         app = self.app
+        self.assertFalse(app.app_settings.full_editor)
         app.project.keyframes = [Keyframe(0, 1, 2, 3, 4, 5, 6)]
         app.dirty = True
         app.video_layer_players.set(True)
         before = copy.deepcopy(app.project)
-        with patch("dolly.gui.save_settings") as save:
-            app.full_editor.set(True)
-            app._toggle_full_editor()
-            self.assertTrue(save.call_args.args[0].full_editor)
-            app.notebook.select(app.camera_tab)
-            app.full_editor.set(False)
-            app._toggle_full_editor()
+        app.notebook.select(app.camera_tab)
+        for busy in (False, True):
+            app.busy = busy
+            app.full_editor.set(False)  # An older internal caller cannot hide tools.
+            with patch("dolly.gui.save_settings") as save:
+                app._toggle_full_editor()
+            save.assert_not_called()
+            self.assertTrue(app.full_editor.get())
+            self.assertEqual(app.notebook.select(), str(app.camera_tab))
         self.assertEqual(app.project, before)
         self.assertTrue(app.dirty)
         self.assertTrue(app.video_layer_players.get())
-        self.assertEqual(app.notebook.select(), str(app.setup_tab))
-        self.assertEqual(app.notebook.tab(app.camera_tab, "state"), "hidden")
-        self.assertEqual(app.notebook.tab(app.cvar_tab, "state"), "hidden")
-        self.assertFalse(app.app_settings.full_editor)
+        self.assertEqual(app.notebook.tab(app.camera_tab, "state"), "normal")
+        self.assertEqual(app.notebook.tab(app.cvar_tab, "state"), "normal")
+        self.assertEqual(len(app.navigation), 6)
+        def children(parent):
+            for child in parent.winfo_children():
+                yield child
+                yield from children(child)
+        self.assertFalse([widget for widget in children(self.root)
+                          if isinstance(widget, ttk.Checkbutton) and widget.cget("text") == "Full editor"])
+        self.assertFalse(app.app_settings.full_editor, "Opening the editor must not rewrite preferences.")
 
-    def test_keybind_shortcut_opens_settings_without_full_editor(self):
+    def test_controls_shortcut_keeps_all_pages_available(self):
         self.app._show_keybinds("reshade")
-        self.assertEqual(self.app.notebook.select(), str(self.app.settings_tab))
-        self.assertTrue(self.app.controls_disclosure.opened)
-        self.assertEqual(self.app.bindings_tree.selection(), ("reshade",))
-        self.assertFalse(self.app.full_editor.get())
+        self.assertEqual(self.app.notebook.select(), str(self.app.controls_tab))
+        self.assertEqual(self.app.controls_view.search.get(), "")
+        self.assertIn("reshade", self.app.controls_view.binding_buttons)
+        self.assertTrue(self.app.full_editor.get())
 
-    def test_simple_startup_stays_in_library(self):
+    def test_editing_start_opens_camera_without_requiring_a_mode_switch(self):
         self.app.notebook.select(self.app.setup_tab)
         with patch("dolly.gui.editor_session.configure"):
             self.app._editing_started(None)
-        self.assertEqual(self.app.notebook.select(), str(self.app.setup_tab))
-
-    def test_busy_layout_switch_does_not_overwrite_pending_preferences(self):
-        self.app.busy = True
-        self.app.full_editor.set(True)
-        with patch("dolly.gui.save_settings") as save:
-            self.app._toggle_full_editor()
-        save.assert_not_called()
-        self.assertFalse(self.app.full_editor.get())
+        self.assertEqual(self.app.notebook.select(), str(self.app.camera_tab))
+        self.assertEqual(self.app.notebook.tab(self.app.setup_tab, "state"), "normal")
 
     def test_mouse_wheel_scrolls_page_without_changing_closed_option(self):
         self.root.deiconify(); self.root.geometry("1000x700")

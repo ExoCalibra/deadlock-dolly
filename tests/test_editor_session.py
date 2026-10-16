@@ -998,21 +998,25 @@ class EditorSessionTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in self.bridge.acknowledge_editor_event.call_args_list], [1, 2])
 
     def test_path_guides_publish_only_when_camera_shape_or_selection_changes(self):
+        from dolly.editor_publication import visualization_session
         self.app.native_editor_active = True
         self.app.project.keyframes = [Keyframe(0, 1, 2, 3, 4, 5, 6), Keyframe(1, 7, 8, 9, 10, 11, 12)]
         session.configure(self.app)
-        self.bridge.publish_visualization.assert_called_once_with(self.app.project, enabled=True, selected_camera=0)
+        shot_session = visualization_session(self.app)
+        self.assertGreater(shot_session, 0)
+        self.bridge.publish_visualization.assert_called_once_with(self.app.project, enabled=True, selected_camera=0, revision=0, session_id=shot_session)
         self.app.shot_time = .5
         self.app.speed.set(".1")
         session.configure(self.app)
         self.bridge.publish_visualization.assert_called_once()
+        self.assertEqual(visualization_session(self.app), shot_session)
         # Mutable camera objects must not mutate the cached comparison too.
         self.app.project.keyframes[0].z += 10
         session.configure(self.app)
         self.assertEqual(self.bridge.publish_visualization.call_count, 2)
         self.app._selection_index = lambda _: 1
         session.configure(self.app)
-        self.bridge.publish_visualization.assert_called_with(self.app.project, enabled=True, selected_camera=1)
+        self.bridge.publish_visualization.assert_called_with(self.app.project, enabled=True, selected_camera=1, revision=0, session_id=shot_session)
         self.app.project.rotation_mode = "unwrapped"
         session.configure(self.app)
         self.assertEqual(self.bridge.publish_visualization.call_count, 4)
@@ -1032,6 +1036,7 @@ class EditorSessionTests(unittest.TestCase):
         self.app._error.assert_not_called()
 
     def test_clear_and_new_bridge_refresh_guides_without_changing_input_owner(self):
+        from dolly.editor_publication import visualization_session
         self.app.native_editor_active = True
         self.app.project.keyframes = [Keyframe(0, 1, 2, 3, 4, 5, 6)]
         session.configure(self.app)
@@ -1041,10 +1046,11 @@ class EditorSessionTests(unittest.TestCase):
         replacement = Mock()
         self.controller._native_bridge.return_value = replacement
         session.configure(self.app)
-        replacement.publish_visualization.assert_called_once_with(self.app.project, enabled=True, selected_camera=0)
+        shot_session = visualization_session(self.app)
+        replacement.publish_visualization.assert_called_once_with(self.app.project, enabled=True, selected_camera=0, revision=0, session_id=shot_session)
         self.controller.status.return_value["connected"] = False
         session.configure(self.app)
-        replacement.publish_visualization.assert_called_with(self.app.project, enabled=False, selected_camera=0)
+        replacement.publish_visualization.assert_called_with(self.app.project, enabled=False, selected_camera=0, revision=0, session_id=shot_session)
         self.assertNotIn("owner", replacement.configure_editor.call_args.kwargs)
 
     def test_attach_fields_are_published_once_per_bridge(self):
