@@ -46,7 +46,7 @@ class VisualizationTransportTests(unittest.TestCase):
     def packet(self):
         memory = self.maps[1][1]
         header = wire.HEADER.unpack_from(memory)
-        size = wire.HEADER_BYTES + header[5] * 8 + header[6]
+        size = wire.HEADER_BYTES + header[5] * 8 + header[11] + header[6]
         return bytes(memory[:size])
 
     def test_mapping_is_lazy_private_and_does_not_write_camera_control(self):
@@ -84,6 +84,13 @@ class VisualizationTransportTests(unittest.TestCase):
         self.assertTrue(all(value == 3 for value in observations))
         self.assertEqual(self.packet(), wire.build_visualization(self.project, sequence=4))
         viewer.observe = None
+
+    def test_authoring_revision_reaches_optional_mapping_without_camera_writes(self):
+        main = bytes(self.maps[0][1])
+        self.assertTrue(self.bridge.publish_visualization(self.project, revision=17, session_id=0xFEDCBA9876543210))
+        self.assertEqual(wire.HEADER.unpack_from(self.packet())[9], 17)
+        self.assertEqual(wire.HEADER.unpack_from(self.packet())[10], 0xFEDCBA9876543210)
+        self.assertEqual(bytes(self.maps[0][1]), main)
 
     def test_selection_and_disable_publish_revisions_without_new_mapping(self):
         self.assertTrue(self.bridge.publish_visualization(self.project))

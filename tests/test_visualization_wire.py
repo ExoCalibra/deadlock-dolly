@@ -11,7 +11,7 @@ import unittest
 
 from dolly.path import Keyframe, Project
 from dolly.visualization_wire import (
-    ABI, HEADER, HEADER_BYTES, MAGIC, MAPPING_BYTES, MAX_MARKERS, MAX_SAMPLES,
+    ABI, HEADER, HEADER_BYTES, KEY_METADATA, MAGIC, MAPPING_BYTES, MAX_MARKERS, MAX_SAMPLES,
     build_visualization,
 )
 
@@ -31,9 +31,9 @@ class VisualizationWireTests(unittest.TestCase):
         header = HEADER.unpack_from(blob)
         self.assertEqual(HEADER_BYTES, 64)
         self.assertEqual(header[:6], (MAGIC, 24, ABI, 1, 1, 3))
-        self.assertEqual(header[7:], (2048, 64))
+        self.assertEqual(header[7:], (2048, 64, 0, 0, 3 * KEY_METADATA.size, 0, 0))
         self.assertEqual(struct.unpack_from("<3d", blob, 64), (0, 1, 2))
-        self.assertEqual(blob[88:], compile_project(project))
+        self.assertEqual(blob[88 + 3 * KEY_METADATA.size:], compile_project(project))
         self.assertEqual(project.to_dict(), original)
 
     def test_clearing_and_size_limits(self):
@@ -63,6 +63,36 @@ class VisualizationWireTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_visualization(bad)
 
+    def test_shot_revision_is_separate_from_transport_sequence_and_path_bytes(self):
+        project = shot()
+        first = build_visualization(project, sequence=20, revision=7)
+        second = build_visualization(project, sequence=22, revision=8)
+        self.assertEqual(HEADER.unpack_from(first)[9], 7)
+        self.assertEqual(HEADER.unpack_from(second)[9], 8)
+        self.assertEqual(first[64:], second[64:])
+        self.assertEqual(HEADER.unpack_from(build_visualization(None, revision=9))[9], 9)
+        for revision in (-1, 0x100000000, True, 1.5, math.nan, "1"):
+            with self.subTest(revision=revision), self.assertRaises(ValueError):
+                build_visualization(project, revision=revision)
+
+
+    def test_metadata_preserves_authored_angles_source_and_session(self):
+        project = shot()
+        project.keyframes[1].yaw = 359
+        project.keyframes[1].curve_yaw = 721
+        project.keyframes[1].lens_scale = .875
+        blob = build_visualization(project, session_id=0xF123456789ABCDEF, revision=17)
+        header = HEADER.unpack_from(blob)
+        self.assertEqual(header[10:14], (0xF123456789ABCDEF, 192, 0, 0))
+        values = KEY_METADATA.unpack_from(blob, 64 + 24 + 64)
+        self.assertEqual(values[:7], (100, 10, 30, 10, 721, 0, 16 / 9))
+        self.assertEqual(values[7:], (0, 0))
+        project.rotation_mode = "unwrapped"
+        self.assertEqual(HEADER.unpack_from(build_visualization(project))[12], 1)
+        for session in (-1, 1 << 64, True, .5, math.nan, "1"):
+            with self.subTest(session=session), self.assertRaises(ValueError):
+                build_visualization(project, session_id=session)
+
 
 @unittest.skipUnless(shutil.which("g++"), "Portable viewer parity requires g++; Windows CI runs the native CMake test")
 class VisualizationNativeTests(unittest.TestCase):
@@ -82,6 +112,16 @@ class VisualizationNativeTests(unittest.TestCase):
     def test_projection_clipping_and_parser(self):
         result = subprocess.run([str(self.runner)], check=True, capture_output=True, text=True)
         self.assertIn("Native visualization tests passed", result.stdout)
+
+    def test_legacy_very_large_shortest_angles_keep_native_guides_valid(self):
+        project = shot()
+        project.keyframes[0].curve_yaw = 1e20
+        project.keyframes[1].curve_yaw = -1e20
+        project.keyframes[2].curve_yaw = 3.6e12
+        packet = Path(self.temp.name) / "huge-angle.dlyvis"
+        packet.write_bytes(build_visualization(project, session_id=17, revision=3))
+        result = subprocess.run([str(self.runner), str(packet)], check=True, capture_output=True, text=True)
+        self.assertEqual(result.stdout.splitlines()[0], "65 3 0")
 
     def test_authored_spline_samples_match_playback(self):
         project = shot()

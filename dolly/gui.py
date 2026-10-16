@@ -22,13 +22,15 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from dolly import attach_camera, dialogs, editor_session, gui_layout, player_layer, screenshot_ui, ui_theme
 from .ui import shot_commands
-from dolly.editor_actions import ACTION_LABELS, ACTION_ORDER, BINDABLE_ORDER, EDITOR_KEY_CHOICES, OBJECT_PICKER_ENABLED, EditorBinding, default_action_bindings, validate_action_bindings
+from .ui.widgets import NavigationMarker
+from dolly.editor_actions import ACTION_LABELS, ACTION_ORDER, OBJECT_PICKER_ENABLED, default_action_bindings
 from dolly.replays import discover_replays, find_replay_folder, parse_launch_options
-from dolly.bindings import CaptureBinding, DEFAULT_BINDING, KEY_CHOICES
+from dolly.bindings import CaptureBinding, DEFAULT_BINDING
 from dolly.branding import apply_window_icon
 from dolly.controller import Controller, PreloadUnavailableError, tick_rate_advice, tick_rates_match
 from dolly.clip_audio import ClipAudioCapture
-from dolly.curve import AspectCurve, RotationCurve, TimelineView
+from dolly.curve import AspectCurve, PositionCurve, POSITION_CHANNELS, POSITION_LIMIT, RotationCurve, TimelineView
+from dolly.curve_workspace import CameraCurveColumn, CameraCurveWorkspace
 from dolly.display import focus_window
 from dolly.hotkey import CaptureHotkey
 # Compatibility import for existing callback users.
@@ -128,15 +130,8 @@ def _set_widget_state(widget, state):
 
 
 def _binding_event_key(event):
-    number = getattr(event, "num", None)
-    if isinstance(number, int):
-        # Tk on Windows uses button 4/5 for XBUTTON1/2; users on other Tk
-        # backends can always select the explicit Mouse4/Mouse5 presets.
-        return {2: "MiddleMouse", 4: "Mouse4", 5: "Mouse5", 8: "Mouse4", 9: "Mouse5"}.get(number)
-    key = str(getattr(event, "keysym", ""))
-    aliases = {"space": "Space", "Return": "Enter", "Prior": "PageUp", "Next": "PageDown", "Control_L": "Ctrl", "Control_R": "Ctrl", "Shift_L": "Shift", "Shift_R": "Shift", "Alt_L": "Alt", "Alt_R": "Alt"}
-    key = aliases.get(key, key.upper() if len(key) == 1 else key)
-    return key if key in EDITOR_KEY_CHOICES or key == "F7" else None
+    from .ui.binding_capture import key_from_event
+    return key_from_event(event)
 
 
 # Bound pending UI events so a chatty failure loop cannot grow memory without
@@ -337,7 +332,8 @@ class DollyApp:
         self._tick_rate_prompted = set()
         self.show_coordinates = tk.BooleanVar(value=False)
         self.app_settings = self._load_app_settings()
-        self.full_editor = tk.BooleanVar(value=self.app_settings.full_editor)
+        # Retain the legacy variable for internal callers; every desktop page is available.
+        self.full_editor = tk.BooleanVar(value=True)
         self.video_path = tk.StringVar(value=str(default_video_path(self.project.name,
             Path(self.app_settings.export_folder) if self.app_settings.export_folder else None)))
         self.video_source = tk.StringVar(value="Camera path")
@@ -400,12 +396,7 @@ class DollyApp:
         self.object_picker_open = False
         self.object_picker_selected = -1
         self.replay_entries = []
-        self.binding_action = tk.StringVar()
-        self.binding_key = tk.StringVar()
-        self.binding_ctrl = tk.BooleanVar(value=False)
-        self.binding_alt = tk.BooleanVar(value=False)
-        self.binding_shift = tk.BooleanVar(value=False)
-        self.binding_feedback = tk.StringVar(value="Select an action to change its shortcut.")
+        self.binding_feedback = tk.StringVar(value="Choose a shortcut below. Clear removes it; Reset restores that action's default.")
         self.capture_binding = self.app_settings.capture_binding
         self.hotkey_enabled = tk.BooleanVar(value=False)
         self.hotkey_label = tk.StringVar(value=self._capture_binding_label())
@@ -453,7 +444,7 @@ class DollyApp:
         file_menu.add_command(label="Save as…", command=lambda: self.save(save_as=True))
         file_menu.add_command(label="Rename shot…", command=self.rename)
         file_menu.add_separator()
-        file_menu.add_command(label="Keybinds…", command=self._show_keybinds)
+        file_menu.add_command(label="Controls…", command=self._show_keybinds)
         file_menu.add_command(label="Export diagnostics…", command=self._diagnostics)
         file_menu.add_command(label="Recover game configuration…", command=self._recover_game_config)
         file_menu.add_separator()
@@ -486,33 +477,35 @@ class DollyApp:
         workspace.grid(row=1, column=0, sticky="nsew")
         workspace.columnconfigure(1, weight=1)
         workspace.rowconfigure(0, weight=1)
-        self.sidebar = ttk.Frame(workspace, padding=(0, 12, 12, 0))
+        # The fading selection outlines sit outside the real button hitboxes.
+        nav_margin = max(6, round(2 * self.ui_scale) + math.ceil(max(1, round(self.ui_scale)) / 2) + 1)
+        self.sidebar = ttk.Frame(workspace, padding=(nav_margin, 12, nav_margin, 0))
         self.sidebar.grid(row=0, column=0, sticky="ns")
         style = ttk.Style(self.root)
         style.layout("Navigation.TNotebook.Tab", [])
         self.notebook = ttk.Notebook(workspace, style="Navigation.TNotebook")
         self.notebook.grid(row=0, column=1, sticky="nsew")
-        self.full_editor_switch = ttk.Checkbutton(heading, text="Full editor", variable=self.full_editor,
-            command=self._toggle_full_editor, style="FullEditor.TCheckbutton")
-        style.configure("FullEditor.TCheckbutton", font=(FAMILY, _F["callout"], "bold"), padding=(16, 10))
-        self.full_editor_switch.grid(row=0, column=2, rowspan=2, padx=(18, 0))
         self.setup_tab = ttk.Frame(self.notebook)
         self.camera_tab = ttk.Frame(self.notebook)
         self.cvar_tab = ttk.Frame(self.notebook)
         self.settings_tab = ttk.Frame(self.notebook)
+        self.controls_tab = ttk.Frame(self.notebook)
         self.export_tab = ttk.Frame(self.notebook)
         self.replays_tab = self.setup_tab
         self.navigation = {}
         for title, tab in (("Replay", self.setup_tab), ("Camera", self.camera_tab),
                            ("Look", self.cvar_tab), ("Export", self.export_tab),
+                           ("Controls", self.controls_tab),
                            ("Settings", self.settings_tab)):
             self.notebook.add(tab, text=title)
             button = ttk.Button(self.sidebar, text=title, width=12,
                                 command=lambda page=tab: self.notebook.select(page))
             button.pack(fill="x", pady=(0, 8))
             self.navigation[str(tab)] = button
+        self.navigation_marker = NavigationMarker(self.sidebar, scale=self.ui_scale)
         self._build_setup()
         gui_layout.build_settings(self)
+        self._build_keybinds()
         self._build_camera()
         self._build_cvars()
         self._build_export()
@@ -525,7 +518,11 @@ class DollyApp:
         footer.columnconfigure(0, weight=1)
         self.status_label = ttk.Label(footer, textvariable=self.status_text, style="Muted.TLabel", wraplength=680)
         self.status_label.grid(row=0, column=0, sticky="w", padx=(0, 12))
-        footer.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(250, event.width - 390)))
+        def fit_status(event):
+            width = max(250, event.width - 390)
+            if int(self.status_label.cget("wraplength")) != width:
+                self.status_label.configure(wraplength=width)
+        footer.bind("<Configure>", fit_status)
         ttk.Button(footer, text="Stop / restore", command=lambda: self._session_operation("Stopping", self.controller.stop)).grid(row=0, column=3, padx=(10, 0))
         ttk.Checkbutton(footer, text="Log", variable=self.show_log, command=self._toggle_log).grid(row=0, column=1)
         ttk.Button(footer, text="Export diagnostics", command=self._diagnostics, style="Quiet.TButton").grid(row=0, column=2, padx=(10, 0))
@@ -549,32 +546,18 @@ class DollyApp:
         gui_layout.build_library(self)
 
     def _apply_editor_mode(self):
-        enabled = self.full_editor.get()
-        if not enabled and self.notebook.select() in (str(self.camera_tab), str(self.cvar_tab)):
-            self.notebook.select(self.setup_tab)
+        # Old saved full_editor=False values must not hide desktop tools.
+        self.full_editor.set(True)
         for tab in (self.camera_tab, self.cvar_tab):
-            self.notebook.tab(tab, state="normal" if enabled else "hidden")
-        for tab, button in self.navigation.items():
-            button.pack_forget()
-            if enabled or tab not in (str(self.camera_tab), str(self.cvar_tab)):
+            self.notebook.tab(tab, state="normal")
+        for button in self.navigation.values():
+            if not button.winfo_manager():
                 button.pack(fill="x", pady=(0, 8))
         self._tab_changed()
 
     def _toggle_full_editor(self):
+        """Compatibility route for older internal callers; no saved mode toggle."""
         self._apply_editor_mode()
-        # This preference changes no project data or live session state.
-        if self.busy:
-            self.full_editor.set(self.app_settings.full_editor)
-            self._apply_editor_mode()
-            return
-        def save():
-            settings = replace(self.app_settings, full_editor=self.full_editor.get())
-            save_settings(settings)
-            self.app_settings = settings
-        try:
-            save()
-        except (OSError, ValueError) as error:
-            self._error("Save editor layout", error)
 
     def _save_layout_paths(self):
         def save():
@@ -598,7 +581,9 @@ class DollyApp:
             return
         selected = self.notebook.select()
         for tab, button in self.navigation.items():
-            button.configure(style="Selected.Nav.TButton" if selected == tab else "Nav.TButton")
+            button.configure(style="Current.Nav.TButton" if selected == tab else "Nav.TButton")
+        if selected in self.navigation:
+            self.navigation_marker.select(self.navigation[selected])
         if selected in (str(self.camera_tab), str(self.cvar_tab)):
             self.timeline_frame.grid()
         else:
@@ -793,9 +778,10 @@ class DollyApp:
             self._error("Record video", exc)
             return
         self._remember_export_folder()
-        if bone_project is not None:
-            self._commit_camera(bone_project.keyframes, 0.0)
-        project = self._pov_project or (Project.from_dict(self.project.to_dict()) if len(self.project.keyframes) >= 2 else None)
+        # The generated endpoint belongs to this take, not the authored shot.
+        # Keep the single attached view editable for another chosen duration.
+        self._bone_take_project = copy.deepcopy(bone_project)
+        project = self._pov_project or bone_project or (Project.from_dict(self.project.to_dict()) if len(self.project.keyframes) >= 2 else None)
         frozen = False if pov else self.frozen.get()
         # Player POV has no shot camera to export.
         camera_take = (project, options.fps) if not pov and project is not None else None
@@ -879,7 +865,7 @@ class DollyApp:
                     if folder:
                         status = {**status, "reconstructed_folder": str(folder)}
             return status
-        if getattr(self, "_pov_project", None) is not None and self.controller.status().get("playing"):
+        if (getattr(self, "_pov_project", None) is not None or getattr(self, "_bone_take_project", None) is not None) and self.controller.status().get("playing"):
             # An early Finish ends this take, including its queued passes.
             # Do not silently export longer layer takes than the color video.
             self._layer_queue = []
@@ -951,11 +937,17 @@ class DollyApp:
                             self.video_export.stop(cancel=True)
                             raise
                     self._submit("Starting POV segment", start_pov)
+                elif getattr(self, "_bone_take_project", None) is not None:
+                    self._play(project=self._bone_take_project)
                 else:
                     self._play()
             elif state in ("failed", "cancelled", "completed", "idle"):
                 self._pending_auto_play = False
         self._advance_layer_pipeline()
+        if state in ("failed", "cancelled") or (state == "completed" and not (
+                self._base_capture or self._layer_queue or self._active_layer_take or
+                self._pending_capture or self._pending_combine)):
+            self._bone_take_project = None
 
     def _restore_scene_state(self):
         try:
@@ -969,6 +961,7 @@ class DollyApp:
 
     def _clear_layer_pipeline(self):
         self.layer_pipeline.clear()
+        self._bone_take_project = None
         screenshot_ui.abandon(self)
 
     def _recover_export_failure(self):
@@ -1050,7 +1043,8 @@ class DollyApp:
         self._auto_finish_layered = True
         self._take_playing_seen = False
         pov_project = getattr(self, "_pov_project", None)
-        return self.video_export.start(options, project=pov_project or self._snapshot(),
+        bone_project = copy.deepcopy(getattr(self, "_bone_take_project", None))
+        return self.video_export.start(options, project=pov_project or bone_project or self._snapshot(),
                                        before_record=configure_layer, pov=pov_project is not None)
 
     def _player_layer_frames(self, base, *, project=None):
@@ -1113,7 +1107,8 @@ class DollyApp:
         self._auto_finish_layered = True
         self._take_playing_seen = False
         pov_project = getattr(self, "_pov_project", None)
-        return self.video_export.start(options, project=pov_project or self._snapshot(),
+        bone_project = copy.deepcopy(getattr(self, "_bone_take_project", None))
+        return self.video_export.start(options, project=pov_project or bone_project or self._snapshot(),
                                        before_record=arm_capture, capture_only=True, pov=pov_project is not None)
 
     def _finish_player_capture(self, layer):
@@ -1365,7 +1360,7 @@ class DollyApp:
                      "ReShade unavailable: " + str(shade.get("message") or "Runtime loading failed."))
         elif state == 2:
             binding = self.app_settings.reshade_binding
-            menu = "Menu open." if shade.get("open") else (f"{binding.label} opens its menu." if binding else "Set its menu shortcut in Keybinds.")
+            menu = "Menu open." if shade.get("open") else (f"{binding.label} opens its menu." if binding else "Set its menu shortcut in Controls.")
             _set_var(self.reshade_status_text, "ReShade ready. " + menu)
         elif state == 1:
             _set_var(self.reshade_status_text, "Loading ReShade…")
@@ -1682,131 +1677,231 @@ class DollyApp:
             self._refresh_replays()
 
     def _build_keybinds(self):
-        tab = self.keybinds_tab
-        tab.columnconfigure(0, weight=1)
-        tab.columnconfigure(1, weight=0, minsize=300)
-        tab.rowconfigure(1, weight=1)
-        title = ttk.Frame(tab, padding=(0, 8, 0, 12))
-        title.grid(row=0, column=0, columnspan=2, sticky="ew")
-        ttk.Label(title, text="MAKE THE CONTROLS YOURS", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(title, text="Bindings are saved across launches. F7 always opens the console and releases camera input.", style="Muted.TLabel").pack(anchor="w", pady=(5, 0))
-        table, self.bindings_tree = self._tree(tab, ("action", "binding"), ("Action", "Shortcut"), (310, 160), height=9)
-        table.grid(row=1, column=0, sticky="nsew", padx=(0, 14))
-        self.bindings_tree.column("action", anchor="w")
-        self.bindings_tree.column("binding", anchor="w")
-        self.bindings_tree.bind("<<TreeviewSelect>>", self._select_binding)
-        edit = ttk.Frame(tab, style="Card.TFrame", padding=14)
-        edit.grid(row=1, column=1, sticky="nsew")
-        edit.columnconfigure(0, weight=1)
-        ttk.Label(edit, textvariable=self.binding_action, style="CardTitle.TLabel", wraplength=260).grid(row=0, column=0, sticky="w", pady=(0, 12))
-        ttk.Label(edit, text="Key or mouse button", style="CardMuted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 5))
-        self.binding_chooser = ttk.Combobox(edit, textvariable=self.binding_key, values=("Unbound", *EDITOR_KEY_CHOICES), state="readonly")
-        self.binding_chooser.grid(row=2, column=0, sticky="ew")
-        self.binding_record_button = ttk.Button(edit, text="Press a key / mouse button…", command=self._record_binding)
-        self.binding_record_button.grid(row=3, column=0, sticky="ew", pady=(8, 10))
-        mods = ttk.Frame(edit, style="Card.TFrame")
-        mods.grid(row=4, column=0, sticky="w")
-        for label, var in (("Ctrl", self.binding_ctrl), ("Alt", self.binding_alt), ("Shift", self.binding_shift)):
-            ttk.Checkbutton(mods, text=label, variable=var).pack(side="left", padx=(0, 14))
-        presets = ttk.Frame(edit, style="Card.TFrame")
-        presets.grid(row=5, column=0, sticky="ew", pady=(12, 8))
-        for label, key in (("Mouse 4", "Mouse4"), ("Mouse 5", "Mouse5")):
-            ttk.Button(presets, text=label, style="Quiet.TButton", command=lambda k=key: self._set_binding_fields(EditorBinding(k))).pack(side="left", padx=(0, 8))
-        self.binding_save_button = ttk.Button(edit, text="Save binding", style="Primary.TButton", command=self._save_selected_binding)
-        self.binding_save_button.grid(row=6, column=0, sticky="ew", pady=(2, 8))
-        ttk.Label(edit, textvariable=self.binding_feedback, style="CardMuted.TLabel", wraplength=260).grid(row=7, column=0, sticky="nw", pady=(4, 14))
-        edit.rowconfigure(7, weight=1)
-        ttk.Button(edit, text="Restore default bindings", style="Quiet.TButton", command=self._reset_editor_bindings).grid(row=8, column=0, sticky="ew")
-        motion = ttk.Frame(tab, padding=(0, 14))
-        motion.grid(row=2, column=0, columnspan=2, sticky="ew")
-        for label, variable in (("Move speed", self.editor_move_speed), ("Mouse sensitivity", self.editor_sensitivity)):
-            ttk.Label(motion, text=label, style="Muted.TLabel").pack(side="left", padx=(0, 8))
-            ttk.Entry(motion, textvariable=variable, width=7).pack(side="left", padx=(0, 18))
-        ttk.Button(motion, text="Save movement settings", command=self._save_movement_settings).pack(side="left")
+        from .ui.controls_page import ControlsActions, ControlsPage
+        groups = {
+            "Camera": ("capture", "replace", "play_path", "stop", "previous_view", "next_view", "flight"),
+            "Replay": ("play_pause", "seek_back", "seek_forward"),
+            "Interface": ("panel", "game_ui", "framing_grid", "object_picker", "reshade"),
+            "Movement": ACTION_ORDER[12:],
+        }
+        records = [(action, "Toggle ReShade menu" if action == "reshade" else ACTION_LABELS[action], group)
+                   for group, actions in groups.items() for action in actions
+                   if action != "object_picker" or OBJECT_PICKER_ENABLED]
+        commands = ControlsActions(
+            change_binding=self._record_binding, clear_binding=self._clear_editor_binding,
+            reset_binding=self._reset_editor_binding, reset_all=self._reset_editor_bindings,
+            save_movement=self._save_movement_settings, save_sensitivity=self._save_mouse_sensitivity)
+        self.controls_view = ControlsPage(self.controls_tab, records, commands,
+            movement_speed=self.editor_move_speed, mouse_sensitivity=self.editor_sensitivity,
+            feedback=self.binding_feedback)
         self._refresh_bindings()
 
     def _refresh_bindings(self, selected=None):
-        if not hasattr(self, "bindings_tree"):
+        if hasattr(self, "controls_view"):
+            self.controls_view.refresh({**self.app_settings.action_bindings,
+                                        "reshade": self.app_settings.reshade_binding})
+
+    def _save_editor_binding(self, action, binding):
+        from .ui.binding_capture import binding_settings
+        if self.busy or self.playing:
+            message = "Stop playback and finish the current operation before changing shortcuts."
+            self.binding_feedback.set(message)
+            self.status_text.set(message)
+            return False
+        try:
+            settings = binding_settings(self.app_settings, action, binding)
+        except ValueError as error:
+            self.binding_feedback.set(str(error))
+            self.status_text.set(str(error))
+            return False
+        if settings == self.app_settings:
+            self.binding_feedback.set("This shortcut is already set.")
+            self.status_text.set("This shortcut is already set.")
+            return True
+        label = "Toggle ReShade menu" if action == "reshade" else ACTION_LABELS[action]
+        return self._persist_preferences(settings, f"{label}: {binding.label if binding else 'Unbound'}.")
+
+    def _clear_editor_binding(self, action):
+        self._save_editor_binding(action, None)
+
+    def _reset_editor_binding(self, action):
+        from .settings import DEFAULT_RESHADE_BINDING
+        default = DEFAULT_RESHADE_BINDING if action == "reshade" else default_action_bindings()[action]
+        self._save_editor_binding(action, default)
+
+    def _record_binding(self, action="capture"):
+        from .ui.binding_capture import BindingCapture, SideMouseCapture, key_from_event, modifiers_from_event
+        if self.busy or self.playing:
+            message = "Stop playback and finish the current operation before changing shortcuts."
+            self.binding_feedback.set(message)
+            self.status_text.set(message)
             return
-        selected = selected or next(iter(self.bindings_tree.selection()), ACTION_ORDER[0])
-        self.bindings_tree.delete(*self.bindings_tree.get_children())
-        for action in BINDABLE_ORDER:
-            if action == "object_picker" and not OBJECT_PICKER_ENABLED:
-                continue  # WIP integration: hidden and unreachable in releases
-            binding = self.app_settings.action_bindings.get(action)
-            self.bindings_tree.insert("", "end", iid=action, values=(ACTION_LABELS[action], binding.label if binding else "Unbound"))
-        binding = self.app_settings.reshade_binding
-        self.bindings_tree.insert("", "end", iid="reshade", values=("Toggle ReShade menu", binding.label if binding else "Unbound"))
-        self.bindings_tree.selection_set(selected)
-        self._select_binding()
-
-    def _select_binding(self, _event=None):
-        selected = self.bindings_tree.selection()
-        if not selected:
+        if self.binding_dialog is not None and self.binding_dialog.winfo_exists():
+            self.binding_dialog.lift()
             return
-        action = selected[0]
-        self.binding_action.set("Toggle ReShade menu" if action == "reshade" else ACTION_LABELS[action])
-        self._set_binding_fields(self.app_settings.reshade_binding if action == "reshade" else self.app_settings.action_bindings.get(action))
-        self.binding_feedback.set("Choose a shortcut, then save. Conflicts are shown before anything changes.")
-
-    def _set_binding_fields(self, binding):
-        self.binding_key.set(binding.key if binding else "Unbound")
-        self.binding_ctrl.set(bool(binding and binding.ctrl))
-        self.binding_alt.set(bool(binding and binding.alt))
-        self.binding_shift.set(bool(binding and binding.shift))
-
-    def _record_binding(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Press a shortcut")
+        capture = BindingCapture(self.app_settings, action)
+        self._binding_capture = capture
+        dialog = self.binding_dialog = tk.Toplevel(self.root)
+        dialog.title("Change shortcut")
         dialog.configure(bg=BG)
-        dialog.geometry(self._window_size(460, 200))
+        width, height = self._window_dimensions(500, 420)
+        x = max(0, min(self.root.winfo_rootx() + (self.root.winfo_width()-width)//2,
+                       self.root.winfo_screenwidth()-width))
+        y = max(0, min(self.root.winfo_rooty() + (self.root.winfo_height()-height)//2,
+                       self.root.winfo_screenheight()-height-40))
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        dialog.resizable(False, False)
         dialog.transient(self.root)
-        dialog.grab_set()
         body = ttk.Frame(dialog, padding=22)
         body.pack(fill="both", expand=True)
-        label = ttk.Label(body, text="Press a keyboard key or a side mouse button.\nEscape cancels; F7 is reserved for the console.", style="Muted.TLabel", wraplength=400)
-        label.pack(anchor="w", pady=(0, 16))
-        ttk.Button(body, text="Cancel", command=dialog.destroy).pack(anchor="e")
-        def record(event):
-            key = _binding_event_key(event)
-            if key == "Escape":
+        label = "Toggle ReShade menu" if action == "reshade" else ACTION_LABELS[action]
+        ttk.Label(body, text=label, style="Section.TLabel").pack(anchor="w", pady=(0, 12))
+        value = tk.StringVar(dialog)
+        feedback = tk.StringVar(dialog)
+        ttk.Label(body, textvariable=value, style="Title.TLabel").pack(anchor="w", pady=(0, 12))
+        feedback_box = ttk.Frame(body, height=round(80*self.ui_scale))
+        feedback_box.pack(fill="x", pady=(0, 12))
+        feedback_box.pack_propagate(False)
+        ttk.Label(feedback_box, textvariable=feedback, style="Muted.TLabel",
+                  wraplength=round(430*self.ui_scale)).pack(fill="both", expand=True)
+        buttons = ttk.Frame(body)
+        buttons.pack(side="bottom", fill="x")
+        capture_tag = "DollyBindingCapture" + str(dialog.winfo_id())
+        side_mouse = None
+        escape_modifiers = 0
+        focus_after = None
+        def close():
+            nonlocal side_mouse, focus_after
+            capture.cancel()
+            if focus_after is not None:
+                dialog.after_cancel(focus_after)
+                focus_after = None
+            if side_mouse is not None:
+                side_mouse.stop()
+                side_mouse = None
+            dialog.unbind_class(capture_tag, "<KeyPress>")
+            dialog.unbind_class(capture_tag, "<KeyRelease>")
+            dialog.unbind_class(capture_tag, "<ButtonPress>")
+            if self.binding_dialog is dialog:
+                self.binding_dialog = None
+            if dialog.winfo_exists():
                 dialog.destroy()
-                return "break"
-            if key is None:
-                return "break"
-            if key in ("Ctrl", "Alt", "Shift"):
-                if str(event.type) not in ("3", "KeyRelease"):
-                    return "break"
-                self._set_binding_fields(EditorBinding(key))
-                dialog.destroy()
-                return "break"
-            if key == "F7":
-                label.configure(text="F7 is reserved for the console. Choose another shortcut.")
-                return "break"
-            state = int(getattr(event, "state", 0))
-            self._set_binding_fields(EditorBinding(key, bool(state & 0x4), bool(state & 0x20000 or state & 0x8), bool(state & 0x1)))
-            dialog.destroy()
-            return "break"
-        dialog.bind("<KeyPress>", record)
-        dialog.bind("<KeyRelease>", record)
-        dialog.bind("<ButtonPress>", record)
-        dialog.after(100, dialog.focus_force)
-
-    def _save_selected_binding(self):
-        def operation():
-            selected = self.bindings_tree.selection()
-            if not selected:
-                return
-            key = self.binding_key.get()
-            binding = None if key == "Unbound" else EditorBinding(key, self.binding_ctrl.get(), self.binding_alt.get(), self.binding_shift.get())
-            if selected[0] == "reshade":
-                settings = self.app_settings.with_reshade_binding(binding)
+        def refresh():
+            nonlocal side_mouse
+            if capture.ready:
+                value.set(capture.candidate.label)
+                feedback.set("Ready to save. Choose Record again to try another shortcut.")
             else:
-                bindings = dict(self.app_settings.action_bindings)
-                bindings[selected[0]] = binding
-                settings = self.app_settings.with_action_bindings(validate_action_bindings(bindings))
-            self._persist_preferences(settings, "Binding saved. Your in-game controls use this shortcut.")
-        self._guard("Keybind", operation)
+                value.set("Press a shortcut...")
+                feedback.set(capture.error or "Press a key or mouse button, with any modifiers. Escape cancels. F7 is reserved for the console.")
+            save.configure(state="normal" if capture.ready else "disabled")
+            again.configure(state="normal" if capture.ready else "disabled")
+            if capture.ready and side_mouse is not None:
+                side_mouse.stop()
+            elif capture.listening:
+                if side_mouse is None:
+                    def side_button(key, modifiers):
+                        if capture.listening:
+                            capture.press(key, modifiers)
+                            refresh()
+                    side_mouse = SideMouseCapture(dialog, side_button)
+                if not side_mouse.running:
+                    side_mouse.start()
+        def record_again():
+            nonlocal capture, escape_modifiers
+            escape_modifiers = 0
+            capture = self._binding_capture = BindingCapture(self.app_settings, action)
+            refresh()
+            dialog.focus_set()
+        def save_shortcut():
+            try:
+                settings = capture.settings_for(self.app_settings)
+            except ValueError as error:
+                feedback.set(str(error))
+                save.configure(state="disabled")
+                return
+            if settings == self.app_settings:
+                self.binding_feedback.set("Shortcut unchanged.")
+                close()
+            elif self._persist_preferences(settings, f"{label}: {capture.candidate.label}."):
+                close()
+            else:
+                feedback.set("Finish the current operation and stop playback before saving.")
+        ttk.Button(buttons, text="Cancel", command=close, style="Quiet.TButton").pack(side="right")
+        save = ttk.Button(buttons, text="Save shortcut", command=save_shortcut, style="Primary.TButton")
+        save.pack(side="right", padx=(0, 8))
+        again = ttk.Button(body, text="Record again", command=record_again, style="Quiet.TButton")
+        again.pack(anchor="w", pady=(0, 8))
+        def use_escape():
+            nonlocal capture, escape_modifiers
+            modifiers, escape_modifiers = escape_modifiers, 0
+            if side_mouse is not None and side_mouse.keyboard_blocked():
+                capture.focus_lost()
+                feedback.set("Focus this window and release the Windows key before recording a shortcut.")
+                return
+            if capture.ready:
+                capture = self._binding_capture = BindingCapture(self.app_settings, action)
+            capture.bind_escape(modifiers)
+            refresh()
+        escape_button = ttk.Button(body, text="Use Escape as the shortcut", command=use_escape,
+                                   style="Quiet.TButton")
+        escape_button.pack(anchor="w")
+        def escape_pressed(event):
+            nonlocal escape_modifiers
+            escape_modifiers = modifiers_from_event(event)
+        escape_button.bind("<ButtonPress-1>", escape_pressed)
+        escape_button.bind("<KeyPress>", escape_pressed)
+        def record(event):
+            key = key_from_event(event)
+            mouse = str(event.type) in ("4", "ButtonPress")
+            if key == "Escape":
+                close()
+                return "break"
+            if not capture.listening:
+                if mouse:
+                    return None if key is None else "break"
+                modifiers = modifiers_from_event(event)
+                if key == "Tab" and modifiers in (0, 4):
+                    return
+                if key in ("Space", "Enter") and not modifiers and isinstance(event.widget, ttk.Button):
+                    return
+                return "break"
+            if str(event.type) in ("3", "KeyRelease"):
+                capture.release(key)
+            elif not mouse or key is not None:
+                if not mouse and side_mouse is not None and side_mouse.keyboard_blocked():
+                    capture.focus_lost()
+                    capture.error = "Focus this window and release the Windows key before recording a shortcut."
+                else:
+                    capture.press(key, modifiers_from_event(event))
+            refresh()
+            # Primary clicks operate Cancel/Save; keyboard events belong only
+            # to the recorder, before ttk or the application's Ctrl+S handlers.
+            return None if mouse and key is None else "break"
+        for sequence in ("<KeyPress>", "<KeyRelease>", "<ButtonPress>"):
+            dialog.bind_class(capture_tag, sequence, record)
+        def add_tag(widget):
+            widget.bindtags((capture_tag, *widget.bindtags()))
+            for child in widget.winfo_children():
+                add_tag(child)
+        add_tag(dialog)
+        def check_focus():
+            nonlocal focus_after
+            focus_after = None
+            target = dialog.focus_get()
+            while target is not None and target is not dialog:
+                target = getattr(target, "master", None)
+            if target is None:
+                capture.focus_lost()
+        def focus_out(_event):
+            nonlocal focus_after
+            if focus_after is None:
+                focus_after = dialog.after_idle(check_focus)
+        dialog.bind("<FocusOut>", focus_out, add="+")
+        dialog.protocol("WM_DELETE_WINDOW", close)
+        dialog.grab_set()
+        dialog.focus_set()
+        refresh()
 
     def _reset_editor_bindings(self):
         if not self.busy and not self.playing and messagebox.askyesno("Restore bindings", "Restore all editor shortcuts to their defaults?", parent=self.root):
@@ -2006,21 +2101,23 @@ class DollyApp:
         self.segment_entry.pack(side="left")
         ttk.Label(timing, text="s", style="Muted.TLabel").pack(side="left", padx=(4, 12))
         ttk.Label(timing, textvariable=self.path_summary, style="Muted.TLabel").pack(side="right")
-        ttk.Button(timing, text="Keybinds…", style="Quiet.TButton",
+        ttk.Button(timing, text="Controls…", style="Quiet.TButton",
                    command=self._show_keybinds).pack(side="right", padx=(0, 14))
         workspace = ttk.Frame(tab)
         workspace.grid(row=2, column=0, sticky="nsew")
         workspace.columnconfigure(0, weight=1)
         workspace.columnconfigure(1, weight=0, minsize=280)
         workspace.rowconfigure(0, weight=1)
-        left = ttk.Frame(workspace)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        left_page = CameraCurveColumn(workspace)
+        left_page.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self.camera_left_page = left_page
+        left = left_page.body
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(0, weight=3, minsize=112)
-        left.rowconfigure(1, weight=2, minsize=148)
+        left.rowconfigure(0, weight=0)
+        left.rowconfigure(1, weight=1)
         table_frame, self.camera_tree = self._tree(left, ("view", *FIELDS),
                                                   ("Camera", *FIELD_LABELS), height=3)
-        table_frame.grid(row=0, column=0, sticky="nsew")
+        table_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         self.camera_tree.configure(displaycolumns=("view", "time", "aspect_ratio", "roll"))
         self.camera_tree.column("view", anchor="w", width=145, minwidth=95)
         self.camera_tree.column("time", width=110, minwidth=88)
@@ -2036,29 +2133,54 @@ class DollyApp:
         graph.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         graph.columnconfigure(0, weight=1)
         graph.rowconfigure(1, weight=1, minsize=112)
-        graph.rowconfigure(2, weight=1, minsize=132)
         graph_header = ttk.Frame(graph, style="Card.TFrame")
         graph_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        ttk.Label(graph_header, text="FRAMING CURVES", style="CardTitle.TLabel").pack(side="left")
+        graph_title = ttk.Label(graph_header, text="CAMERA CURVES", style="CardTitle.TLabel")
         curve_mode = ttk.Combobox(graph_header, textvariable=self.lens_interpolation,
                                  values=("smooth", "linear", "step"), state="readonly", width=9)
-        curve_mode.pack(side="right")
         curve_mode.bind("<<ComboboxSelected>>", lambda _event: self._apply_options())
+        framing_label = ttk.Label(graph_header, text="Framing", style="CardMuted.TLabel")
         self.path_curve_mode = ttk.Combobox(graph_header, textvariable=self.interpolation,
                                             values=("smooth", "spline", "linear"), state="readonly", width=9)
-        self.path_curve_mode.pack(side="right")
         self.path_curve_mode.bind("<<ComboboxSelected>>", lambda _event: self._apply_options())
-        ttk.Label(graph_header, text="Path curve", style="CardMuted.TLabel").pack(side="right", padx=(10, 4))
+        path_label = ttk.Label(graph_header, text="Path curve", style="CardMuted.TLabel")
+        header_items = (graph_title, path_label, self.path_curve_mode, framing_label, curve_mode)
+        header_layout = None
+        def layout_curve_header(_event=None):
+            nonlocal header_layout
+            sizes = [item.winfo_reqwidth() for item in header_items]
+            narrow = graph_header.winfo_width() < sum(sizes)+32
+            pairs_fit = graph_header.winfo_width() >= sum(sizes[1:])+22
+            mode = (narrow, pairs_fit)
+            if mode == header_layout:
+                return
+            header_layout = mode
+            for column in range(5):
+                graph_header.columnconfigure(column, weight=0)
+            if narrow:
+                graph_title.grid(row=0,column=0,columnspan=5,sticky="w",pady=(0,4))
+                path_label.grid(row=1,column=0,sticky="w",padx=(0,4))
+                self.path_curve_mode.grid(row=1,column=1,sticky="w")
+                framing_label.grid(row=1 if pairs_fit else 2,column=2 if pairs_fit else 0,
+                                   sticky="w",padx=(10 if pairs_fit else 0,4),pady=0 if pairs_fit else (4,0))
+                curve_mode.grid(row=1 if pairs_fit else 2,column=3 if pairs_fit else 1,sticky="w",pady=0 if pairs_fit else (4,0))
+                graph_header.columnconfigure(4,weight=1)
+            else:
+                for column,item in enumerate(header_items):
+                    item.grid(row=0,column=column,columnspan=1,sticky="w",padx=(10,4) if column in (1,3) else 0,pady=0)
+                graph_header.columnconfigure(0,weight=1)
+            left_page.resize_content()
+        graph_header.bind("<Configure>",layout_curve_header)
+        layout_curve_header()
         self.timeline_view = TimelineView()
-        self.rotation_curve = RotationCurve(graph, on_change=self._change_rotation_curve,
-                                            on_select=self._select_curve_key,
-                                            on_reset=self._reset_rotation_curve,
-                                            view=self.timeline_view, on_view=self._redraw_curves)
-        self.rotation_curve.grid(row=1, column=0, sticky="nsew")
-        self.aspect_curve = AspectCurve(graph, on_change=self._change_curve_key,
-                                        on_select=self._select_curve_key,
-                                        view=self.timeline_view, on_view=self._redraw_curves)
-        self.aspect_curve.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
+        self.camera_curve_workspace = CameraCurveWorkspace(
+            graph, on_change=self._change_unified_curve, on_select=self._select_curve_key,
+            on_reset=self._reset_rotation_curve, view=self.timeline_view,
+            context=lambda: (self.shot_history.session_id, self.shot_history.revision))
+        self.camera_curve_workspace.grid(row=1, column=0, sticky="nsew")
+        self.position_curve, self.rotation_curve, self.aspect_curve = self.camera_curve_workspace.lanes
+        self.camera_curve_tabs = self.camera_curve_workspace.tabs
+        left_page.set_panels(table_frame,graph,graph_header,self.camera_curve_workspace)
         inspector_page = gui_layout.ScrollPage(workspace)
         inspector_page.grid(row=0, column=1, sticky="nsew")
         self.inspector_page = inspector_page
@@ -2763,7 +2885,6 @@ class DollyApp:
             _set_var(self.session_text, "Playing camera path" if self.playing else session_label)
             if self.startup_cancel is not None and not self.startup_cancel.is_set():
                 _set_var(self.startup_progress, str(status.get("message") or session_label))
-            _set_widget_state(self.full_editor_switch, "disabled" if self.busy else "normal")
             _set_widget_state(self.play_replay_button,
                               "normal" if not self.busy and not self.playing else "disabled")
             _set_widget_state(self.cancel_startup_button,
@@ -2788,9 +2909,17 @@ class DollyApp:
             elif not native and not getattr(self, "_smoothing_packed", False):
                 self.smoothing_row.pack(fill="x", pady=(0, 10))
                 self._smoothing_packed = True
-            self.aspect_curve.set_enabled(available)
-            if hasattr(self, "rotation_curve"):
-                self.rotation_curve.set_enabled(available)
+            if hasattr(self, "camera_curve_workspace"):
+                recording = self.video_export.status().get("state") if self.video_export is not None else None
+                self.camera_curve_workspace.set_enabled(available and recording not in ACTIVE_STATES
+                    and not getattr(self, "_layer_queue", None) and not getattr(self, "_active_layer_take", None)
+                    and not getattr(self, "_bone_picker_context", None) and not getattr(self, "preview_attach", False))
+            else:
+                self.aspect_curve.set_enabled(available)
+                if hasattr(self, "rotation_curve"):
+                    self.rotation_curve.set_enabled(available)
+                if hasattr(self, "position_curve"):
+                    self.position_curve.set_enabled(available)
             startup_buttons = (
                 (self.launch_button, available),
                 (self.connect_button, available and not connected and stage not in ("not_launched", "game_closed")),
@@ -3089,11 +3218,17 @@ class DollyApp:
         return value
 
     def _refresh_curve(self):
-        if not (hasattr(self, "aspect_curve") or hasattr(self, "rotation_curve")):
+        if not any(hasattr(self, name) for name in ("aspect_curve", "rotation_curve", "position_curve")):
             return
         selected_index = self._selection_index(self.camera_tree)
         shot_time = getattr(self, "shot_time", None)
         current_time = float(shot_time.get()) if shot_time is not None else 0.0
+        if hasattr(self, "camera_curve_workspace"):
+            self.camera_curve_workspace.set_project(self.project, selected_index, current_time)
+            return
+        if hasattr(self, "position_curve"):
+            self.position_curve.set_project(self.project, selected_index=selected_index,
+                                            current_time=current_time)
         if hasattr(self, "rotation_curve"):
             self.rotation_curve.set_project(self.project, selected_index=selected_index,
                                             current_time=current_time)
@@ -3122,6 +3257,66 @@ class DollyApp:
         self._guard("Edit framing curve", operation)
         self._refresh_curve()
 
+    def _change_unified_curve(self, index, channel, value):
+        """Admission shared by the desktop lanes; keep ordinary edit/history paths."""
+        from dolly.curve_workspace import LABELS, valid_value
+        from dolly.path import channel_value
+        if not self._shot_edit_ready():
+            self._refresh_curve()
+            return
+        if (channel not in LABELS or not isinstance(index, int) or isinstance(index, bool)
+                or not 0 <= index < len(self.project.keyframes) or not valid_value(channel, value)):
+            raise ValueError("Choose an existing camera and a valid curve value.")
+        key = self.project.keyframes[index]
+        if key.source != "free":
+            raise ValueError("Attached cameras follow their target. Edit attachment offsets instead.")
+        if value == channel_value(key, channel):
+            return
+        previous_group = getattr(self, "_history_edit_group", None)
+        self._history_edit_group = None
+        try:
+            if channel in POSITION_CHANNELS:
+                self._change_position_curve(index, channel, value)
+            elif channel in CURVE_CHANNELS:
+                self._change_rotation_curve(index, channel, value)
+            else:
+                self._change_curve_key(index, key.time, value)
+        finally:
+            self._history_edit_group = previous_group
+
+    def _change_position_curve(self, index, channel, value):
+        """Commit one authored world-coordinate edit without retiming or seeking."""
+        if not self._shot_edit_ready():
+            self._refresh_curve()
+            return
+
+        def operation():
+            if channel not in POSITION_CHANNELS:
+                raise ValueError("Choose X, Y or Z for the position graph.")
+            if (not isinstance(index, int) or isinstance(index, bool)
+                    or not 0 <= index < len(self.project.keyframes)):
+                raise ValueError("That camera is no longer present in this shot.")
+            key = self.project.keyframes[index]
+            if key.source != "free":
+                raise ValueError("Attached cameras follow their target. Edit a free-camera key's position.")
+            position = _finite(str(value), f"Camera {channel.upper()} position")
+            if abs(position) > POSITION_LIMIT:
+                raise ValueError("Camera position must be between -100,000,000 and 100,000,000 world units.")
+            if position == getattr(key, channel):
+                return
+            keys = copy.deepcopy(self.project.keyframes)
+            setattr(keys[index], channel, position)
+            previous_group = getattr(self, "_history_edit_group", None)
+            self._history_edit_group = None
+            try:
+                self._commit_camera(keys, key.time)
+            finally:
+                self._history_edit_group = previous_group
+            self.status_text.set(f"Camera {index + 1} {channel.upper()} set to {position:g} world units.")
+
+        self._guard("Edit position curve", operation)
+        self._refresh_curve()
+
     def _change_rotation_curve(self, index, channel, value):
         if channel not in CURVE_CHANNELS:
             return
@@ -3142,6 +3337,9 @@ class DollyApp:
 
     def _reset_rotation_curve(self, channel):
         if channel not in CURVE_CHANNELS:
+            return
+        if not self._shot_edit_ready():
+            self._refresh_curve()
             return
 
         def operation():
@@ -3166,7 +3364,11 @@ class DollyApp:
 
     def _redraw_curves_now(self):
         self._curves_redraw_pending = False
-        for widget in (getattr(self, "rotation_curve", None), getattr(self, "aspect_curve", None)):
+        if hasattr(self, "camera_curve_workspace"):
+            self.camera_curve_workspace.redraw()
+            return
+        for widget in (getattr(self, "position_curve", None), getattr(self, "rotation_curve", None),
+                       getattr(self, "aspect_curve", None)):
             if widget is not None:
                 widget._redraw()
 
@@ -3519,7 +3721,7 @@ class DollyApp:
             self._enqueue_log(f"Preferences could not be loaded; using defaults. {exc}")
             self.root.after(200, lambda detail=str(exc): messagebox.showwarning(
                 "Dolly preferences", "Dolly could not load your preferences, so this launch uses defaults (capture: Ctrl+Alt+K).\n"
-                "Open Keybinds to review and save your shortcuts.\n\n" + detail, parent=self.root))
+                "Open Controls to review and save your shortcuts.\n\n" + detail, parent=self.root))
             return AppSettings()
 
     def _capture_binding_label(self):
@@ -3528,84 +3730,11 @@ class DollyApp:
         return "In-game capture · " + self.capture_binding.label
 
     def _show_keybinds(self, action="capture"):
-        self.notebook.select(self.settings_tab)
-        self.controls_disclosure.set_open(True)
-        self.settings_page.reveal(self.controls_disclosure)
-        self.bindings_tree.selection_set(action)
-        self.bindings_tree.see(action)
-        self._select_binding()
+        self.notebook.select(self.controls_tab)
+        self.controls_view.reveal_action(action)
 
     def _open_capture_binding(self):
-        if self.busy or self.playing:
-            self.status_text.set("Finish the current operation and stop path playback before changing the capture binding.")
-            return
-        if self.binding_dialog is not None and self.binding_dialog.winfo_exists():
-            self.binding_dialog.lift()
-            return
-        dialog = tk.Toplevel(self.root)
-        self.binding_dialog = dialog
-        dialog.title("Capture binding")
-        dialog.configure(bg=BG)
-        dialog.geometry(self._window_size(500, 530))
-        dialog.minsize(*self._window_dimensions(480, 520))
-        dialog.transient(self.root)
-        dialog.grab_set()
-        body = ttk.Frame(dialog, padding=20)
-        body.pack(fill="both", expand=True)
-        body.columnconfigure(0, weight=1)
-        ttk.Label(body, text="CAPTURE FROM THE GAME", style="Section.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(body, text="Choose a keyboard key or mouse button, then add any required modifiers.",
-                  style="Muted.TLabel", wraplength=430).grid(row=1, column=0, sticky="w", pady=(8, 16))
-        key = tk.StringVar(value=self.capture_binding.key)
-        ctrl = tk.BooleanVar(value=self.capture_binding.ctrl)
-        alt = tk.BooleanVar(value=self.capture_binding.alt)
-        shift = tk.BooleanVar(value=self.capture_binding.shift)
-        ttk.Label(body, text="Key or button", style="Muted.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 5))
-        chooser = ttk.Combobox(body, textvariable=key, values=KEY_CHOICES, state="readonly", width=24)
-        chooser.grid(row=3, column=0, sticky="ew")
-        modifiers = ttk.Frame(body)
-        modifiers.grid(row=4, column=0, sticky="w", pady=(12, 16))
-        ttk.Label(modifiers, text="Required", style="Muted.TLabel").pack(side="left", padx=(0, 14))
-        for text, variable in (("Ctrl", ctrl), ("Alt", alt), ("Shift", shift)):
-            ttk.Checkbutton(modifiers, text=text, variable=variable).pack(side="left", padx=(0, 22))
-        presets = ttk.Frame(body)
-        presets.grid(row=5, column=0, sticky="w")
-        def preset(binding):
-            key.set(binding.key)
-            ctrl.set(binding.ctrl)
-            alt.set(binding.alt)
-            shift.set(binding.shift)
-        for label, binding in (("Mouse 4", CaptureBinding("Mouse4", False, False)),
-                               ("Mouse 5", CaptureBinding("Mouse5", False, False)),
-                               ("Middle", CaptureBinding("MiddleMouse", False, False)),
-                               ("Default", DEFAULT_BINDING)):
-            ttk.Button(presets, text=label, width=8, style="Quiet.TButton", command=lambda chosen=binding: preset(chosen)).pack(side="left", padx=(0, 8))
-        ttk.Label(body, text="Mouse 4 / 5 are the usual side buttons. Leave modifiers unchecked to capture while holding movement keys. If your mouse software remaps a button, select its mapped key.\n\n"
-                  "Capture only works while the Dolly-launched game is focused. The button still reaches the game; avoid a conflicting game action.",
-                  style="Muted.TLabel", wraplength=430, justify="left").grid(row=6, column=0, sticky="w", pady=(16, 12))
-        ttk.Label(body, text="Your binding is saved for future launches. Enable in-game capture separately each time.",
-                  style="Muted.TLabel", wraplength=430).grid(row=7, column=0, sticky="w")
-        actions = ttk.Frame(body)
-        actions.grid(row=8, column=0, sticky="ew", pady=(16, 0))
-        def close():
-            if dialog.winfo_exists():
-                dialog.destroy()
-            if self.binding_dialog is dialog:
-                self.binding_dialog = None
-        def apply():
-            try:
-                binding = CaptureBinding(key.get(), ctrl.get(), alt.get(), shift.get())
-            except ValueError as exc:
-                self._error("Capture binding", exc)
-                return
-            if self._apply_capture_binding(binding, close):
-                apply_button.configure(state="disabled")
-        apply_button = ttk.Button(actions, text="Save binding", style="Primary.TButton", command=apply)
-        apply_button.pack(side="right")
-        ttk.Button(actions, text="Cancel", style="Quiet.TButton", command=close).pack(side="right", padx=(0, 8))
-        dialog.protocol("WM_DELETE_WINDOW", close)
-        dialog.bind("<Escape>", lambda _event: close())
-        chooser.focus_set()
+        self._show_keybinds("capture")
 
     def _check_capture_listener(self):
         """Reflect an unexpected input-worker exit once, without a modal loop."""
@@ -3648,7 +3777,7 @@ class DollyApp:
                     on_applied()
                 return submitted
             self.hotkey_enabled.set(bool(self.app_settings.action_bindings.get("capture")))
-            self.status_text.set("Native capture uses your Keybinds settings while the in-game editor has control.")
+            self.status_text.set("Native capture uses your Controls settings while the in-game editor has control.")
             return False
         if self.closed or self.busy:
             self.hotkey_enabled.set(bool(self.capture_hotkey and self.capture_hotkey.running))
@@ -3720,7 +3849,7 @@ class DollyApp:
     def _toggle_capture_hotkey(self):
         if self.app_settings.action_bindings.get("capture") is None:
             self.hotkey_enabled.set(False)
-            self.status_text.set("Assign a Capture camera shortcut in Keybinds first.")
+            self.status_text.set("Assign a Capture camera shortcut in Controls first.")
             return
         self._change_capture_listener(self.capture_binding, self.hotkey_enabled.get())
 
@@ -3961,12 +4090,15 @@ class DollyApp:
                         lambda: self.controller.set_playback_speed(speed)):
             self._live_playback_speed = speed
 
-    def _play(self):
+    def _play(self, *, project=None):
         def operation():
             # One last chance to repair a shot authored at another replay rate
             # before the path runs; the controller only warns from here.
-            self._offer_replay_tick_rate()
-            project = self._snapshot()
+            if project is None:
+                self._offer_replay_tick_rate()
+                playback_project = self._snapshot()
+            else:
+                playback_project = copy.deepcopy(project)
             # Play shot always runs the complete shot, independently of the
             # selected key or the cursor used for single-frame previews.
             speed = _finite(self.speed.get(), "Playback speed")
@@ -3978,7 +4110,7 @@ class DollyApp:
             smoothing = self.smoothing.get().lower()
             smoothing_window(smoothing)
             submitted = self._submit("Starting shot playback", lambda: self.controller.play(
-                project, time=0.0, speed=speed, rate=rate, frozen=frozen, hide_hud=hide_hud,
+                playback_project, time=0.0, speed=speed, rate=rate, frozen=frozen, hide_hud=hide_hud,
                 smoothing=smoothing))
             if submitted:
                 self._set_time(0.0)
@@ -3991,6 +4123,8 @@ class DollyApp:
             self.aspect_curve.set_current_time(float(value))
         if hasattr(self, "rotation_curve"):
             self.rotation_curve.set_current_time(float(value))
+        if hasattr(self, "position_curve"):
+            self.position_curve.set_current_time(float(value))
 
     def _set_time(self, time):
         self.slider.configure(to=max(10.0, float(self.project.duration), time))
@@ -4006,6 +4140,8 @@ class DollyApp:
             self.aspect_curve.set_current_time(float(time))
         if hasattr(self, "rotation_curve"):
             self.rotation_curve.set_current_time(float(time))
+        if hasattr(self, "position_curve"):
+            self.position_curve.set_current_time(float(time))
         if not getattr(self, "playing", False):
             self._refresh_citadel_dof()
 

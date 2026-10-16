@@ -20,7 +20,8 @@ class UpdateNotice:
         style = ttk.Style(parent)
         style.configure("UpdateNotice.Border.TFrame", background=ui_theme.TOKENS["accent"])
         style.configure("UpdateNotice.Body.TFrame", background=ui_theme.TOKENS["selected"])
-        style.layout("UpdateNotice.Notes.TFrame", style.layout("Rounded.Card.TFrame"))
+        # The theme supplies rounded corners on this selected-colour surface.
+        # Copying the page card layout would replace them with page-colour corners.
         style.configure("UpdateNotice.Notes.TFrame", background=ui_theme.TOKENS["selected"])
         style.configure("UpdateNotice.Title.TLabel", background=ui_theme.TOKENS["selected"],
                         foreground=ui_theme.TOKENS["strong"],

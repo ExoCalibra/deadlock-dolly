@@ -83,6 +83,26 @@ class VideoExportTests(unittest.TestCase):
         self.assertTrue(self.bridge.start_video.call_args.kwargs["shot_only"])
         self.assertEqual(self.bridge.start_video.call_args.kwargs["max_frames"], 30)
 
+    def test_timed_bone_take_reaches_native_preparation_without_changing_the_authored_camera(self):
+        import copy
+        from dolly.bone_picker import timed_attachment
+        from dolly.path import AttachKey
+        authored = Project(start_tick=128, tick_rate=64, keyframes=[Keyframe(
+            0, 1, 2, 3, 4, 5, 6, source="attach", attach=AttachKey(
+                handle=11, entity_id=11, model="models/heroes/astro/astro.vmdl",
+                point="bone", bone="head", smoothing=.2))])
+        original = copy.deepcopy(authored)
+        for seconds in (2, 15):
+            take = timed_attachment(authored, seconds)
+            self.export.start(VideoOptions(self.path, shot_only=True), project=take)
+            prepared = self.controller.prepare_native_recording.call_args.args[0]
+            self.assertEqual(prepared, take)
+            self.assertEqual(prepared.duration, seconds)
+            self.assertEqual([key.time for key in prepared.keyframes], [0, seconds])
+            self.assertEqual(authored, original)
+            self.assertTrue(self.bridge.start_video.call_args.kwargs["shot_only"])
+            self.export.stop()
+
     def test_frozen_recording_keeps_its_existing_current_scene_admission(self):
         project = Project(keyframes=[Keyframe(0, 0, 0, 0, 0, 0, 0),
                                     Keyframe(1, 10, 0, 0, 0, 0, 0)])
@@ -201,6 +221,7 @@ class VideoExportTests(unittest.TestCase):
             result = self.export.stop()
             again = self.export.stop()
         self.assertTrue((folder / "shot.json").is_file())
+        self.assertEqual((folder / "shot.json").read_text(encoding="utf-8"), '{"frames_written":30}')
         self.assertFalse(sidecar.exists())
         self.assertEqual(result["depth_preview"], str(depth / "preview.mp4"))
         self.assertEqual(again["depth_preview"], result["depth_preview"])
@@ -443,7 +464,7 @@ class VideoExportTests(unittest.TestCase):
         self.assertIn("ffv1", captured["args"])
         self.assertNotIn("-b:v", captured["args"])
 
-    def test_depth_preview_failure_keeps_the_exr_folder_intact(self):
+    def test_depth_preview_failure_keeps_the_raw_source_intact(self):
         directory = self.depth_preview_fixture()
         with patch("dolly.video_export.subprocess.run",
                    return_value=SimpleNamespace(returncode=1, stderr="encoder exploded")):
@@ -451,18 +472,6 @@ class VideoExportTests(unittest.TestCase):
         self.assertNotIn("depth_preview", status)
         self.assertTrue((directory / "preview_64x64.raw").exists())
         self.assertFalse((directory / "preview.mp4").exists())
-
-    def test_layered_finish_moves_the_sidecar_into_the_take_folder(self):
-        folder = self.path.with_suffix("")
-        folder.mkdir()
-        color = folder / self.path.name
-        sidecar = Path(str(color) + ".shot.json")
-        sidecar.write_text("{}", encoding="utf-8")
-        self.export.output_path = color
-        self.export._layer_folder = folder
-        self.export._finish_layered_sidecar()
-        self.assertFalse(sidecar.exists())
-        self.assertEqual((folder / "shot.json").read_text(encoding="utf-8"), "{}")
 
     def test_lossless_requires_matroska_and_maps_to_ffv1(self):
         with self.assertRaisesRegex(ValueError, ".mkv"):
@@ -872,7 +881,9 @@ class VideoGuiTests(unittest.TestCase):
         self.app._play = Mock()
         self.app._start_video_recording()
         self.app._error.assert_not_called()
-        self.assertEqual(self.app.project.duration, 5)
+        self.assertEqual(len(self.app.project.keyframes), 1)
+        self.assertEqual(self.app.project.duration, 0)
+        self.app._mark_dirty.assert_not_called()
         self.app._submit.call_args.args[1]()
         options = self.app.video_export.start.call_args.args[0]
         exported = self.app.video_export.start.call_args.kwargs["project"]
@@ -882,7 +893,157 @@ class VideoGuiTests(unittest.TestCase):
         self.assertEqual(exported.keyframes[1].attach, key.attach)
         self.assertTrue(self.app._auto_finish_layered)
         self.app._video_operation_done({"state": "recording"})
-        self.app._play.assert_called_once()
+        self.app._play.assert_called_once_with(project=exported)
+
+    def test_bone_duration_remains_editable_after_first_take_without_authoring_an_endpoint(self):
+        import copy
+        from dolly import editor_session
+        from dolly.path import AttachKey
+        from dolly.shot_history import ShotHistory
+        app = self.app
+        app.project = Project(start_tick=1234, tick_rate=64, keyframes=[
+            Keyframe(0, 1, 2, 3, 4, 5, 6, source="attach", attach=AttachKey(
+                handle=11, entity_id=11, model="models/heroes/astro/astro.vmdl",
+                point="bone", bone="head", offset=(4, 0, 6, 0, 0, 0), smoothing=.2))])
+        authored = copy.deepcopy(app.project)
+        app.shot_history = ShotHistory(app.project)
+        revision = app.shot_history.revision
+        app.app_settings = AppSettings()
+        app.native_editor_active = True
+        app.closed = app.playing = False
+        app.controller = Mock()
+        app.controller.game_pid = None
+        app.controller.status.return_value = dict(READY, native_editor_active=True, paused=True)
+        bridge = app.controller._native_bridge.return_value
+        app.camera_tree = object()
+        app._selection_index = lambda _: 0
+        app.shot_time, app.speed, app.rate = Var("0"), Var("1"), Var("60")
+        app.video_source, app.video_pov_duration = Var("Camera path"), Var("10")
+        app.attach_fields = {"scene_node": 816}
+        app._remember_export_folder = Mock()
+        app._mark_dirty, app._refresh_keys, app._play = Mock(), Mock(), Mock()
+        app.video_export.finish_pending = False
+        app.video_export.output_path = None
+        takes = []
+        for seconds in (5, 15):
+            editor_session.dispatch(app, {"action": "set_pov_duration", "value": seconds}, bridge)
+            editor_session.configure(app)
+            self.assertEqual(bridge.configure_editor.call_args.kwargs["pov_duration"], seconds)
+            self.assertEqual(bridge.configure_editor.call_args.kwargs["camera_count"], 1)
+            self.assertEqual(bridge.configure_editor_attach.call_args.args[1]["point"], 2)
+            app._start_video_recording()
+            app._error.assert_not_called()
+            self.assertEqual(app.project, authored)
+            self.assertEqual(app.shot_history.revision, revision)
+            self.assertFalse(app.shot_history.can_undo)
+            app._mark_dirty.assert_not_called()
+            app._submit.call_args.args[1]()
+            take = app.video_export.start.call_args.kwargs["project"]
+            takes.append(take)
+            self.assertEqual([key.time for key in take.keyframes], [0, seconds])
+            self.assertEqual(take.start_tick, 1234)
+            self.assertEqual(take.tick_rate, 64)
+            self.assertEqual(take.keyframes[0].attach, authored.keyframes[0].attach)
+            self.assertEqual(take.keyframes[1].attach, authored.keyframes[0].attach)
+            app._video_operation_done({"state": "recording"})
+            app._play.assert_called_with(project=take)
+            app._video_operation_done({"state": "completed"})
+            editor_session.configure(app)
+            self.assertEqual(bridge.configure_editor.call_args.kwargs["camera_count"], 1)
+        self.assertEqual(takes[0].duration, 5)
+        self.assertEqual(takes[1].duration, 15)
+        self.assertEqual(app.project, authored)
+
+    def test_bone_take_playback_uses_its_frozen_project_instead_of_the_single_editor_camera(self):
+        import copy
+        take = self.two_camera_project()
+        take.keyframes[-1].time = 15
+        self.app.project = Project(keyframes=[copy.deepcopy(take.keyframes[0])])
+        self.app.controller = Mock()
+        self.app._guard = lambda _title, operation: operation()
+        self.app._snapshot = Mock(side_effect=AssertionError("Read the mutable editor shot"))
+        self.app._offer_replay_tick_rate = Mock()
+        self.app._set_time = Mock()
+        self.app.speed, self.app.rate = Var("1"), Var("60")
+        self.app.hide_hud, self.app.smoothing = Var(True), Var("Off")
+        self.app._play(project=take)
+        self.app._submit.call_args.args[1]()
+        played = self.app.controller.play.call_args.args[0]
+        self.assertEqual(played, take)
+        self.assertIsNot(played, take)
+        self.app._snapshot.assert_not_called()
+        self.app._offer_replay_tick_rate.assert_not_called()
+
+    def test_bone_layer_takes_keep_the_color_take_snapshot_until_the_queue_finishes(self):
+        import copy
+        from dolly.bone_picker import timed_attachment
+        from dolly.path import AttachKey
+        self.app.project = Project(keyframes=[Keyframe(0, 1, 2, 3, 4, 5, 6,
+            source="attach", attach=AttachKey(handle=11, entity_id=11,
+                model="models/heroes/astro/astro.vmdl", point="bone", bone="head"))])
+        take = timed_attachment(self.app.project, 5)
+        self.app._bone_take_project = copy.deepcopy(take)
+        self.app.project.keyframes[0].attach.offset = (100, 0, 0, 0, 0, 0)
+        ffmpeg = Path(self.folder.name)/"ffmpeg.exe"
+        ffmpeg.write_bytes(b"MZ")
+        self.app._base_capture = VideoOptions(Path(self.folder.name)/"layers.mp4", layers=("world",), ffmpeg_path=ffmpeg)
+        self.app._layer_queue = [("world", "black")]
+        self.app._snapshot = Mock(side_effect=AssertionError("Re-read the changed authored shot"))
+        self.app._start_next_layer_take()
+        exported = self.app.video_export.start.call_args.kwargs["project"]
+        self.assertEqual(exported, take)
+        self.assertIsNot(exported, self.app._bone_take_project)
+        exported.keyframes[-1].time = 30
+        self.assertEqual(self.app._bone_take_project.duration, 5)
+        self.app.video_export.finish_pending = False
+        self.app.video_export.output_path = None
+        self.app._pending_auto_play = False
+        self.app._report_take_audit = Mock()
+        self.app._audit_finished_layers = Mock()
+        self.app._video_operation_done({"state": "completed"})
+        self.assertIsNone(self.app._bone_take_project)
+        self.app._snapshot.assert_not_called()
+
+    def test_failed_and_cancelled_bone_takes_clear_only_the_take_snapshot(self):
+        import copy
+        for state in ("failed", "cancelled"):
+            with self.subTest(state=state):
+                original = copy.deepcopy(self.app.project)
+                self.app._bone_take_project = self.two_camera_project()
+                self.app._video_operation_done({"state": state})
+                self.assertIsNone(self.app._bone_take_project)
+                self.assertEqual(self.app.project, original)
+
+    def test_players_pass_uses_the_same_bone_take_instead_of_the_changed_editor_camera(self):
+        import copy
+        from dolly.bone_picker import timed_attachment
+        from dolly.path import AttachKey
+        authored = Project(keyframes=[Keyframe(0, 1, 2, 3, 4, 5, 6, source="attach",
+            attach=AttachKey(handle=11, entity_id=11, model="models/heroes/astro/astro.vmdl",
+                             point="bone", bone="head"))])
+        self.app._bone_take_project = timed_attachment(authored, 5)
+        expected = copy.deepcopy(self.app._bone_take_project)
+        self.app.project = authored
+        self.app.project.keyframes[0].attach.offset = (100, 0, 0, 0, 0, 0)
+        self.app._base_capture = VideoOptions(Path(self.folder.name)/"color.mp4")
+        self.app.controller = Mock()
+        deployment = Path(self.folder.name)/"deployment"
+        deployment.mkdir()
+        self.app.controller.deployment_directory.return_value = deployment
+        self.app.controller._request.side_effect = lambda command, timeout=5: (
+            "0 816 C_BaseEntity m_pGameSceneNode CGameSceneNode*\n" if "C_BaseEntity" in command else
+            "0 408 CGameSceneNode m_pOwner CGameSceneNode*\n")
+        self.app.video_export.status.return_value = {"width": 64, "height": 64}
+        self.app._snapshot = Mock(side_effect=AssertionError("Re-read the changed editor shot"))
+        with patch("dolly.gui.player_layer.reference_frame_count", return_value=301), \
+                patch("dolly.gui.player_layer.check_capture_space", return_value=1000):
+            self.app._start_player_capture("players")
+        exported = self.app.video_export.start.call_args.kwargs["project"]
+        self.assertEqual(exported, expected)
+        self.assertIsNot(exported, self.app._bone_take_project)
+        self.assertTrue(self.app.video_export.start.call_args.kwargs["capture_only"])
+        self.assertFalse(self.app.video_export.start.call_args.kwargs["pov"])
+        self.app._snapshot.assert_not_called()
 
     def test_recording_without_a_shot_does_not_auto_play(self):
         self.app._play = Mock()
@@ -1261,9 +1422,13 @@ class VideoGuiTests(unittest.TestCase):
         self.app._layer_queue = [("players", "black")]
         self.app._active_layer_take = ("players", "white")
         self.app._submit = Mock()
+        result = {"state": "completed", "layer": "players", "master": "players.mov"}
+        self.app._combine_layer = Mock(return_value=result)
         self.app._video_operation_done({"state": "completed"})
         self.app._submit.assert_called_once()
-        self.assertEqual(self.app._submit.call_args.args[1].__name__, "<lambda>")
+        self.app._combine_layer.assert_not_called()
+        self.assertIs(self.app._submit.call_args.args[1](), result)
+        self.app._combine_layer.assert_called_once_with("players")
         self.assertIsNone(self.app._active_layer_take)
 
     def test_layered_completion_suggests_a_path_beside_the_take_folder(self):
@@ -1329,24 +1494,6 @@ class VideoGuiTests(unittest.TestCase):
         self.assertEqual(json.loads((layer_dir / "shot.json").read_text(encoding="utf-8"))["video_file"],
                          "players.mov")
 
-    def test_layer_pipeline_starts_one_take_at_a_time(self):
-        self.app._base_capture = Mock()
-        self.app._layer_queue = [("players", "black")]
-        self.app._active_layer_take = None
-        self.app._pending_combine = None
-        self.app._pipeline_advance = True
-        self.app._submit = Mock()
-        self.app.video_export.status.return_value = {"state": "completed"}
-        self.app._advance_layer_pipeline()
-        self.app._submit.assert_called_once()
-        self.assertFalse(self.app._pipeline_advance)
-        # A poll while the next take is still recording must not start another.
-        self.app._pipeline_advance = True
-        self.app.video_export.status.return_value = {"state": "recording"}
-        self.app._advance_layer_pipeline()
-        self.assertEqual(self.app._submit.call_count, 1)
-        self.assertTrue(self.app._pipeline_advance)
-
     def test_completed_layer_take_advances_then_restores_scene_layers(self):
         self.app.video_export.output_path = None
         self.app.video_export.output_directory = None
@@ -1355,14 +1502,28 @@ class VideoGuiTests(unittest.TestCase):
         self.app._layer_queue = [("players", "black")]
         self.app._active_layer_take = ("world", "black")
         self.app._submit = Mock()
+        self.app._start_next_layer_take = Mock(return_value="started next take")
+        self.app._restore_scene_state = Mock()
+        self.app.video_export.status.return_value = {"state": "recording"}
         self.app._video_operation_done({"state": "completed"})
+        self.app._submit.assert_not_called()
+        self.app._start_next_layer_take.assert_not_called()
+        self.assertTrue(self.app._pipeline_advance)
+        self.assertEqual(self.app._layer_queue, [("players", "black")])
+        self.app.video_export.status.return_value = {"state": "completed"}
+        self.app._advance_layer_pipeline()
         self.app._submit.assert_called_once()
-        self.assertEqual(self.app._submit.call_args.args[1].__name__, "_start_next_layer_take")
+        self.assertFalse(self.app._pipeline_advance)
+        self.assertEqual(self.app._submit.call_args.args[1](), "started next take")
+        self.app._start_next_layer_take.assert_called_once_with()
         self.app._layer_queue = []
         self.app._submit.reset_mock()
         self.app._video_operation_done({"state": "completed"})
         self.app._submit.assert_called_once()
         self.assertIsNone(self.app._base_capture)
+        self.app._restore_scene_state.assert_not_called()
+        self.assertIsNone(self.app._submit.call_args.args[1]())
+        self.app._restore_scene_state.assert_called_once_with()
 
     def test_failed_layer_take_clears_the_queue_and_restores_layers(self):
         self.app.video_export.output_path = None
@@ -1466,6 +1627,7 @@ class ReShadeGuiTests(unittest.TestCase):
         self.app._persist_preferences = Mock()
         self.app._error = Mock()
         self.app.status_text = Var("")
+        self.app.binding_feedback = Var("")
         self.app.bindings_tree = Mock()
         self.app.bindings_tree.selection.return_value = ("reshade",)
         self.app.binding_key = Var("Mouse5")
@@ -1474,7 +1636,7 @@ class ReShadeGuiTests(unittest.TestCase):
         self.app.binding_shift = Var(False)
 
     def test_reshade_binding_row_preserves_capture_and_runtime_path(self):
-        self.app._save_selected_binding()
+        self.app._save_editor_binding("reshade", EditorBinding("Mouse5"))
         saved = self.app._persist_preferences.call_args.args[0]
         self.assertEqual(saved.reshade_binding, EditorBinding("Mouse5"))
         self.assertEqual(saved.capture_binding, DEFAULT_BINDING)
@@ -1482,10 +1644,10 @@ class ReShadeGuiTests(unittest.TestCase):
         self.assertNotIn("reshade", saved.action_bindings)
 
     def test_conflicting_reshade_binding_does_not_save(self):
-        self.app.binding_key.set("F5")
-        self.app._save_selected_binding()
+        self.app._save_editor_binding("reshade", EditorBinding("F5"))
         self.app._persist_preferences.assert_not_called()
-        self.app._error.assert_called_once()
+        self.assertIn("Play camera path", self.app.binding_feedback.get())
+        self.app._error.assert_not_called()
 
     def test_default_reset_avoids_invalid_intermediate_bindings(self):
         bindings = dict(self.app.app_settings.action_bindings)

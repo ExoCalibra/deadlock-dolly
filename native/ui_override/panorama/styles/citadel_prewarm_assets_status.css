@@ -1,0 +1,97 @@
+/* Prettified by Source 2 Viewer 20.0.0.0 - https://valveresourceformat.github.io */
+
+CitadelPrewarmAssetsStatus.StatusNotification
+{
+	visibility: collapse;
+	margin: 0px;
+}
+
+CitadelPrewarmAssetsStatus.StatusNotification.Prewarming
+{
+	visibility: visible;
+}
+
+CitadelPrewarmAssetsStatus.StatusNotification .IconContainer
+{
+	visibility: collapse;
+}
+
+CitadelPrewarmAssetsStatus.StatusNotification .Details
+{
+	opacity: 0.12;
+	width: fit-children;
+	horizontal-align: right;
+	margin-right: 8px;
+}
+
+CitadelPrewarmAssetsStatus.StatusNotification .Title
+{
+	font-size: 18px;
+	text-align: right;
+	opacity: 0.6;
+}
+
+CitadelPrewarmAssetsStatus.StatusNotification .Desc
+{
+	text-align: right;
+	horizontal-align: right;
+	font-size: 16px;
+}
+
+
+/* Private loading experiment. The stock engine-owned Prewarming class remains
+   the only visibility gate. This does not indicate Dolly replay readiness. */
+CitadelPrewarmAssetsStatus.StatusNotification.DollyLoadingProbeV2
+{
+    width: 500px;
+    height: fit-children;
+    padding: 18px 22px;
+    background-color: #1b252bf5;
+    border: 1px solid #2c373e;
+    border-top: 2px solid #8bc1b8;
+    border-radius: 6px;
+    flow-children: down;
+}
+CitadelPrewarmAssetsStatus.StatusNotification.DollyLoadingProbeV2 .Details
+{
+    opacity: 1;
+    width: 100%;
+    margin: 0px;
+    padding: 0px;
+    horizontal-align: left;
+    flow-children: down;
+}
+CitadelPrewarmAssetsStatus.StatusNotification.DollyLoadingProbeV2 .DollyBrand
+{
+    font-family: sans;
+    font-size: 14px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #8bc1b8;
+    margin-bottom: 8px;
+}
+CitadelPrewarmAssetsStatus.StatusNotification.DollyLoadingProbeV2 .Title
+{
+    font-family: sans;
+    font-size: 34px;
+    font-weight: bold;
+    text-transform: none;
+    text-align: left;
+    horizontal-align: left;
+    color: #c8ced1;
+    opacity: 1;
+    margin: 0px 0px 8px 0px;
+}
+CitadelPrewarmAssetsStatus.StatusNotification.DollyLoadingProbeV2 .Desc
+{
+    font-family: sans;
+    font-size: 18px;
+    font-weight: normal;
+    text-transform: none;
+    text-align: left;
+    horizontal-align: left;
+    color: #9ba7ad;
+    opacity: 1;
+    margin: 0px;
+    white-space: normal;
+}

@@ -24,7 +24,7 @@
 Capture the free camera, shape a shot and play it back with animated framing and
 camera variables.
 
-**Current source: 0.6.51-alpha.** The portable Windows build opens through
+**Current source: 0.6.52-alpha.** The portable Windows build opens through
 `Dolly.exe`. Python and Tcl/Tk are bundled; no separate installation is needed.
 
 **THIS MOD INJECTS CODE INTO DEADLOCK — USE AT YOUR OWN RISK.**
@@ -72,6 +72,12 @@ See [Using the Windows app](#using-the-windows-app) for the full walkthrough.
 
 - In-game camera list: click to select, double-click to view, and delete the selected camera.
 - Shared shot Undo/Redo in the desktop and in-game editors.
+- Position, Rotation and Aspect Ratio curves in a shared desktop or in-game workspace,
+  with stacked graphs and an optional fixed original snapshot.
+- In-game curve value alignment with Alt, right-click cancellation and **Fit all**
+  to recover the complete path view.
+- Dedicated desktop **Controls** page with shortcut recording, conflict checks,
+  and per-action Clear/Reset.
 - Capture cameras from the game with configurable keyboard or mouse bindings.
 - Smooth position paths, rotation and camera bank.
 - Captured lens metadata preserved through replay reloads, playback, save/reopen and history.
@@ -127,17 +133,19 @@ Move to a view and press **Ctrl+Alt+K** to capture it. **Replay timing** is the
 default: advance the replay, frame the next view and capture again.
 **F8** shows or hides all Dolly panels, **F7** opens the console, and
 **F9** switches to Deadlock's replay UI for hero selection. Bindings, movement
-speed and mouse sensitivity are saved from **Settings → Controls & keybinds**. Capture also works
+speed and mouse sensitivity are saved from **Controls**. Capture also works
 while the replay is playing. **Pause after capture**, beside Resume in the timeline,
 chooses whether capture pauses playback; it is off by default and remembered.
 Drag the main panel or Campaths header to reposition it. Both show the same
 four-arrow move cursor; Arrange panels is only needed for resizing or moving
-the timeline.
+the timeline. Outside Arrange, the timeline fits its active controls and stays
+near the bottom of the screen, retaining its custom width and horizontal position.
 
-Selecting a player in the bottom timeline moves freecam near their current
-position without changing replay time. If they have no hero at that tick or
-their view is still settling, Dolly leaves the camera in place and shows a
-notice in the status bar.
+Selecting a player in the bottom timeline follows that participant through
+replay seeks and tick steps without changing time just to select them. Dolly
+resolves their current hero after each seek. **Fly camera** returns to a fixed
+view; an unavailable or settling hero produces a status notice instead of a
+guessed camera target.
 
 Returning from hero selection to Dolly's native camera keeps the chosen view
 and switches the underlying game camera to Free Cam. The native camera also
@@ -150,8 +158,8 @@ In the F8 panel, use **Playback speed**, **Updates / s** and **Show path guides*
 Guides appear in paused flight and hide during playback. Native camera and
 supported effects follow each rendered frame; Updates / s controls monitoring.
 
-Enable the desktop **Full editor** switch for Cameras, Effects and the shot
-timeline. The switch preserves the current shot and remembers the layout.
+The desktop keeps **Camera**, **Look** and the shot timeline available alongside
+Replay, Export, Controls and Settings; no editor-mode switch is needed.
 In-game, the tabs are **CAMERA, FOLLOW, BONE PICKER, LOOK and EXPORT**.
 
 On **CAMERA**, one click selects a saved camera without moving the view;
@@ -231,7 +239,7 @@ unverified depth from the game's spatial upscaling pass and can make exports
 slower on GPUs that normally use reduced render scale. See [Layer export](docs/internal/LAYER_EXPORT.md) for details.
 
 Select a compatible ReShade64.dll in **Settings → ReShade** to enable ReShade color effects.
-**F11** opens its own menu; **Settings → Controls & keybinds** changes that shortcut. ReShade is an
+**F11** opens its own menu; **Controls** changes that shortcut. ReShade is an
 optional separate download. Dolly bundles the crosire/prod80 shader library and
 publishes its verified scene depth to ReShade, so depth-based effects such as
 MXAO can use it. See [Video and ReShade](docs/VIDEO_AND_RESHADE.md) for setup
@@ -366,6 +374,7 @@ separate terms in [assets/README.md](assets/README.md).
 Recent releases and the complete history live in the [changelog](docs/CHANGELOG.md)
 and the per-version [release notes](docs/).
 
+- **[0.6.52-alpha](docs/RELEASE_NOTES_0.6.52-alpha.md)** — matte UI polish, shared curve editing, a dedicated Controls page, fitted bottom timeline and Dolly-branded loading screen, building on @tbhtho's UI rework.
 - **0.6.51-alpha** — explicit update approval and published release highlights inside the desktop app.
 - **0.6.50-alpha** — visible Finish recording controls and safe camera editing while a take is open.
 - **0.6.49-alpha** — refreshed in-game UI by @tbhtho, saved layouts, a pause-after-capture choice and complete F8 panel hiding.

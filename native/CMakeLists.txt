@@ -153,7 +153,7 @@ if(WIN32)
     # online dependency fetches or third-party installer are needed to build.
     add_library(dolly_overlay STATIC
         src/dolly_overlay_win.cpp
-        src/dolly_overlay_panel.cpp src/dolly_lite_panel.cpp src/dolly_ui_layout.cpp
+        src/dolly_overlay_panel.cpp src/dolly_lite_panel.cpp src/dolly_curve_panel.cpp src/dolly_ui_layout.cpp src/dolly_ui_storage.cpp
         src/dolly_bone_picker_ui.cpp
         src/dolly_object_picker_ui.cpp
         src/dolly_renderer_diagnostics_win.cpp

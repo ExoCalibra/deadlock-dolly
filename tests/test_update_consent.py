@@ -346,9 +346,9 @@ class UpdateConsentTests(unittest.TestCase):
         self.worker.assert_not_called()
         manager.app._on_close.assert_not_called()
 
-    def test_each_release_identity_field_must_match_approval_and_verified_payload(self):
+    def test_missing_or_mismatched_release_identity_rejects_restart(self):
         for field, value in (("version", "9.0.2"), ("url", "https://github.com/changed.zip"),
-                             ("sha256", "b" * 64), ("size", 101)):
+                             ("sha256", "b" * 64), ("size", 101), (None, None)):
             for mismatched in ("approved", "ready_release"):
                 with self.subTest(field=field, mismatched=mismatched):
                     manager = self.make_manager()
@@ -356,8 +356,8 @@ class UpdateConsentTests(unittest.TestCase):
                     key = manager.release_key(manager.available)
                     manager.approved = manager.ready_release = key
                     manager.ready = (self.work, manager.available["version"])
-                    changed = {**manager.available, field: value}
-                    setattr(manager, mismatched, manager.release_key(changed))
+                    changed = None if field is None else manager.release_key({**manager.available, field: value})
+                    setattr(manager, mismatched, changed)
                     manager.restart()
                     self.assertFalse(manager.restarting)
                     manager.app._on_close.assert_not_called()

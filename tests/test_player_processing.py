@@ -103,7 +103,11 @@ class ResourceTests(unittest.TestCase):
         api.CloseHandle.argtypes=[w.HANDLE];api.CloseHandle.restype=w.BOOL
         with tempfile.TemporaryDirectory() as folder:
             child_file=Path(folder)/'child.txt'
-            command='import sys,subprocess,time; from pathlib import Path; sys.stdin.readline(); p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"]); Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(30)'
+            # Publish readiness only after the complete PID file is closed.
+            command=('import sys,subprocess,time; from pathlib import Path; sys.stdin.readline(); '
+                     'p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"]); '
+                     'ready=Path(sys.argv[1]); temporary=ready.with_suffix(".tmp"); '
+                     'temporary.write_text(str(p.pid)); temporary.replace(ready); time.sleep(30)')
             process=subprocess.Popen([sys.executable,'-c',command,str(child_file)],stdin=subprocess.PIPE,
                                      creationflags=subprocess.CREATE_NO_WINDOW)
             job=None;child=None

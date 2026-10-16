@@ -52,7 +52,6 @@ class SettingsState:
     reshade_status_text: tk.Variable
     show_log: tk.Variable
     auto_updates_initial: bool
-    mouse_sensitivity: tk.Variable
 
 
 @dataclass(frozen=True)
@@ -70,11 +69,9 @@ class SettingsActions:
     open_launch_options: Callable[..., object]
     recover_game_config: Callable[..., object]
     save_layout_paths: Callable[..., object]
-    save_mouse_sensitivity: Callable[..., object]
     save_update_preference: Callable[..., object]
     select_reshade_runtime: Callable[..., object]
     toggle_log: Callable[..., object]
-    build_keybinds: Callable[..., object]
     show_reshade_keybinds: Callable[..., object]
 
 
@@ -101,12 +98,8 @@ class SettingsPage:
         field(game, "Replay folder", state.replay_folder)
         actions(game, (("Browse folder...", commands.browse_replay_folder), ("Save paths", commands.save_layout_paths)), 2)
         actions(game, (("Display launch options...", commands.open_launch_options),), 1)
-        self._build_camera_feel(body, state, commands)
         from ..graphics_profiles_ui import GraphicsProfiles
         self.graphics_profiles = GraphicsProfiles(card(body, "Replay graphics profiles"), root=root, on_error=on_error)
-        self.controls_disclosure = disclosure(body, "Controls & keybinds")
-        self.keybinds_tab = self.controls_disclosure.body
-        commands.build_keybinds(self.keybinds_tab)
         self.reshade_card = shade = card(body, "ReShade")
         self.reshade_path_entry = field(shade, "Runtime DLL", state.reshade_runtime_path)
         self.reshade_path_entry.bind(
@@ -126,8 +119,12 @@ class SettingsPage:
                              ("Export diagnostics", commands.diagnostics)))
         ttk.Checkbutton(tools.body, text="Show log", variable=state.show_log, command=commands.toggle_log).pack(anchor="w", pady=(0, GAP))
 
-    def _build_camera_feel(self, body, state, commands):
-        self.mouse_sensitivity = state.mouse_sensitivity
+
+class CameraFeel:
+    """Camera look preferences, owned by the Controls page."""
+    def __init__(self, body, mouse_sensitivity, save_sensitivity):
+        self.mouse_sensitivity = mouse_sensitivity
+        self.save_sensitivity = save_sensitivity
         self._sensitivity_syncing = False
         self.sensitivity_position = tk.DoubleVar(value=sensitivity_to_position(self._sensitivity_value()))
         self.sensitivity_text = tk.StringVar()
@@ -144,7 +141,15 @@ class SettingsPage:
                            variable=self.sensitivity_position, command=self._sensitivity_moved)
         slider.pack(fill="x")
         slider.bind("<ButtonRelease-1>", self._sensitivity_released)
-        ttk.Label(feel, textvariable=self.sensitivity_text, style="CardMuted.TLabel").pack(anchor="w", pady=(6, 0))
+        ttk.Label(feel, textvariable=self.sensitivity_text, style="CardMuted.TLabel").pack(anchor="w", pady=(6, 10))
+        exact = ttk.Frame(feel, style="Card.TFrame")
+        exact.pack(fill="x")
+        ttk.Label(exact, text="Mouse sensitivity", style="CardMuted.TLabel").pack(side="left", padx=(0, 10))
+        self.sensitivity_entry = ttk.Entry(exact, textvariable=mouse_sensitivity, width=12, style="Card.TEntry")
+        self.sensitivity_entry.pack(side="left", padx=(0, 10))
+        self.sensitivity_entry.bind("<Return>", lambda _event: self.save_sensitivity())
+        ttk.Button(exact, text="Save sensitivity", command=save_sensitivity,
+                   style="Card.Quiet.TButton").pack(side="left")
         self.mouse_sensitivity.trace_add("write", self._sensitivity_state_changed)
         self._sensitivity_text_refresh(self._sensitivity_value())
 
@@ -173,7 +178,7 @@ class SettingsPage:
             self._sensitivity_text_refresh(value)
         finally:
             self._sensitivity_syncing = False
-        self.commands.save_mouse_sensitivity()
+        self.save_sensitivity()
 
     def _sensitivity_state_changed(self, *_args):
         if self._sensitivity_syncing:

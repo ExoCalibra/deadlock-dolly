@@ -280,6 +280,7 @@ void release_device() noexcept {
     if (imgui) {
         auto* previous = ImGui::GetCurrentContext();
         ImGui::SetCurrentContext(imgui);
+        panel_ui.flush_layout(true);
         if (dx11_ready)
             ImGui_ImplDX11_Shutdown();
         if (win32_ready)
@@ -738,12 +739,14 @@ void render_overlay(IDXGISwapChain* chain) {
     if (!effects_handled)
         clean_frame(chain, device, immediate, frame_user);
     if (reshade_overlay_open() || reshade_overlay_pending()) {
+        panel_ui.cancel_position_graph();
         clear_pending_input();
         editor_text_input_active(false);
         return;
     }
     const bool draw_loading = panel_ui.shader_notice_visible(state);
     if (!state.enabled && !draw_loading) {
+        panel_ui.cancel_position_graph();
         clear_pending_input();
         editor_text_input_active(false);
         return;
@@ -754,6 +757,7 @@ void render_overlay(IDXGISwapChain* chain) {
     const bool draw_guides = guides && guides->enabled();
     const bool draw_grid = panel_ui.framing_grid_visible(state);
     const bool draw_campaths = panel_ui.lite_campaths_visible(state);
+    if (!draw_campaths) panel_ui.cancel_position_graph();
     auto& io = ImGui::GetIO();
     if (panel != last_panel) {
         io.ClearInputKeys();
@@ -813,6 +817,7 @@ void render_overlay(IDXGISwapChain* chain) {
         panel_ui.draw_shader_notice();
     editor_text_input_active(panel && ImGui::GetIO().WantTextInput);
     ImGui::Render();
+    panel_ui.flush_layout();
     immediate->OMSetRenderTargets(1, &target, nullptr);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     diagnostic_draw.fetch_add(1, std::memory_order_relaxed);

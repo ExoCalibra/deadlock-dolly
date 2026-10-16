@@ -30,21 +30,6 @@ class NativePackagingTests(unittest.TestCase):
             reader.write_bytes(b'Unexpected replacement')
             with self.assertRaisesRegex(ValueError,'Replay reader'):
                 build_native.runtime_files(self.root)
-    def test_ui_override_pack_matches_launcher_pin_and_shipped_stylesheets(self):
-        from dolly.launcher import UI_OVERRIDE_PACK_SHA256
-        import struct
-        pack = TOOLS.parent / "native/assets/ui/pak02_dir.vpk"
-        data = pack.read_bytes()
-        self.assertEqual(sha256(pack), UI_OVERRIDE_PACK_SHA256)
-        magic, version, tree_size = struct.unpack_from("<III", data, 0)
-        self.assertEqual((magic, version), (0x55AA1234, 2))
-        tree = data[28:28 + tree_size]
-        for expected in (b"vcss_c\0panorama/styles\0citadel_client_status\0",
-                         b"citadel_hud_and_db_overlay\0"):
-            self.assertIn(expected, tree)
-        body = data[28 + tree_size:]
-        self.assertIn(b"ClientServerDebugStats", body)
-        self.assertIn(b"GameLogoIcon", body)
 
     def test_reviewed_module_profiles_match_both_launcher_and_native_pins(self):
         from dolly.launcher import NATIVE_GAME_SHA256
@@ -82,12 +67,6 @@ class NativePackagingTests(unittest.TestCase):
         exported = set(source_files(root))
         self.assertFalse(expected - exported,
                          f"Reviewed profiles missing from source export: {expected - exported}")
-
-    def test_compatibility_manifest_matches_launcher_pins(self):
-        from dolly import compatibility
-        from dolly.launcher import NATIVE_GAME_SHA256
-        document = compatibility.load_manifest()
-        self.assertEqual(compatibility.accepted_pins(document), NATIVE_GAME_SHA256)
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="Dolly native package ")

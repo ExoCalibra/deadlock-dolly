@@ -57,10 +57,6 @@ def build_library(app):
 def build_settings(app):
     from .ui.settings_page import SettingsActions, SettingsPage, SettingsState
 
-    def build_keybinds(parent):
-        app.keybinds_tab = parent
-        app._build_keybinds()
-
     state = SettingsState(
         game_path=app.game_path,
         replay_folder=app.replay_folder,
@@ -68,7 +64,6 @@ def build_settings(app):
         reshade_status_text=app.reshade_status_text,
         show_log=app.show_log,
         auto_updates_initial=app.app_settings.auto_updates,
-        mouse_sensitivity=app.editor_sensitivity,
     )
     commands = SettingsActions(
         browse_game=app._browse_game,
@@ -84,19 +79,15 @@ def build_settings(app):
         open_launch_options=app._open_launch_options,
         recover_game_config=app._recover_game_config,
         save_layout_paths=app._save_layout_paths,
-        save_mouse_sensitivity=app._save_mouse_sensitivity,
         save_update_preference=app._save_update_preference,
         select_reshade_runtime=app._select_reshade_runtime,
         toggle_log=app._toggle_log,
-        build_keybinds=build_keybinds,
         show_reshade_keybinds=lambda: app._show_keybinds("reshade"),
     )
     view = SettingsPage(app.settings_tab, state, commands, root=app.root, on_error=app._error)
     app.settings_view = view
     app.auto_updates = view.auto_updates
-    app.controls_disclosure = view.controls_disclosure
     app.graphics_profiles = view.graphics_profiles
-    app.keybinds_tab = view.keybinds_tab
     app.reshade_browse_button = view.reshade_browse_button
     app.reshade_library_button = view.reshade_library_button
     app.reshade_card = view.reshade_card

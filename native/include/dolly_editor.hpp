@@ -143,14 +143,22 @@ enum class EditorAction : std::uint32_t {
     FocusReplayPlayer,
     PrepareCinematic,
     SetPauseAfterCapture,
+    SetCameraPosition,
+    SetCameraCurveValue,
+    SelectCurveCamera,
     SetVideoAeCamera,
     SetVideoUsdCamera
 };
+static_assert(static_cast<std::uint32_t>(EditorAction::SetCameraCurveValue) == 112 &&
+              static_cast<std::uint32_t>(EditorAction::SelectCurveCamera) == 113,
+              "Stable unified curve action IDs");
+static_assert(static_cast<std::uint32_t>(EditorAction::SetCameraPosition) == 111,
+              "Stable XYZ value-graph action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::SetPauseAfterCapture) == 110,
               "Stable pause-after-capture preference action ID");
-static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoAeCamera) == 111,
+static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoAeCamera) == 114,
               "Stable After Effects camera export action ID");
-static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoUsdCamera) == 112,
+static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoUsdCamera) == 115,
               "Stable USD camera export action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::TakeScreenshot) == 98,
               "Stable screenshot action ID");
@@ -487,6 +495,16 @@ inline bool valid_editor_camera_action(const EditorCameraList& list, EditorActio
     return (action == EditorAction::SelectCamera || action == EditorAction::ViewCamera ||
             action == EditorAction::DeleteCamera) &&
            value >= list.first && value < list.first + list.count;
+}
+inline bool valid_editor_position_action(const EditorCameraList& list, double value,
+                                         const CameraPose& pose) noexcept {
+    if (!valid_editor_camera_action(list, EditorAction::SelectCamera, value, pose[0]))
+        return false;
+    for (double component : pose)
+        if (!std::isfinite(component)) return false;
+    const auto& row = list.rows[unsigned(value) - list.first];
+    return !row.source && pose[1] >= 0 && pose[1] <= 2 && pose[1] == std::floor(pose[1]) &&
+           std::abs(pose[2]) <= 1e8 && pose[3] == row.time;
 }
 #pragma pack(pop)
 static_assert(sizeof(EditorFollowConfig) == 48, "Python Follow config layout");

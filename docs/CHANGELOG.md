@@ -1,5 +1,34 @@
 # Changes
 
+## 0.6.52-alpha
+
+- **Timeline height follows the view.** *Before:* saved tall layouts could leave empty space inside and below the player timeline, while its regular controls had little bottom padding. *After:* Replay and Campaths fit their controls with consistent padding, Curves grows for its graphs, and the timeline sits a small distance above the bottom of the screen while keeping its custom width. Arrange panels allows temporary positioning before it returns to the bottom dock.
+- **Graph editing with room to breathe.** *Before:* key tooltips inherited the plot's zero padding, and Escape could close Dolly while cancelling an adjustment. *After:* padded tooltips explain the controls, right-click cancels an active graph or numeric adjustment, and holding Alt aligns a dragged value with a nearby neighboring camera without changing its time.
+- **Dolly's loading notice.** *Before:* the shader-loading message looked separate from the editor. *After:* a Dolly-branded Panorama card sits at the top center of the loading screen, with no duplicate native popup, while retaining the same automatic replay-loading behavior.
+- **Readable in-game dropdowns.** *Before:* fractional playback speeds and the full recording source could be clipped by dropdown arrows or narrow Export cards. *After:* speed controls reserve room for their text and arrows, and Export cards reflow to keep source names readable.
+- **Keep camera curves in view.** *Before:* newly added cameras could retain an old graph range, short paths could leave unused timeline space, and dragging a value beyond the plot could hide its key. *After:* changed camera ranges fit the full path, positive subsecond durations keep their actual end, and accepted values expand the graph when needed. **Fit all** resets the in-game curve view without changing camera values.
+- **Clearer tab selection.** A complete rounded outline sits close to each desktop tab and fades between selections while pages open immediately. Fast clicks blend from the outlines already visible; startup waits for the sidebar layout before showing the outline.
+- **Precision scrolling at page edges.** Small wheel inputs move in single pixels and reverse immediately at the top and bottom, without accumulating outward scroll input.
+- **All desktop tools available.** Camera, Look and the shot timeline no longer require a Full editor switch. Older saved reduced-mode preferences keep working without hiding those tools.
+- **Player following through replay seeks.** The Replay timeline's player selector keeps the chosen participant through seeking and tick steps, resolving their current hero after the replay settles. **Fly camera** returns to a fixed view; unavailable heroes produce a status message instead of a guessed target.
+- **Replay startup and aligned cards.** New in-game sessions open the bottom timeline on Replay. Neighboring cards share a row height across the main panel's tabs, with normal control spacing and scrolling when needed.
+
+- **One Controls page.** *Before:* shortcut editing lived inside Settings with separate key, modifier and mouse-button selectors. *After:* a dedicated sidebar page has searchable actions, one press-and-review recorder, visible conflicts, and Clear/Reset for each action. Existing saved shortcuts carry over.
+- **Smoother desktop navigation.** *Before:* nested graph scrollers placed several rails together, repeated resize events resampled unchanged curves, and focused dropdowns could pick up a square background. *After:* Camera uses one outer content scroller, wheel and resize work is coalesced, and focused controls and scrollbar thumbs follow the rounded matte theme.
+
+- **Corner layout defaults.** *Before:* Campaths started near the lower left and the main panel was centered. *After:* fresh/reset layouts place them in the upper left and upper right with clearance for ReShade's startup banner; saved custom layouts stay in control.
+- **Recoverable layout saves.** *Before:* interrupted writes could damage the layout file. *After:* completed changes save through checked temporary files with a validated backup, and layout preferences stay outside the app folder across updates.
+- **Camera curves in one workspace.** *Before:* the desktop graphs were split and there was no shared in-game curve workspace. *After:* both editors organize Position, Rotation and Framing together, with **Stack graphs** for aligned plots and **Show original** for a faded snapshot behind current edits. Inline axis buttons replace the cramped dropdowns where space allows.
+- **Clearer graph controls.** *Before:* Compare and Show Before described different kinds of comparison, and Fit could discard an unfinished keyboard edit. *After:* **Stack graphs**, **Show original**, **Update original** and the fit controls name their separate jobs; fitting the graph completes a valid numeric edit and leaves saved camera values intact.
+- **Repeat attached-camera takes at another duration.** *Before:* recording a single attached camera added an endpoint to the shot and hid the duration selector. *After:* the endpoint belongs only to the take; the camera and its Undo history stay intact, and the next take can use a different duration.
+- **Check replay continuity when pausing.** *Before:* the playback monitor rejected every backward native tick, including a settling paused view. *After:* a suspicious tick at the pause transition is checked against the independent replay clock; actual seeks, invalid views and replay changes still stop playback.
+- **Matte panels and quieter controls.** *Before:* the replay could show through panel backgrounds. *After:* opaque graphite surfaces, softer text and mint selections keep the editor readable, using the approved preview colours in both editors.
+
+Built on the in-game UI rework contributed by Marcel,
+[@tbhtho](https://github.com/tbhtho) in [PR #20](https://github.com/cravvnn/deadlock-dolly/pull/20).
+
+Full details: [0.6.52 release notes](RELEASE_NOTES_0.6.52-alpha.md).
+
 ## 0.6.51-alpha
 
 - **Choose when to update.** *Before:* opening Dolly or leaving it idle could download and install updates automatically. *After:* from this version, release checks run inside the desktop app and every update requires **Update now** before a package downloads or installs.

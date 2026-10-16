@@ -171,7 +171,7 @@ def start_attached_view(app, mutate, *, publish):
 
 
 def timed_attachment(project, duration):
-    """Give a single attached view an end time without changing its bone/offsets."""
+    """Build a separate timed take; the single authored view stays unchanged."""
     if len(project.keyframes) != 1 or project.keyframes[0].source != "attach":
         raise ValueError("Choose a single attached camera first.")
     duration = float(duration)

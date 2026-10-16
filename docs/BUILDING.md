@@ -17,6 +17,8 @@ shots, replays, logs or credentials.
 Build locally using the commands below. The build creates both the native helper
 and the desktop executables; package components must come from the same completed
 build. Inspect `build/checks/` if a check fails. Keep verification enabled.
+For routine development edits, use the [focused checks](internal/TESTING.md)
+before requesting a release build; the full release gates remain required.
 A successful build does not publish anything or prove in-game behavior; complete
 the relevant [in-game checks](internal/STAGE1_TESTING.md) before publishing.
 
@@ -62,8 +64,8 @@ actual packaged-editor startup fails. Inspect `build/checks/` after a failure.
 
 Successful outputs are under `dist/`:
 
-- `Deadlock_Dolly_<version>_Windows_x64.zip`
-- `Deadlock_Dolly_<version>_Source.zip`
+- `Deadlock_Dolly_0.6.52-alpha_Windows_x64.zip`
+- `Deadlock_Dolly_0.6.52-alpha_Source.zip`
 - `SHA256SUMS.txt`
 
 The portable ZIP contains a `DeadlockDolly` folder with `Dolly.exe`, `_internal`,

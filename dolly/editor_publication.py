@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 
 LOG = logging.getLogger("dolly.editor_session")
 
@@ -60,19 +61,35 @@ def _attach_state(app, selected, count):
     return editor_view.attach_state(app.project, getattr(app, "attach_roster", None), selected, count)
 
 
+def visualization_session(app):
+    """Stable opened-shot identity, renewed by ShotHistory.reset."""
+    history = getattr(app, "shot_history", None)
+    session_id = getattr(history, "session_id", None)
+    if isinstance(session_id, int) and not isinstance(session_id, bool) and 0 < session_id <= 0xFFFFFFFFFFFFFFFF:
+        return session_id
+    # A missing journal means there can be no editable native curve. Keep
+    # read-only publications identified without retaining a mutable project.
+    if not getattr(app, "_native_curve_readonly_session", None):
+        app._native_curve_readonly_session = secrets.randbits(64) or 1
+    return app._native_curve_readonly_session
+
+
 def _configure_visualization(app, bridge, active, selected):
     publish = getattr(bridge, "publish_visualization", None)
     if publish is None:
         return
     project = app.project
+    revision = getattr(getattr(app, "shot_history", None), "revision", 0)
+    session_id = visualization_session(app)
     # Keep primitives, not mutable Keyframe objects: replacing an in-place
     # camera must invalidate the published guides. The native path limit also
     # bounds work on the Tk thread for oversized, console-only projects.
     from .native_path import CHANNELS, MAX_CAMERA_KEYS
-    keys = (tuple((key.time, *(getattr(key, name) for name in CHANNELS))
+    from .path import channel_value
+    keys = (tuple((key.time, key.source, key.lens_scale, *(channel_value(key, name) for name in CHANNELS))
                   for key in project.keyframes)
             if len(project.keyframes) <= MAX_CAMERA_KEYS else len(project.keyframes))
-    signature = (active, selected, project.interpolation, project.rotation_mode,
+    signature = (active, selected, revision, session_id, project.interpolation, project.rotation_mode,
                  project.lens_interpolation, project.standard_aspect, project.duration, keys)
     if (getattr(app, "_native_visualization_bridge", None) is bridge
             and getattr(app, "_native_visualization_cache", None) == signature):
@@ -82,7 +99,8 @@ def _configure_visualization(app, bridge, active, selected):
     app._native_visualization_bridge = bridge
     app._native_visualization_cache = signature
     try:
-        if publish(project, enabled=active, selected_camera=selected) is False:
+        if publish(project, enabled=active, selected_camera=selected, revision=revision,
+                   session_id=session_id) is False:
             details = bridge.visualization_diagnostics()
             LOG.warning("Path guides unavailable: %s", details.get("error") or "publication failed")
     except (RuntimeError, ValueError, OSError) as exc:

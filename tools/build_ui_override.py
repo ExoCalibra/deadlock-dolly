@@ -1,8 +1,7 @@
 """Compile and pack Dolly's Panorama overlay override.
 
-The sources in ``native/ui_override`` hide the client-status Deadlock mark and
-the match/server debug label that the development HUD overlay otherwise draws
-over every recorded session. The compiled pack ships as
+The sources in ``native/ui_override`` present the shader-loading card and hide
+the client-status mark and match/server debug label during recording. The pack ships as
 ``native/assets/ui/pak02_dir.vpk`` and the launcher copies it beside the
 confetti pack into each native session's mounted ``cvar_unlocker`` folder.
 
@@ -36,7 +35,16 @@ SIGNATURE = 0x55AA1234
 VERSION = 2
 INLINE_ARCHIVE = 0x7FFF
 ENTRY_TERMINATOR = 0xFFFF
-EXPECTED_RULES = ("ClientServerDebugStats", "GameLogoIcon")
+EXPECTED_RULES = ("ClientServerDebugStats", "GameLogoIcon", "DollyLoadingProbeV2")
+EXPECTED_SOURCES = {
+    "panorama/styles/citadel_client_status.css": ".vcss_c",
+    "panorama/styles/citadel_hud_and_db_overlay.css": ".vcss_c",
+    "panorama/styles/citadel_prewarm_assets_status.css": ".vcss_c",
+    "panorama/layout/citadel_prewarm_assets_status.xml": ".vxml_c",
+    "panorama/layout/hud_hideout.xml": ".vxml_c",
+}
+EXPECTED_RESOURCES = frozenset(str(Path(name).with_suffix(extension)).replace("\\", "/")
+                               for name, extension in EXPECTED_SOURCES.items())
 
 
 def locate_compiler(sdk: Path) -> Path | None:
@@ -47,15 +55,15 @@ def locate_compiler(sdk: Path) -> Path | None:
     return None
 
 
-def compile_styles(sdk: Path, compiler: Path) -> tuple[Path, list[Path]]:
+def compile_sources(sdk: Path, compiler: Path) -> tuple[Path, list[Path]]:
     game_dir = sdk / "game" / "citadel"
     if not (game_dir / "gameinfo.gi").is_file():
         raise SystemExit(f"gameinfo.gi not found in {game_dir}; pass a full Source 2 SDK root.")
     content = sdk / "content" / "citadel_addons" / ADDON
     output = sdk / "game" / "citadel_addons" / ADDON
-    sources = sorted(SOURCE.rglob("*.css"))
-    if not sources:
-        raise SystemExit(f"no stylesheet sources under {SOURCE}")
+    sources = sorted(path for path in SOURCE.rglob("*") if path.is_file() and path.suffix in (".css", ".xml"))
+    if {path.relative_to(SOURCE).as_posix() for path in sources} != set(EXPECTED_SOURCES):
+        raise SystemExit("UI override sources must contain the complete reviewed three stylesheets and two layouts.")
     compiled: list[Path] = []
     for source in sources:
         relative = source.relative_to(SOURCE)
@@ -67,7 +75,7 @@ def compile_styles(sdk: Path, compiler: Path) -> tuple[Path, list[Path]]:
                                 cwd=str(compiler.parent))
         if result.returncode != 0:
             raise SystemExit(f"resourcecompiler failed for {relative} (rc={result.returncode})")
-        produced = (output / relative).with_suffix(".vcss_c")
+        produced = (output / relative).with_suffix(EXPECTED_SOURCES[relative.as_posix()])
         if not produced.is_file():
             raise SystemExit(f"resourcecompiler produced no output for {relative}")
         compiled.append(produced)
@@ -86,6 +94,8 @@ def pack(output_root: Path, compiled: list[Path], destination: Path) -> None:
             raise SystemExit(f"compiled pack does not carry the {rule} rule")
     for path in compiled:
         entries[path.relative_to(output_root).as_posix()] = path.read_bytes()
+    if len(compiled) != len(entries) or set(entries) != EXPECTED_RESOURCES:
+        raise SystemExit("UI override pack must contain exactly the five reviewed layout/stylesheet resources.")
     grouped: dict[tuple[str, str], list[tuple[str, bytes]]] = {}
     for virtual_path, payload in entries.items():
         path = Path(virtual_path)
@@ -110,7 +120,7 @@ def pack(output_root: Path, compiled: list[Path], destination: Path) -> None:
     tree += b"\0"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(struct.pack("<IIIIIII", SIGNATURE, VERSION, len(tree), len(data), 0, 0, 0) + tree + data)
-    print(f"{destination.relative_to(ROOT)}: {len(entries)} resources, {destination.stat().st_size} bytes")
+    print(f"{destination}: {len(entries)} resources, {destination.stat().st_size} bytes")
     print("sha256 " + hashlib.sha256(destination.read_bytes()).hexdigest())
 
 
@@ -122,7 +132,7 @@ def main() -> int:
     compiler = args.compiler or locate_compiler(args.sdk)
     if not compiler or not compiler.is_file():
         raise SystemExit("resourcecompiler.exe not found; pass --sdk or --compiler")
-    output_root, compiled = compile_styles(args.sdk, compiler)
+    output_root, compiled = compile_sources(args.sdk, compiler)
     for path in compiled:
         print(f"compiled {path.name} ({path.stat().st_size} bytes)")
     pack(output_root, compiled, DESTINATION)

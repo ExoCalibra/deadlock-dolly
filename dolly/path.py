@@ -403,7 +403,8 @@ def _spline_tangents(times: list[float], values: list[float]) -> list[float]:
 
 
 def _sample(times: list[float], values: list[float], time: float,
-            interpolation: str, monotone: bool = True) -> float:
+            interpolation: str, monotone: bool = True,
+            tangents: tuple[float, ...] | None = None) -> float:
     if time <= times[0] or len(times) == 1:
         return values[0]
     if time >= times[-1]:
@@ -415,17 +416,18 @@ def _sample(times: list[float], values: list[float], time: float,
     fraction = (time - times[left]) / span
     if interpolation == "linear" or len(times) == 2:
         return (1 - fraction) * values[left] + fraction * values[left + 1]
-    try:
-        if interpolation == "spline":
-            tangents = _spline_tangents(times, values)
-        else:
-            tangents = (_monotone_tangents if monotone else _position_tangents)(times, values)
-    except ArithmeticError:
-        # Extremely close timestamps can exceed floating-point derivative
-        # precision. A linear segment remains finite and honors both keys.
-        return (1 - fraction) * values[left] + fraction * values[left + 1]
-    if not all(math.isfinite(value) for value in tangents):
-        return (1 - fraction) * values[left] + fraction * values[left + 1]
+    if tangents is None:
+        try:
+            if interpolation == "spline":
+                tangents = _spline_tangents(times, values)
+            else:
+                tangents = (_monotone_tangents if monotone else _position_tangents)(times, values)
+        except ArithmeticError:
+            # Extremely close timestamps can exceed floating-point derivative
+            # precision. A linear segment remains finite and honors both keys.
+            return (1 - fraction) * values[left] + fraction * values[left + 1]
+        if not all(math.isfinite(value) for value in tangents):
+            return (1 - fraction) * values[left] + fraction * values[left + 1]
     u2, u3 = fraction * fraction, fraction * fraction * fraction
     value = ((2 * u3 - 3 * u2 + 1) * values[left]
              + (u3 - 2 * u2 + fraction) * span * tangents[left]
@@ -440,6 +442,25 @@ def _sample(times: list[float], values: list[float], time: float,
         low, high = sorted((values[left], values[left + 1]))
         value = max(low, min(high, value))
     return value
+
+
+@dataclass(frozen=True)
+class CameraChannelSamples:
+    """Immutable camera-only evaluator for a validated batch of graph samples.
+
+    Playback's sampler still owns the interpolation arithmetic. Preparing its
+    inputs once avoids validating the whole shot, evaluating unrelated cvars,
+    and rebuilding the same derivatives at every plotted timestamp.
+    """
+    times: tuple[float, ...]
+    values: tuple[float, ...]
+    interpolation: str
+    monotone: bool
+    tangents: tuple[float, ...] | None = None
+
+    def evaluate(self, time: float) -> float:
+        return _sample(self.times, self.values, _finite(time, "Evaluation time"),
+                       self.interpolation, self.monotone, self.tangents)
 
 
 @dataclass
@@ -578,6 +599,34 @@ class Project:
                 key.time = _finite(key.time, "Track time") * factor
         self.tick_rate = rate
         self.validate()
+
+    def camera_channel_samples(self, name: str) -> CameraChannelSamples:
+        """Prepare an immutable graph evaluator without changing the project."""
+        self.validate()
+        if not self.keyframes:
+            raise ValueError("Add a camera keyframe before evaluating the shot")
+        fields = CAMERA_FIELDS + (("lens_scale",) if any(k.lens_scale is not None for k in self.keyframes) else ())
+        if name not in fields:
+            raise KeyError(name)
+        times = tuple(float(key.time) for key in self.keyframes)
+        values = tuple(float(channel_value(key, name)) for key in self.keyframes)
+        if self.rotation_mode == "shortest" and name in ("yaw", "roll"):
+            values = tuple(_unwrap(values))
+        interpolation = self.lens_interpolation if name in ("aspect_ratio", "lens_scale") else self.interpolation
+        monotone = name not in ("x", "y", "z")
+        tangents = None
+        if interpolation not in ("step", "linear") and len(times) > 2:
+            try:
+                derivatives = (_spline_tangents(times, values) if interpolation == "spline" else
+                               (_monotone_tangents if monotone else _position_tangents)(times, values))
+            except ArithmeticError:
+                derivatives = None
+            if derivatives is None or not all(math.isfinite(value) for value in derivatives):
+                # Match _sample's finite linear fallback for close timestamps.
+                interpolation = "linear"
+            else:
+                tangents = tuple(derivatives)
+        return CameraChannelSamples(times, values, interpolation, monotone, tangents)
 
     def evaluate(self, time: float) -> dict[str, Any]:
         """Evaluate without state: forward playback and rewinds are identical.

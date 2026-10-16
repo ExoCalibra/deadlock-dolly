@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from dolly.ui.library_page import LibraryActions, LibraryPage, LibraryState
 from dolly.ui.settings_page import (
-    SENSITIVITY_MAX, SENSITIVITY_MIN, SENSITIVITY_TICKS, SettingsActions, SettingsPage,
+    SENSITIVITY_MAX, SENSITIVITY_MIN, SENSITIVITY_TICKS, CameraFeel, SettingsActions, SettingsPage,
     SettingsState, position_to_sensitivity, sensitivity_preset_name, sensitivity_to_position,
 )
 from dolly.ui.export_page import ExportActions, ExportPage, ExportState
@@ -65,19 +65,19 @@ class PageBoundaryTests(unittest.TestCase):
         self.assertEqual(str(view.cancel_startup_button.cget('state')), 'disabled')
         self.assertEqual(tuple(view.home_camera_driver_combo.cget('values')), ('Native (experimental)', 'Console (legacy)'))
 
-    def test_settings_owns_preferences_controls_and_passes_keybind_parent_explicitly(self):
+    def test_settings_owns_preferences_and_routes_to_dedicated_controls(self):
         state = self.variables(SettingsState, auto_updates_initial=True, show_log=tk.BooleanVar(self.root, False))
         with patch('dolly.graphics_profiles.load_library', return_value={'format': 1, 'selected': '', 'profiles': []}):
             view = SettingsPage(self.root, state, self.callbacks(SettingsActions), root=self.root,
                                 on_error=lambda *args: self.fail(str(args)))
-        self.assertEqual(self.calls, [('build_keybinds', (view.keybinds_tab,), {})])
+        self.assertEqual(self.calls, [])
         self.assertTrue(view.auto_updates.get())
-        self.assertFalse(view.controls_disclosure.opened)
+        self.assertFalse(hasattr(view, 'controls_disclosure'))
         self.button('Save paths').invoke()
         self.button('Menu shortcut...').invoke()
         self.button('Browse FX library...').invoke()
         self.assertEqual([c[0] for c in self.calls],
-                         ['build_keybinds', 'save_layout_paths', 'show_reshade_keybinds', 'browse_reshade_library'])
+                         ['save_layout_paths', 'show_reshade_keybinds', 'browse_reshade_library'])
         self.assertEqual(str(view.reshade_path_entry.cget('textvariable')), str(state.reshade_runtime_path))
         self.assertEqual(str(view.reshade_disable_button.cget('state')), 'disabled')
         self.assertFalse(hasattr(view.graphics_profiles, 'app'))
@@ -112,16 +112,13 @@ class PageBoundaryTests(unittest.TestCase):
             capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_settings_camera_feel_presets_and_state_sync(self):
-        state = self.variables(SettingsState, auto_updates_initial=True, show_log=tk.BooleanVar(self.root, False))
-        with patch('dolly.graphics_profiles.load_library', return_value={'format': 1, 'selected': '', 'profiles': []}):
-            view = SettingsPage(self.root, state, self.callbacks(SettingsActions), root=self.root,
-                                on_error=lambda *args: self.fail(str(args)))
-        self.calls.clear()
+    def test_camera_feel_presets_and_state_sync(self):
+        sensitivity = tk.StringVar(self.root, '0.12')
+        view = CameraFeel(self.root, sensitivity, lambda: self.calls.append(('save_mouse_sensitivity', (), {})))
         self.button('Very slow').invoke()
         self.assertEqual([c[0] for c in self.calls], ['save_mouse_sensitivity'])
-        self.assertAlmostEqual(float(state.mouse_sensitivity.get()), 0.02, places=3)
-        state.mouse_sensitivity.set('0.25')
+        self.assertAlmostEqual(float(sensitivity.get()), 0.02, places=3)
+        sensitivity.set('0.25')
         self.assertAlmostEqual(view.sensitivity_position.get(),
                                sensitivity_to_position(0.25), places=3)
         self.assertIn('Fast', view.sensitivity_text.get())

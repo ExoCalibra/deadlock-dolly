@@ -4,6 +4,25 @@ Packaged Windows builds include the updater and recovery launcher in `Dolly.exe`
 Source checkouts use the local build workflow; the packaged updater does not
 install or build source checkouts.
 
+## Moving from the older automatic updater
+
+The **Update now** choice applies once 0.6.51-alpha or a later version is
+installed. Versions through 0.6.50-alpha still use their original updater when
+opened with automatic updates enabled. They can jump directly to whichever release is Latest:
+for example, 0.6.50-alpha can automatically install 0.6.52-alpha without ever
+opening 0.6.51-alpha. New release code cannot change the launcher that is already
+running before that first upgrade.
+
+After that transition, opening the updated **Dolly.exe** opens the editor first.
+The notice appears when a newer release is available, and requires **Update
+now** before downloading or installing it. When the installed version is already
+Latest, there is no update notice. **Settings > Updates** remains available.
+
+To choose the timing of the first upgrade from an older version, extract the
+complete current Windows ZIP into a fresh folder and open its **Dolly.exe**.
+Updating a Git checkout does not replace a separately installed Windows copy,
+such as a Dolly folder on the desktop.
+
 ## For users
 
 Open `Dolly.exe`. The desktop editor opens immediately, and any enabled update
@@ -82,7 +101,7 @@ separate folder. Ordinary recovery needs only Dolly.exe.
 
 The in-app highlights use the same short publish description pasted into the
 GitHub release body. Put the exact release version on its own line, such as
-`**0.6.51-alpha**`, followed by two to four bullets in the form
+`**0.6.52-alpha**`, followed by two to four bullets in the form
 `- **Short title.** *Before:* ... *After:* ...`. Wrapped lines are supported.
 Use the version being published; the example is not an assigned next version.
 No separate summary attachment or package download is needed to read highlights.
@@ -93,8 +112,9 @@ No separate summary attachment or package download is needed to read highlights.
    FFmpeg, and matching native/Python components. Both GUI and updater smoke
    checks must pass.
 3. Create a release from the intended commit on main, using a tag such as
-   `v0.5.14-alpha`. Attach the generated
-   `Deadlock_Dolly_0.5.14-alpha_Windows_x64.zip`, source ZIP and SHA256SUMS.txt.
+   `v0.6.52-alpha`. Attach the generated
+   `Deadlock_Dolly_0.6.52-alpha_Windows_x64.zip`,
+   `Deadlock_Dolly_0.6.52-alpha_Source.zip` and `SHA256SUMS.txt`.
 4. Leave GitHub's pre-release box unchecked and mark the release Latest.
    "alpha" can remain in the title and version. GitHub must expose the uploaded
    Windows asset's SHA-256 digest before the updater accepts it.

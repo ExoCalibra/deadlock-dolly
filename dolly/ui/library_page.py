@@ -105,7 +105,7 @@ class LibraryPage:
             launch_row, textvariable=state.hotkey_label, variable=state.hotkey_enabled,
             command=commands.toggle_capture_hotkey)
         self.library_capture_toggle.pack(side="left", padx=(14, 0))
-        ttk.Label(right, text="In-game camera capture follows this switch; set the shortcut in Keybinds.",
+        ttk.Label(right, text="In-game camera capture follows this switch; set the shortcut in Controls.",
                   style="CardMuted.TLabel", wraplength=320).grid(row=4, column=0, sticky="w", pady=(0, 10))
         progress = card(body, "Session")
         self.startup_label = ttk.Label(progress, textvariable=state.startup_progress, style="CardMuted.TLabel", wraplength=780)

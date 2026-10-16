@@ -15,26 +15,27 @@ from __future__ import annotations
 # generated native header, so rename with both in mind.
 TOKENS: dict[str, str] = {
     # Surfaces
-    "bg": "#12161a",            # window background
-    "panel": "#1b2126",         # cards and panels
-    "panel_alt": "#232a30",     # nested rows, headers
-    "field": "#0f1317",         # text/entry interiors
-    "edge": "#2b343b",          # 1px outlines and separators
+    "bg": "#11171b",            # opaque graphite window background
+    "panel": "#1b252b",         # cards and popovers
+    "panel_alt": "#263139",     # nested rows, headers
+    "field": "#0e1418",         # recessed fields and graph interiors
+    "edge": "#2c373e",          # quiet outlines and separators
     # Text
-    "text": "#d2d8db",          # primary text
-    "muted": "#a2adb4",         # secondary text
+    "text": "#c8ced1",          # primary text
+    "muted": "#9ba7ad",         # secondary text
     "strong": "#e6ecee",        # titles
     # Accent (primary action, selection, focus): Dolly's neutral mint/teal.
-    "accent": "#8ec6ba",
+    "accent": "#8bc1b8",
     "accent_hover": "#a6d6cd",
     "accent_active": "#74a89e",
-    "accent_ink": "#0c1a18",    # text on an accent fill
+    "accent_ink": "#122a28",    # text on an accent fill
     # Interactive states
-    "button": "#27313a",        # secondary button at rest
-    "button_hover": "#35424c",
+    "button": "#253039",        # secondary button at rest
+    "button_hover": "#34434b",
     "button_active": "#2c3a3e",
-    "selected": "#2b403f",      # selected row / header
-    "selected_ink": "#dff0ed",
+    "selected": "#304a48",      # selected row / axis
+    "selected_ink": "#e0f0ec",
+    "selected_edge": "#607f7b", # selected axis outline
     "selected_blue": "#357cbb",     # selected Lite playback speed
     "disabled_bg": "#1b232a",
     "disabled_fg": "#66747e",
@@ -44,6 +45,12 @@ TOKENS: dict[str, str] = {
     "tab_dim": "#181d21",
     "tab_dim_selected": "#243033",
     "tab_dim_overline": "#3d5f5a",
+    # Curve identities stay consistent in single and stacked views.
+    "curve_x": "#d8aaa0",
+    "curve_y": "#a9c3a4",
+    "curve_z": "#96b9d6",
+    "curve_rotation": "#d7c27f",
+    "curve_before": "#b8c5cb",
     # Status
     "warn": "#d9bd76",
     "warn_bg": "#332f22",

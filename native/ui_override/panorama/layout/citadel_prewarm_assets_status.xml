@@ -1,0 +1,18 @@
+<!-- Private opt-in Dolly Panorama loading experiment V2, 2026-10-16. -->
+<root>
+	<styles>
+		<include src="s2r://panorama/styles/citadel_base_styles.vcss" />
+		<include src="s2r://panorama/styles/citadel_status_message_shared.vcss" />
+		<include src="s2r://panorama/styles/citadel_prewarm_assets_status.vcss" />
+	</styles>
+	<CitadelPrewarmAssetsStatus class="StatusNotification DollyLoadingProbeV2" hittest="false">
+		<Panel class="IconContainer">
+			<Panel class="Icon" />
+		</Panel>
+		<Panel class="Details">
+			<Label class="DollyBrand" text="DEADLOCK DOLLY" hittest="false" />
+			<Label class="Title" text="Loading shaders" />
+			<Label class="Desc" text="Your replay will open automatically." />
+		</Panel>
+	</CitadelPrewarmAssetsStatus>
+</root>

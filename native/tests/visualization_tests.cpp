@@ -94,6 +94,103 @@ std::vector<unsigned char> packet(unsigned cameras = 3, unsigned samples = 2048,
     out.insert(out.end(), blob.begin(), blob.end());
     return out;
 }
+std::vector<unsigned char> curve_packet(unsigned cameras = 70, unsigned step_channel = 7) {
+    auto bytes = packet(cameras, 2048, 64);
+    const std::size_t old_blob = 64 + std::size_t(cameras) * 8;
+    if (step_channel < 7) {
+        const auto value = [step_channel](unsigned i) { return step_channel == 6 ? 1.0 + .01 * i : double(i); };
+        change_number(bytes, old_blob + 48 + step_channel * 8, value(0));
+        change_number(bytes, old_blob + 104 + step_channel * 8, value(cameras - 1));
+        for (unsigned i = 0; i + 1 < cameras; ++i) {
+            const auto record = old_blob + 160 + i * 296 + 16 + step_channel * 40;
+            change_u32(bytes, record, 0);
+            change_number(bytes, record + 8, value(i));
+            change_number(bytes, record + 16, value(i + 1));
+        }
+    }
+    dolly::NativePath path;
+    std::string error;
+    require(path.load(bytes.data() + old_blob, bytes.size() - old_blob, error), "Curve fixture path rejected");
+    std::vector<unsigned char> metadata;
+    for (unsigned i = 0; i < cameras; ++i) {
+        dolly::CameraPose pose;
+        require(path.evaluate(i, pose), "Curve fixture sample rejected");
+        for (double value : pose) number(metadata, value);
+        u32(metadata, i == 10 ? 1 : 0); u32(metadata, 0);
+    }
+    bytes.insert(bytes.begin() + old_blob, metadata.begin(), metadata.end());
+    change_u32(bytes, 12, 3); change_u32(bytes, 40, 17);
+    change_u32(bytes, 44, 0x89abcdef); change_u32(bytes, 48, 0xf1234567);
+    change_u32(bytes, 52, cameras * 64);
+    return bytes;
+}
+void test_curve_contract() {
+    auto bytes = curve_packet();
+    dolly::VisualizationPath path;
+    std::string error;
+    require(path.load(bytes.data(), bytes.size(), error), "ABI3 full-shot graph rejected");
+    require(path.session_id() == 0xf123456789abcdefULL && path.graph_keys().size() == 70 &&
+            path.graph_keys()[69].authored_pose[0] == 790 && path.graph_keys()[10].source == 1,
+            "Graph authoring metadata/session changed");
+    dolly::CameraPose request{17, 0, 0, 69, 0x89abcdef, 0xf1234567, 0};
+    require(dolly::valid_visualization_curve_action(path, 69, request, true),
+            "Full-shot selection beyond a 32-row page rejected");
+    require(!dolly::valid_visualization_curve_action(path, 69, request, false),
+            "Value edit accepted a different graph selection");
+    request[3] = 35;
+    for (unsigned channel = 0; channel < 7; ++channel) {
+        request[1] = channel; request[2] = channel == 6 ? 2.39 : 123.125;
+        require(dolly::valid_visualization_curve_action(path, 35, request, false),
+                "Valid unified curve channel rejected");
+    }
+    request[2] = 4.01;
+    require(!dolly::valid_visualization_curve_action(path, 35, request, false), "Out-of-range aspect accepted");
+    request[1] = 0; request[2] = 123;
+    for (unsigned field : {0u, 3u, 4u, 5u, 6u}) {
+        auto stale = request; stale[field] += 1;
+        require(!dolly::valid_visualization_curve_action(path, 35, stale, false), "Stale curve anchor accepted");
+    }
+    for (double invalid : {-.5, 7.0, .5, std::numeric_limits<double>::infinity()}) {
+        auto malformed = request; malformed[1] = invalid;
+        require(!dolly::valid_visualization_curve_action(path, 35, malformed, false), "Invalid curve axis accepted");
+    }
+    for (double invalid : {-1.0, 70.0, .5, std::numeric_limits<double>::quiet_NaN()})
+        require(!dolly::valid_visualization_curve_action(path, invalid, request, false), "Invalid full-shot index accepted");
+    request[3] = 10; request[1] = request[2] = 0;
+    require(dolly::valid_visualization_curve_action(path, 10, request, true), "Tracked camera could not be selected");
+    // Reselect the tracked key in the immutable snapshot: every group stays read-only.
+    auto attached = bytes; change_u32(attached, 20, 10);
+    require(path.load(attached.data(), attached.size(), error), "Tracked curve fixture rejected");
+    request[2] = 2;
+    require(!dolly::valid_visualization_curve_action(path, 10, request, false), "Tracked camera accepted a value edit");
+    for (unsigned channel : {3u, 4u, 5u, 6u}) {
+        auto stepped = curve_packet(3, channel);
+        require(path.load(stepped.data(), stepped.size(), error), "Stepped rotation/framing curve rejected");
+        require(path.channel_breaks(32, channel) && path.channel_breaks(64, channel) && !path.breaks()[32],
+                "Channel-specific discontinuity lost or changed world guides");
+    }
+    auto wrapped = curve_packet(3);
+    const std::size_t metadata = 64 + 3 * 8;
+    change_number(wrapped, metadata + 64 + 4 * 8, 360);
+    require(path.load(wrapped.data(), wrapped.size(), error) && path.graph_keys()[1].pose[4] == 0 &&
+            path.graph_keys()[1].authored_pose[4] == 360, "Authored wrapped angle lost");
+    auto huge = wrapped; change_number(huge, metadata + 64 + 4 * 8, 3.6e12);
+    require(path.load(huge.data(), huge.size(), error) && path.graph_keys()[1].authored_pose[4] == 3.6e12,
+            "Legacy huge shortest angle stopped valid guides from rendering");
+    dolly::CameraPose huge_edit{17, 4, 0, 1, 0x89abcdef, 0xf1234567, 0};
+    require(!dolly::valid_visualization_curve_action(path, 1, huge_edit, false),
+            "An out-of-editor-range original value accepted a destructive clamp edit");
+    change_u32(wrapped, 56, 1);
+    require(!path.load(wrapped.data(), wrapped.size(), error), "Unwrapped authoring/playback mismatch accepted");
+    for (std::size_t offset : {std::size_t(52), std::size_t(56), std::size_t(60), metadata + 60}) {
+        auto bad = curve_packet(3); change_u32(bad, offset, 0xffffffff);
+        require(!path.load(bad.data(), bad.size(), error), "Malformed curve metadata accepted");
+    }
+    auto bad_source = curve_packet(3); change_u32(bad_source, metadata + 56, 2);
+    require(!path.load(bad_source.data(), bad_source.size(), error), "Unknown camera source accepted");
+    auto mismatched = curve_packet(3); change_number(mismatched, metadata, 12345);
+    require(!path.load(mismatched.data(), mismatched.size(), error), "Unrelated authoring position accepted");
+}
 dolly::VisualizationView view() {
     dolly::VisualizationView v;
     v.pose = {0, 0, 0, 0, 0, 0, 2};
@@ -192,6 +289,7 @@ void test_world_camera_markers() {
 void self_test() {
     test_projection();
     test_world_camera_markers();
+    test_curve_contract();
     for (bool step : {false, true}) {
         auto lens_bytes = packet(3, 2048, 64, step, true);
         dolly::VisualizationPath lens_path;
@@ -215,6 +313,18 @@ void self_test() {
     require(path.points()[32][0] == 110 && path.points()[16][0] == 105,
             "Viewer sampling does not match authored timing");
     require(path.selected_camera() == 1, "Selected camera changed");
+    require(path.project_revision()==0 && path.point_times().size()==path.points().size() &&
+                path.point_times()[16]==.5 && path.point_times()[32]==1 &&
+                path.graph_keys().size()==3 && path.graph_keys()[1].time==1 &&
+                path.graph_keys()[1].pose[0]==110,
+            "Legacy guide packet lost exact timed graph data");
+    auto revision_packet=bytes;
+    change_u32(revision_packet,12,2);change_u32(revision_packet,40,17);
+    require(path.load(revision_packet.data(),revision_packet.size(),error) && path.project_revision()==17,
+            "Revision-bound graph packet rejected");
+    change_u32(revision_packet,44,1);
+    require(!path.load(revision_packet.data(),revision_packet.size(),error),
+            "Graph packet accepted unknown reserved fields");
     dolly::VisualizationGeometry geometry;
     require(dolly::project_visualization(path, view(), geometry) && geometry.label_count == 3,
             "Camera markers did not project");
@@ -229,7 +339,8 @@ void self_test() {
             "Step position jumps drawn as continuous travel");
     auto large = packet(4096, 4096, 128);
     require(path.load(large.data(), large.size(), error) && path.points().size() == 4096 &&
-                path.cameras().size() <= 128,
+                path.cameras().size() <= 128 && path.graph_keys().size()==4096 &&
+                path.point_times().size()==4096 && path.graph_keys()[4095].time==4095,
             "Maximum path budgets failed");
     selected = false;
     for (const auto& camera : path.cameras())

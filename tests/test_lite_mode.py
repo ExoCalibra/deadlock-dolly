@@ -27,14 +27,17 @@ class LiteModeTests(unittest.TestCase):
 
     def test_extra_actions_are_appended_without_changing_original_ids(self):
         from dolly.editor_wire import EXTRA_ACTIONS
-        self.assertEqual(EXTRA_ACTIONS[-8:],('save_shot','seek_replay_tick','clear_camera_path','focus_replay_player','prepare_cinematic','set_pause_after_capture','set_video_ae_camera','set_video_usd_camera'))
+        self.assertEqual(EXTRA_ACTIONS[-11:],('save_shot','seek_replay_tick','clear_camera_path','focus_replay_player','prepare_cinematic','set_pause_after_capture','set_camera_position','set_camera_curve_value','select_curve_camera','set_video_ae_camera','set_video_usd_camera'))
         self.assertEqual(EXTRA_ACTIONS.index('set_framing')+26,40)
         self.assertEqual(EXTRA_ACTIONS.index('save_shot')+26,105)
         self.assertEqual(EXTRA_ACTIONS.index('focus_replay_player')+26,108)
         self.assertEqual(EXTRA_ACTIONS.index('prepare_cinematic')+26,109)
         self.assertEqual(EXTRA_ACTIONS.index('set_pause_after_capture')+26,110)
-        self.assertEqual(EXTRA_ACTIONS.index('set_video_ae_camera')+26,111)
-        self.assertEqual(EXTRA_ACTIONS.index('set_video_usd_camera')+26,112)
+        self.assertEqual(EXTRA_ACTIONS.index('set_camera_position')+26,111)
+        self.assertEqual(EXTRA_ACTIONS.index('set_camera_curve_value')+26,112)
+        self.assertEqual(EXTRA_ACTIONS.index('select_curve_camera')+26,113)
+        self.assertEqual(EXTRA_ACTIONS.index('set_video_ae_camera')+26,114)
+        self.assertEqual(EXTRA_ACTIONS.index('set_video_usd_camera')+26,115)
 
     def test_typed_tick_dispatch_uses_dolly_seek_and_rejects_invalid_input(self):
         from unittest.mock import patch
@@ -50,24 +53,20 @@ class LiteModeTests(unittest.TestCase):
 
 class SeekLifecycleTests(unittest.TestCase):
     def test_absolute_seek_releases_before_seek_and_restores_camera_and_panel(self):
-        import threading
-        from unittest.mock import Mock
-        from dolly.controller import Controller
-        app=Mock()
-        app._op_lock=threading.RLock()
-        app._native_active=True
-        app.status.return_value={'playing':False}
-        app._require_demo.return_value={'tick':100,'total_ticks':10000}
-        app._native_pose.return_value={'x':12}
-        app._seek_tick.return_value={'tick':3470}
-        result=Controller.seek_replay_tick(app,3470)
-        app._halt.assert_called_once_with(native_action='release')
-        app.enter_native_flight.assert_called_once_with(pose={'x':12},owner='panel')
-        app._native_bridge.return_value.configure_editor.assert_called_once_with(owner='panel')
-        calls=[str(c) for c in app.mock_calls]
-        self.assertLess(next(i for i,c in enumerate(calls) if c.startswith('call._halt(')),next(i for i,c in enumerate(calls) if c.startswith('call._seek_tick(')))
-        self.assertEqual(result,{'tick':3470})
-        with self.assertRaises(ValueError):Controller.seek_replay_tick(app,10000)
+        from tests.test_native_flight_controller import configured_controller
+        app, console, bridge = configured_controller()
+        app.enter_native_flight()
+        pose = list(bridge.pose)
+        console.events.clear()
+        result = app.seek_replay_tick(3470)
+        self.assertLess(console.events.index('native.release'), console.events.index('demo_gototick 3470 0 1'))
+        self.assertLess(console.events.index('demo_gototick 3470 0 1'), console.events.index('native.flight'))
+        self.assertEqual(bridge.pose, pose)
+        self.assertEqual(bridge.owner, 'panel')
+        self.assertEqual(result['tick'], 3470)
+        from unittest.mock import patch
+        with patch.object(app, '_require_demo', return_value={'tick':3470, 'total_ticks':10000}), self.assertRaises(ValueError):
+            app.seek_replay_tick(10000)
 
 class ClearCameraTests(unittest.TestCase):
     def test_clear_removes_every_camera_and_preserves_other_tracks(self):

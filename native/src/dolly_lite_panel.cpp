@@ -34,16 +34,29 @@ void OverlayPanel::draw_shader_notice() {
     const float s = panel_scale;
     const float inset = 24 * s;
     ImGui::SetNextWindowPos(ImVec2(size.x * .5f, size.y * .75f), ImGuiCond_Always, ImVec2(.5f, 1));
-    ImGui::SetNextWindowSize(ImVec2(std::min(360 * s, std::max(1.f, size.x - 2 * inset)), 0));
-    ImGui::SetNextWindowBgAlpha(.96f);
+    ImGui::SetNextWindowSize(ImVec2(std::min(420 * s, std::max(1.f, size.x - 2 * inset)), 0));
+    ImGui::SetNextWindowBgAlpha(1.f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, color(ui::PANEL));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * s, 12 * s));
+    ImGui::PushStyleColor(ImGuiCol_Border, color(ui::EDGE));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * s, 16 * s));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6 * s);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8 * s, 6 * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, s);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8 * s, 8 * s));
     ImGui::Begin("##shader-loading", nullptr, ImGuiWindowFlags_NoDecoration |
         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+    const auto position = ImGui::GetWindowPos();
+    const float middle = position.x + ImGui::GetWindowSize().x * .5f;
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        ImVec2(middle - 22 * s, position.y + 5 * s),
+        ImVec2(middle + 22 * s, position.y + 7 * s),
+        ImGui::GetColorU32(color(ui::ACCENT)), s);
     ImGui::PushFont(heading_font);
+    ImGui::PushStyleColor(ImGuiCol_Text, color(ui::ACCENT));
+    ImGui::TextUnformatted("Deadlock Dolly");
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+    ImGui::PushFont(title_font);
     ImGui::TextUnformatted("Loading shaders");
     ImGui::PopFont();
     ImGui::PushStyleColor(ImGuiCol_Text, color(ui::MUTED));
@@ -52,21 +65,30 @@ void OverlayPanel::draw_shader_notice() {
     ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
     ImGui::End();
-    ImGui::PopStyleVar(3);
-    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(4);
+    ImGui::PopStyleColor(2);
 }
 bool OverlayPanel::lite_campaths_visible(const EditorSnapshot& state) const noexcept {
     return lite_mode_ && state.enabled && state.focused && state.owner == EditorOwner::Panel;
+}
+void OverlayPanel::cancel_position_graph() noexcept {
+    position_graph_dragging_ = position_value_editing_ = false;
+    position_graph_escape_ = true;
+    curve_panning_ = false;
 }
 void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
     using namespace ImGui;
     auto& io = GetIO();
     float s = panel_scale;
-    if (!lite_campaths_visible(state))
+    if (!lite_campaths_visible(state)) {
+        cancel_position_graph();
         return;
+    }
     const auto recording = editor_recording_status();
     const bool recording_locked = editor_recording_locks_cameras(recording.state);
     const bool compact = io.DisplaySize.x < 900 * s || io.DisplaySize.y < 650 * s;
+    // The compact camera list can be closed while the independent Curves dock
+    // remains visible; hiding the list must not cancel a dock gesture.
     if (compact && state.owner == EditorOwner::Panel && !compact_paths_) return;
     EditorCameraList list{};
     EditorLiteReplayInfo info{};
@@ -96,7 +118,9 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
             }
         }
         const float usable_bottom = io.DisplaySize.y - lite_timeline_height() - 32 * s;
-        const float maximum_height = std::max(220 * s, usable_bottom - 16 * s);
+        const bool default_sidebar=!layout_custom_ || (layout_reset_&2);
+        const float maximum_height=default_sidebar ? std::max(1.f,usable_bottom-layout_top_inset()) :
+            curve_view_ ? std::max(1.f,usable_bottom-16*s) : std::max(220*s,usable_bottom-16*s);
         const bool full_width = compact && state.owner == EditorOwner::Panel;
         const float camera_width=CalcTextSize("Camera 64").x+6*s;
         const float arrive_width=std::max(CalcTextSize("Arrive / s").x,CalcTextSize("9999.99").x)+6*s;
@@ -107,22 +131,25 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
         const float controls_height = 4 * (GetFrameHeight() + 6 * s) + 6 * s + 1;
         const float header_height = GetTextLineHeight() + 4 * s;
         const float row_height = GetTextLineHeight() + 8 * s;
+        const float minimum_height = 280*s;
         const float panel_height = full_width ? maximum_height :
             std::min(maximum_height, list.total ? std::clamp(64 * s + controls_height + header_height + row_height * list.count,
-                                                           280 * s, 510 * s) : 320 * s);
+                                                           minimum_height, 510 * s) : 320 * s);
         // Anchor before Begin: moving an auto-sized window after Begin shifts
         // its content, but leaves the background and clip rectangles behind.
-        const ImVec2 position(16 * s, full_width ? 16 * s : usable_bottom - panel_height);
-        const bool focus_layout = !layout_custom_;
-        SetNextWindowPos(outer_position_pending_[0] ? outer_position_[0] : position, (outer_position_pending_[0] || focus_layout || (layout_reset_ & 2)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
-        outer_position_pending_[0]=false;
         const auto* previous_sidebar=FindWindowByName("##lite-campaths");
+        const bool graph_resize=false;
+        const ImVec2 position(16*s,layout_top_inset());
+        const bool focus_layout = !layout_custom_;
+        SetNextWindowPos(outer_position_pending_[0] ? outer_position_[0] : position, (outer_position_pending_[0] || focus_layout || graph_resize || (layout_reset_ & 2)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+        outer_position_pending_[0]=false;
         // Adopt the narrower default once for older layouts, preserving their
         // position and height. Subsequent user widths remain authoritative.
-        if(!sidebar_width_current_ && !full_width) {sidebar_width_pending_=panel_width;sidebar_width_current_=true;MarkIniSettingsDirty();}
-        SetNextWindowSize(ImVec2(sidebar_width_pending_>=0 ? sidebar_width_pending_ : panel_width,
+        if(!sidebar_width_current_ && !full_width && !layout_custom_) {sidebar_width_pending_=panel_width;sidebar_width_current_=true;MarkIniSettingsDirty();}
+        SetNextWindowSize(ImVec2(sidebar_width_pending_>=0 ? sidebar_width_pending_ : graph_resize && layout_custom_ ? previous_sidebar->Size.x : panel_width,
+                                graph_resize && layout_custom_ ? std::min(minimum_height,maximum_height) :
                                 sidebar_width_pending_>=0 && previous_sidebar ? previous_sidebar->Size.y : panel_height),
-                         (sidebar_width_pending_>=0 || focus_layout || (layout_reset_ & 2)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+                         (sidebar_width_pending_>=0 || focus_layout || graph_resize || (layout_reset_ & 2)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
         sidebar_width_pending_=-1;
         layout_reset_ &= ~2u;
         SetNextWindowSizeConstraints(ImVec2(std::min(minimum_width, panel_width), std::min(280 * s, maximum_height)),
@@ -161,16 +188,27 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
         SetCursorPosX(GetWindowContentRegionMax().x - CalcTextSize(count).x);
         TextDisabled("%s", count);
         if (compact && state.owner == EditorOwner::Panel) {
-            if (Button("Tools")) compact_paths_ = false;
+            if (Button("Tools")) { compact_paths_ = false; save_layout(); }
             SameLine(); layout_controls();
         }
         Separator();
+        const auto sidebar_id=GetCurrentWindow()->ID;
+        const float footer = 4 * GetFrameHeightWithSpacing() + GetStyle().ItemSpacing.y + 1;
+        const float minimum_body=footer+header_height+row_height+24*s+
+            (recording_locked ? 2*GetTextLineHeightWithSpacing() : 0);
+        const bool scroll_body=default_sidebar && GetContentRegionAvail().y<minimum_body;
+        if(scroll_body) {
+            SetNextWindowContentSize(ImVec2(0,minimum_body));
+            BeginChild("##campaths-content",ImVec2(0,0),ImGuiChildFlags_None,ImGuiWindowFlags_NoBackground);
+            // Preserve every historical camera/control ID inside the scroller.
+            PushOverrideID(sidebar_id);
+        }
         if (recording_locked)
             TextWrapped(recording.state == video::State::finalizing ?
                         "Saving video. Please wait." :
                         "Finish recording before editing cameras.");
-        const float footer = 4 * GetFrameHeightWithSpacing() + GetStyle().ItemSpacing.y + 1;
-        const float row_area = std::max(row_height, GetContentRegionAvail().y - footer - header_height);
+        const float body_height=scroll_body ? std::max(GetWindowSize().y,minimum_body) : GetWindowSize().y;
+        const float row_area = std::max(row_height, (scroll_body ? minimum_body : GetContentRegionAvail().y) - footer - header_height);
         const unsigned rows = std::max(1u, unsigned(row_area / row_height));
         if (camera_pending_first_ != ~0u && (list.revision != camera_pending_revision_ ||
                                             GetTime() - camera_pending_at_ > 2.))
@@ -191,7 +229,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
         if (list.count) {
             PushStyleVar(ImGuiStyleVar_CellPadding,ImVec2(2*s,2*s));
             PushStyleColor(ImGuiCol_TableHeaderBg,color(ui::BUTTON));
-            const auto row_seed=GetCurrentWindow()->ID;
+            const auto row_seed=sidebar_id;
             PushStyleVar(ImGuiStyleVar_CellPadding,ImVec2(2*s,2*s));
             if (BeginTable("##lite-campath-details",4,ImGuiTableFlags_BordersInnerV |
                            ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
@@ -297,7 +335,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
             action_button("Capture camera", EditorAction::Capture, -1, 0, true);
             EndDisabled();
         }
-        SetCursorPosY(GetWindowSize().y - footer - 12 * s);
+        SetCursorPosY(std::max(GetCursorPosY(),body_height-footer-12*s));
         BeginDisabled(!state.ready || !state.paused || state.busy || state.playing ||
                       state.attach_preview || recording_locked);
         const unsigned row_first = list.first + visible_begin;
@@ -371,6 +409,7 @@ void OverlayPanel::draw_lite_campaths(const EditorSnapshot& state) {
                 CloseCurrentPopup();
             EndPopup();
         }
+        if(scroll_body) { PopID(); EndChild(); }
         if(layout_editing_ && !full_width) {
             const auto cursor=GetCursorScreenPos(),pos=GetWindowPos();
             SetCursorScreenPos(ImVec2(pos.x+GetWindowSize().x-6*s,pos.y+30*s));
@@ -391,7 +430,7 @@ void OverlayPanel::draw_lite_timeline(const EditorSnapshot& state) {
     using namespace ImGui;
     auto& io = GetIO();
     const float s = panel_scale;
-    if (!lite_campaths_visible(state)) return;
+    if (!lite_campaths_visible(state)) { cancel_position_graph(); return; }
     EditorCameraList list{};
     EditorLiteReplayInfo info{};
     EditorReplayEvents events{};
@@ -411,22 +450,68 @@ void OverlayPanel::draw_lite_timeline(const EditorSnapshot& state) {
         for (unsigned i=0;i<events.player_count;++i) found |= events.players[i].id == unsigned(replay_player_filter_);
         if (!found) replay_player_filter_ = -1;
     }
-    bool compact = io.DisplaySize.y < 650 * s;
     auto flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     if (!layout_editing_) flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
     if (state.owner != EditorOwner::Panel) flags |= ImGuiWindowFlags_NoInputs;
     const float width = std::min(1120 * s, io.DisplaySize.x - 32 * s);
     const float height = lite_timeline_height();
-    SetNextWindowPos(outer_position_pending_[1] ? outer_position_[1] : ImVec2((io.DisplaySize.x-width)*.5f,io.DisplaySize.y-height-16*s),
-                     (outer_position_pending_[1] || !layout_custom_ || (layout_reset_ & 4)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+    const auto* previous_timeline=FindWindowByName("##lite-timeline");
+    const auto* saved_timeline=layout_custom_ && !previous_timeline ?
+        FindWindowSettingsByID(ImHashStr("##lite-timeline")) : nullptr;
+    const bool have_custom_geometry=previous_timeline ||
+        (saved_timeline && saved_timeline->Size.x>0 && saved_timeline->Size.y>0);
+    // SizeFull includes a pending restored/programmatic size before Begin.
+    const ImVec2 previous_size=previous_timeline ? previous_timeline->SizeFull :
+        saved_timeline ? ImVec2(float(saved_timeline->Size.x),float(saved_timeline->Size.y)) : ImVec2();
+    const ImVec2 previous_position=previous_timeline ? previous_timeline->Pos :
+        saved_timeline ? ImVec2(float(saved_timeline->Pos.x),float(saved_timeline->Pos.y)) : ImVec2();
+    const bool fitting_noncurve=!curve_view_ && layout_custom_ && have_custom_geometry &&
+        std::abs(previous_size.y-height)>.5f &&
+        !(layout_editing_ && IsMouseDown(ImGuiMouseButton_Left));
+    const bool curve_resize = curve_resize_pending_ || fitting_noncurve;
+    curve_resize_pending_ = false;
+    const bool custom_geometry=layout_custom_ && have_custom_geometry && !(layout_reset_&4);
+    const float resized_width=custom_geometry ? std::clamp(previous_size.x,std::min(560*s,width),io.DisplaySize.x-32*s) : width;
+    const float resized_height=height;
+    ImVec2 timeline_position((io.DisplaySize.x-width)*.5f,io.DisplaySize.y-height-16*s);
+    if(custom_geometry) {
+        // Keep custom horizontal placement. Arrange may temporarily float the
+        // timeline while its required content height changes.
+        const float margin=12*s;
+        timeline_position=ImVec2(
+            std::clamp(previous_position.x,margin,std::max(margin,io.DisplaySize.x-resized_width-margin)),
+            std::clamp(previous_position.y+previous_size.y-resized_height,
+                       margin,std::max(margin,io.DisplaySize.y-resized_height-margin)));
+    }
+    if(outer_position_pending_[1]) timeline_position=outer_position_[1];
+    if(!layout_editing_) {
+        const float margin=12*s;
+        timeline_position.x=std::clamp(timeline_position.x,margin,std::max(margin,io.DisplaySize.x-resized_width-margin));
+        // Apply the dock after pending Arrange geometry so an old saved or
+        // dragged Y never leaves a gap on normal frames or viewport changes.
+        timeline_position.y=io.DisplaySize.y-resized_height-16*s;
+    }
+    SetNextWindowPos(timeline_position,
+                     (!layout_editing_ || outer_position_pending_[1] || !layout_custom_ || curve_resize || (layout_reset_ & 4)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
     outer_position_pending_[1]=false;
-    SetNextWindowSize(ImVec2(width,height), (!layout_custom_ || (layout_reset_ & 4)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+    SetNextWindowSize(ImVec2(resized_width,resized_height), (!layout_custom_ || curve_resize || (layout_reset_ & 4)) ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
     layout_reset_ &= ~4u;
     SetNextWindowSizeConstraints(ImVec2(std::min(560 * s, width),height),
-                                 ImVec2(io.DisplaySize.x - 32 * s, std::min(260 * s, io.DisplaySize.y - 32 * s)));
+                                 ImVec2(io.DisplaySize.x - 32 * s,height));
+    const bool compact_curve_frames=curve_view_ && io.DisplaySize.y<650*s;
+    if(compact_curve_frames)
+        PushStyleVar(ImGuiStyleVar_FramePadding,ImVec2(GetStyle().FramePadding.x,3*s));
+    PushStyleColor(ImGuiCol_WindowBg, color(ui::BG));
     Begin("##lite-timeline",nullptr,flags);
-    compact |= GetWindowSize().x < 760 * s;
+    const bool compact=lite_timeline_compact(GetWindowSize().x) || (!curve_view_ && GetWindowSize().y<150*s);
     constrain_panel(); panel_handle("Drag timeline");
+    if (curve_view_) {
+        draw_curve_workspace(state, list);
+        End(); PopStyleColor();
+        if(compact_curve_frames) PopStyleVar();
+        return;
+    }
+    cancel_position_graph();
     auto cinematic_button = [&] {
         BeginDisabled(state.camera_count < 2 || !have_list || state.playing || !state.paused || state.attach_preview || cinematic_preparing_);
         PushStyleColor(ImGuiCol_Button, color(ui::ACCENT));
@@ -496,7 +581,7 @@ void OverlayPanel::draw_lite_timeline(const EditorSnapshot& state) {
         RenderTextEllipsis(GetWindowDrawList(),text_pos,ImVec2(pos.x+name_width,pos.y+GetFrameHeight()),
                            pos.x+name_width,pos.x+name_width,name,nullptr,&text_size);
         if (IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            const char* camera_hint = state.ready ? "Click the name or arrows to move freecam near this player." : "Camera selection is unavailable at this tick.";
+            const char* camera_hint = state.ready ? "Click the name or arrows to follow this player through playback and seeks." : "Camera selection is unavailable at this tick.";
             if (kills_ready && replay_player_filter_ >= 0) {
                 unsigned kills = 0, deaths = 0;
                 for (unsigned i = 0; i < events.count; ++i) {
@@ -513,17 +598,14 @@ void OverlayPanel::draw_lite_timeline(const EditorSnapshot& state) {
         PopStyleColor(); PopStyleVar(2); EndDisabled();
     };
     BeginDisabled(!state.ready || state.busy);
-    PushStyleColor(ImGuiCol_Button,color(ui::SELECTED));
-    if (Button(lite_campath_timeline_ ? "Campaths###lite-timeline-mode" : "Replay###lite-timeline-mode",ImVec2(90*s,0))) {
-        lite_campath_timeline_ = !lite_campath_timeline_;
-        lite_replay_dragging_ = false;
-    }
-    PopStyleColor();
-    if (IsItemHovered()) SetTooltip("Switch timeline. Wheel to zoom; right-drag to pan. Alt+drag a camera to change its arrival tick.");
+    draw_timeline_modes();
     SameLine();cinematic_button();
     const float player_width = (compact ? 128.f : 176.f)*s + 2*(GetFontSize()+6*s) + 8*s;
     if (compact) SameLine();
-    else SameLine(std::max(GetCursorPosX(), (GetWindowSize().x-player_width)*.5f));
+    else {
+        const float left_end=GetCurrentWindow()->DC.CursorPosPrevLine.x-GetWindowPos().x;
+        SameLine(std::max(left_end+GetStyle().ItemSpacing.x,(GetWindowSize().x-player_width)*.5f));
+    }
     player_filter();
     if (compact) {
         SameLine();
@@ -748,6 +830,7 @@ void OverlayPanel::draw_lite_timeline(const EditorSnapshot& state) {
             }
         }
     }
-    End();
+    End(); PopStyleColor();
+    if(compact_curve_frames) PopStyleVar();
 }
 }

@@ -1,4 +1,4 @@
-DEADLOCK DOLLY 0.6.4 ALPHA — WINDOWS PORTABLE
+DEADLOCK DOLLY 0.6.52 ALPHA — WINDOWS PORTABLE
 
 A camera-path editor for local Deadlock replays.
 
@@ -16,7 +16,7 @@ GETTING STARTED
 1. Extract the whole Windows ZIP and open Dolly.exe. Keep _internal beside it.
    Python and the native helper are included.
 2. Open Steam, sign in, and close any running Deadlock game. Use DirectX 11.
-3. In Library, choose a local, extracted .dem replay. Launch setup contains
+3. In Replay, choose a local, extracted .dem replay. Launch setup contains
    the game executable and camera driver; saved paths are in Settings.
 4. Click Open replay in Dolly, then WAIT FOR DOLLY TO LOAD THE HIDEOUT AND DEMO.
    Dolly advances the initial screen, prepares the hideout and waits for verified
@@ -25,10 +25,10 @@ GETTING STARTED
    If Deadlock never shows its intro or starts that preload, Dolly stops the
    automatic check and asks whether to load the replay anyway; the game stays open.
 5. Move to a view and press Ctrl+Alt+K. Advance the replay and capture the next view.
-   The In-game capture switch is on Library beside Open replay in Dolly; set the
-   shortcut in Settings > Controls & keybinds. F8 opens the in-game panel.
-6. Enable Full editor for desktop Cameras, Effects and the shot timeline.
-   Save shots from Library or the File menu. F8 has CAMERA / FOLLOW / BONE PICKER / LOOK / EXPORT tabs.
+   The In-game capture switch is on Replay beside Open replay in Dolly; set the
+   shortcut on the Controls page. F8 shows or hides all Dolly panels.
+6. Camera, Look and the shot timeline are always available on the desktop.
+   Save shots from Replay or the File menu. F8 has CAMERA / FOLLOW / BONE PICKER / LOOK / EXPORT tabs.
 7. Click Play shot or press F5 to play the replay and camera path together.
    Hide HUD controls HUD visibility during playback; it returns afterward.
 
@@ -51,8 +51,11 @@ Mouse/arrows  Look around
 Shift/Alt     Move faster/slower
 Q/E           Camera roll
 
-Settings > Controls & keybinds saves keyboard and Mouse4/Mouse5 assignments, movement speed and mouse
-sensitivity. F7 is reserved for the console. Settings survive updates in
+Controls saves keyboard and Mouse4/Mouse5 assignments, movement speed and mouse
+sensitivity. Search for an action, click its shortcut and press the replacement,
+then review and Save shortcut. Clear removes a binding; Reset restores its
+default. Conflicts leave existing bindings unchanged. F7 is reserved for the
+console. Settings survive updates in
 %APPDATA%/DeadlockDolly/settings.json.
 
 The console receives normal typing without moving the camera or triggering
@@ -62,7 +65,9 @@ From Deadlock's replay UI, F8 returns to the panel and F9 returns to flight.
 Returning hides both the replay controls and character HUD. F9 shows them again.
 Release held movement keys after switching windows before pressing them again.
 
-Capture also works while the replay is playing and leaves it paused.
+In-game Capture also works while the replay is playing and keeps it running by
+default. Pause after capture, beside Resume/Pause on the timeline, enables the
+previous pause behavior. The choice is remembered and applies to Replace too.
 The in-game capture key saves the rendered view and tick at the keypress.
 Desktop capture waits for a paused rendered view before saving its tick.
 
@@ -95,6 +100,27 @@ playback, console use and the game UI. They show through walls and are editing
 guides; the camera glyphs are not live camera thumbnails. Large paths reduce
 marker density while keeping the selected view visible.
 
+The timeline starts on Replay in each new session. Its player selector keeps
+the chosen participant through seeks and tick steps, resolving their current
+hero after the replay settles. Fly camera returns to a fixed view. An unavailable
+hero produces a status message instead of moving to a guessed target.
+
+Choose Curves, then Position, Rotation or Framing to edit camera values.
+Stack graphs shares the time ruler between groups. Show original pins a faded,
+temporary snapshot; Update original replaces the snapshot without restoring
+camera values. Drag a selected point vertically, or Ctrl+click a value to type.
+Hold Alt while dragging to align with a nearby value on an adjacent camera.
+Right-click cancels an active graph or numeric adjustment; release applies one
+Undo step. Wheel zooms and right-drag pans when no adjustment is active.
+Fit all restores the complete in-game curve view without changing camera values.
+
+Replay and Campaths fit their controls; Curves grows for its graphs. The timeline
+stays near the bottom of the screen and keeps its custom width and horizontal
+position. Layout > Arrange panels allows temporary free placement and resizing;
+leaving Arrange reattaches the timeline to the bottom. Main-panel pages scroll
+when needed, and narrow Export cards reflow to keep dropdown text readable.
+Completed layout changes save outside the app folder with a checked backup.
+
 On the desktop Effects tab, + Range DOF adds r_dof_override_ranges. Enter four
 numbers separated by spaces: near blurry, near crisp, far crisp, far blurry.
 Example: -100 0 180 2000. Each component can animate with the shot. Four zeros
@@ -122,7 +148,7 @@ Dolly controls and guides are excluded. The game HUD follows playback settings.
 
 ReShade 6.8.0/API 20 with full add-on support is a separate download. Extract ReShade64.dll from the official full
 add-on setup EXE with 7-Zip into a folder outside the game. Select it in Settings > ReShade
-and enable it. F11 opens its own menu; change the shortcut in Settings > Controls & keybinds.
+and enable it. F11 opens its own menu; change the shortcut on the Controls page.
 A single-sample SDR swapchain and manual runtime functions are required. Add shader/texture search
 paths and presets through ReShade. Color effects and verified scene depth for compatible depth-based effects are
 supported. Native Dolly DOF is also available.
@@ -134,47 +160,21 @@ Deadlock. The loaded DLL remains resident until the editing game exits.
 
 COMPATIBILITY AND UPDATES
 
-0.6.15-alpha separates session launch, configuration recovery and cleanup code
-while preserving the normal editing workflow and restoration safeguards.
-Windows linked-folder cleanup checks now run without symlink privileges.
-See Release_Notes.md for validation and retained limitations.
-
-0.6.14-alpha is an editor maintenance update. Shared controls, theme setup,
-background operations and in-game panel rendering have clearer ownership while
-preserving the familiar controls, shortcuts, settings and export features.
-The 0.6.13 mod-loading repair remains included. See Release_Notes.md for the
-complete changes and offline validation limits.
-
-0.6.13-alpha restores mod loading during Dolly sessions. Dolly now carries your
+Dolly carries your
 installed addon mounts (Deadlock Mod Manager, Grimoire or a manual setup) into
 its temporary game configuration and still restores your original gameinfo.gi
 exactly on exit. Uncompiled Panorama files inside mounted mod folders are still
-refused with their exact path. See Release_Notes.md.
+refused with their exact path. See Release_Notes.md for this version's changes.
 
-0.6.12-alpha fixes hidden F9 replay controls at automatic startup by waiting for
-the game's opening HUD transition before pausing. It also keeps Dolly's panel
-closed during startup and fixes overlay scaling when render/window sizes differ.
-Existing camera and export features are retained. See Release_Notes.md.
+The loading screen shows a Dolly-branded card at the top center through the
+game's Panorama UI, without a duplicate native popup. Automatic replay loading
+keeps its existing readiness checks, and the desktop and in-game editors retain
+their current controls.
 
-0.6.11-alpha adds named replay graphics profiles in Settings, restores Console
-camera startup, improves editor readiness errors, repairs current-build Players
-capture admission and completes Depth export finishing/restoration. Players
-remains alpha with appearance limitations. See Video_and_ReShade.md for profiles
-and export usage, and Release_Notes.md for the complete changes and validation limits.
-
-The retained 0.6.10-alpha correction fixes Game Follow and health-panel verification on Deadlock
-build 6745, including the pending-restoration error that could block shot
-playback. Game audio is available
-again, and Game Follow attaches for every hero, including the new
-familiar/clone pawn family. Particle effects such as confetti render on this
-build again, and selecting a hero no longer carries their death grayscale or
-red damage vignette into Dolly's camera. Returning to the game with F9 keeps
-the replay timeline, HUD and cursor available even when the stock health-panel
-view cannot be verified; the health panel stays safely hidden until a valid
-view exists. Camera-list selection, double-click view, Delete and shared
-Undo/Redo are available in-game. The tabs are CAMERA, FOLLOW, BONE PICKER,
-LOOK and EXPORT. In the panel, Ctrl+Z undoes shot edits; Ctrl+Y or
-Ctrl+Shift+Z redoes them. History does not rewind the replay.
+Camera-list selection, double-click view, Delete and shared Undo/Redo are
+available in-game. Ctrl+Z undoes shot edits; Ctrl+Y or Ctrl+Shift+Z redoes them.
+History does not rewind the replay. Players/Depth exports retain their alpha
+appearance limitations; see Video_and_ReShade.md for export usage and limits.
 
 Saved camera markers keep a steady anchored size and a consistent shape at any
 framing or aspect, including while previewing camera paths. If Deadlock never

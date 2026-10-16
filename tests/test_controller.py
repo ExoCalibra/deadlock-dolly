@@ -196,8 +196,8 @@ class FakeClock:
 
 
 class CountedEvent:
-    """Advance a deterministic clock without sleeping; stop after N waits."""
-    def __init__(self, clock, limit):
+    """Virtual Event; an optional wait limit cancels finite playback loops."""
+    def __init__(self, clock, limit=None):
         self.clock = clock
         self.limit = limit
         self.waits = 0
@@ -213,9 +213,12 @@ class CountedEvent:
         self.stopped = False
 
     def wait(self, timeout):
+        if self.stopped:
+            return True
         self.clock.now += timeout
         self.waits += 1
-        self.stopped = self.waits >= self.limit
+        if self.limit is not None and self.waits >= self.limit:
+            self.stopped = True
         return self.stopped
 
 
@@ -223,6 +226,13 @@ class ControllerTests(unittest.TestCase):
     def setUp(self):
         self.messages = []
         self.controller = Controller(self.messages.append)
+        # Exercise real seek/calibration polling against the simulated console,
+        # advancing its clock instead of waiting for a game that is not running.
+        self.clock = FakeClock()
+        self.controller._stop_event = CountedEvent(self.clock)
+        clock_patch = patch("dolly.controller.time.perf_counter", self.clock.monotonic)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
         self.console = FakeConsole()
         self.controller._console = self.console
         self.process = SimpleNamespace(poll=lambda: None)
