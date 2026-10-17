@@ -247,7 +247,8 @@ is not a native-camera compatibility dependency and is not bundled.
 
 ## Install this complete update
 
-1. Extract Deadlock_Dolly_0.3.13_Source.zip. This is the complete repository
+1. Check out the matching tag or branch, or use a source ZIP from the same build
+   if you have one. Either way the tree must contain the complete repository
    source, including native/src/dolly_effects.cpp and native/tests/effect_tests.cpp.
 2. Upload its contents at the GitHub repository root, preserving folder paths.
    For browser uploads use batches: native first, dolly and tests next, then

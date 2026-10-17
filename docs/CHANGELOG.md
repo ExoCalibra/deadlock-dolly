@@ -1,5 +1,24 @@
 # Changes
 
+## 0.6.54-alpha
+
+- Keep verifying a running map/shader preload instead of ending it on a fixed
+  120-second deadline. The wait extends while the reviewed preload job or its
+  scheduled flag is still live, or new work arrives, and stops after 120 seconds
+  of silence or at a 15-minute ceiling. Every extension is reported in the status
+  and recorded with the last batch under `preload_extensions`.
+- Raise `PreloadUnavailableError` for a stalled or ceiling-limited preload, as the
+  never-started intro already did, so the desktop offers its existing
+  "load without the preload check" choice instead of a dialog with no way forward.
+  Startup waits now raise `StartupTimeout`, a `RuntimeError` subclass.
+- Write a per-frame camera file beside every paired depth take, record it in the
+  take audit, and document the stored conventions in `docs/CAMERA_BUNDLE.md`.
+  Cancelled or failed takes keep no camera file.
+- Grey out the float EXR sequence control in both editors until the depth master
+  is on, so the tick can no longer be accepted in-game and then dropped.
+- Add the depth normal reconstruction and the float EXR reader as internal
+  groundwork; no capture option exposes them yet.
+
 ## 0.6.53-alpha
 
 - Add saved XYZ arrival/departure handles to desktop and in-game Position curves: Auto,

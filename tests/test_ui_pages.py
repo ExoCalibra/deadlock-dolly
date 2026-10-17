@@ -102,6 +102,23 @@ class PageBoundaryTests(unittest.TestCase):
         self.assertEqual(len(view.video_layer_checkboxes), 3)
         self.assertFalse(hasattr(view, 'video_export'))
 
+    def test_export_gates_the_exr_control_on_the_depth_master(self):
+        def build(depth_on):
+            booleans = {name: tk.BooleanVar(self.root, False) for name in
+                        ('video_depth', 'video_depth_exr', 'video_fixed_step', 'video_game_audio',
+                         'video_layer_effects', 'video_layer_players', 'video_layer_world',
+                         'video_reconstructed_audio')}
+            booleans['video_depth'].set(depth_on)
+            state = self.variables(ExportState, codec_choices=('Fixture encoder',),
+                                   bitrate_choices=('Fixture rate',), **booleans)
+            return ExportPage(self.root, state, self.callbacks(ExportActions))
+
+        view = build(False)
+        self.assertTrue(view.video_depth_exr_checkbox.instate(['disabled']))
+        view.export_page.destroy()
+        view = build(True)
+        self.assertFalse(view.video_depth_exr_checkbox.instate(['disabled']))
+
     def test_page_modules_do_not_import_application_controller_or_export_backend(self):
         import subprocess
         import sys
@@ -122,6 +139,34 @@ class PageBoundaryTests(unittest.TestCase):
         self.assertAlmostEqual(view.sensitivity_position.get(),
                                sensitivity_to_position(0.25), places=3)
         self.assertIn('Fast', view.sensitivity_text.get())
+
+
+class DepthGateTests(unittest.TestCase):
+    """The desktop EXR gate follows the depth variable so both UIs agree."""
+
+    def test_sync_depth_controls_follows_the_variable(self):
+        from types import SimpleNamespace
+        from dolly.gui import DollyApp
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(str(error))
+        self.addCleanup(root.destroy)
+        root.withdraw()
+        stub = SimpleNamespace(video_depth=tk.BooleanVar(root, False),
+                               video_depth_exr=tk.BooleanVar(root, False))
+        stub.video_depth_exr_checkbox = ttk.Checkbutton(
+            root, text="EXR sequence (float)", variable=stub.video_depth_exr)
+        DollyApp._sync_depth_controls(stub)
+        self.assertTrue(stub.video_depth_exr_checkbox.instate(["disabled"]))
+        stub.video_depth.set(True)
+        DollyApp._sync_depth_controls(stub)
+        self.assertFalse(stub.video_depth_exr_checkbox.instate(["disabled"]))
+        stub.video_depth_exr.set(True)
+        stub.video_depth.set(False)
+        DollyApp._sync_depth_controls(stub)
+        self.assertFalse(stub.video_depth_exr.get())
+        self.assertTrue(stub.video_depth_exr_checkbox.instate(["disabled"]))
 
 
 class SensitivityMappingTests(unittest.TestCase):

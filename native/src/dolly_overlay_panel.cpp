@@ -1918,11 +1918,16 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                         ImGui::SetTooltip(
                             "Write a matching ProRes depth.mov and preview video in the take's depth folder. Requires a verified scene depth.");
                     bool depth_exr = shown(7, state.video_depth_exr ? 1.0 : 0.0) != 0.0;
+                    // The EXR sequence requires the depth master; the desktop
+                    // gates it the same way, so the dependency stays visible
+                    // instead of silently dropping a tick.
+                    ImGui::BeginDisabled(!state.video_depth);
                     if (ImGui::Checkbox("EXR sequence (float)", &depth_exr))
                         commit(7, depth_exr ? 1.0 : 0.0, EditorAction::SetVideoDepthExr);
-                    if (ImGui::IsItemHovered())
+                    ImGui::EndDisabled();
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                         ImGui::SetTooltip(
-                            "Also write the float EXR precision master under the depth folder's exr/ subfolder.");
+                            "Also write the float EXR precision master under the depth folder's exr/ subfolder. Requires the depth master.");
                     bool layer_world = shown(8, state.video_layer_world ? 1.0 : 0.0) != 0.0;
                     if (ImGui::Checkbox("World layer", &layer_world))
                         commit(8, layer_world ? 1.0 : 0.0, EditorAction::SetVideoLayerWorld);

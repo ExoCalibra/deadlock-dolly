@@ -19,6 +19,13 @@ import json
 import sys
 from pathlib import Path
 
+from dolly.camera_bundle import (
+    CameraBundleError,
+    load_bundle,
+    validate_against_manifest,
+    validate_bundle,
+)
+
 SIDECAR_FORMAT = "deadlock-dolly-shot"
 SIDECAR_VERSION = 1
 _LAYERS = ("depth", "world", "players")
@@ -58,9 +65,31 @@ def _audit_sidecar(label: str, sidecar: Path, video_dir: Path, result: dict) -> 
     result["findings"].extend(f"{label}: {problem}" for problem in problems)
 
 
+def _audit_camera(layer: str, folder: Path, manifest, result: dict) -> None:
+    """Check camera.json when present; takes from before the bundle simply have none."""
+    camera = folder / "camera.json"
+    if not camera.is_file():
+        return
+    try:
+        bundle = load_bundle(camera)
+    except CameraBundleError as exc:
+        result["findings"].append(f"{layer}: camera bundle is unreadable: {exc}")
+        return
+    take = result["takes"].setdefault(layer, {})
+    take["camera_frames"] = bundle.frames
+    problems = validate_bundle(bundle, require_complete=True)
+    if isinstance(manifest, dict):
+        problems.extend(validate_against_manifest(bundle, manifest))
+    if problems:
+        take.setdefault("problems", []).extend(f"camera bundle: {problem}"
+                                               for problem in problems)
+        result["findings"].extend(f"{layer}: camera bundle: {problem}" for problem in problems)
+
+
 def _audit_layer(layer: str, folder: Path, result: dict) -> None:
     sidecar = folder / "shot.json"
     manifest = folder / "manifest.json"
+    manifest_data = None
     if sidecar.is_file():
         _audit_sidecar(layer, sidecar, folder, result)
     if manifest.is_file():
@@ -68,6 +97,7 @@ def _audit_layer(layer: str, folder: Path, result: dict) -> None:
         if not isinstance(data, dict):
             result["findings"].append(f"{layer}: unreadable manifest.json")
         else:
+            manifest_data = data
             frames = data.get("frames")
             problems = []
             if data.get("complete") is not True:
@@ -82,6 +112,7 @@ def _audit_layer(layer: str, folder: Path, result: dict) -> None:
             take["manifest_frames"] = frames
             take.setdefault("problems", []).extend(problems)
             result["findings"].extend(f"{layer}: {problem}" for problem in problems)
+    _audit_camera(layer, folder, manifest_data, result)
     videos = [path for path in (folder / f"{layer}.mov", folder / f"{layer}.mp4") if path.is_file()]
     if not sidecar.is_file() and not manifest.is_file() and not videos:
         result["findings"].append(f"{layer}: folder has no sidecar, manifest or video")

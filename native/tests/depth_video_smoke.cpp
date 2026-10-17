@@ -193,6 +193,7 @@ int wmain(int argc, wchar_t** argv) {
             options.bitrate = 2000000;
             options.fixed_step = mode != 1;
             options.depth = true;
+            options.depth_exr = (mode == 0); // Mode 0 also exercises the float EXR sequence.
             if (mode == 5) {
                 // The paired depth master needs the external encoder; a native
                 // Media Foundation request must be rejected.
@@ -253,6 +254,34 @@ int wmain(int argc, wchar_t** argv) {
             if (expected == video::State::completed) {
                 require(fs::exists(path) && fs::exists(mode_root / L"depth" / L"manifest.json"),
                         "Completed pair missing output");
+                require(fs::exists(mode_root / L"depth" / L"camera.json"),
+                        "Completed pair missing the camera bundle");
+                std::ifstream camera(mode_root / L"depth" / L"camera.json");
+                const std::string bundle((std::istreambuf_iterator<char>(camera)), {});
+                require(bundle.find("\"format\": \"deadlock-dolly-camera\"") != std::string::npos &&
+                            bundle.find("\"complete\": true") != std::string::npos &&
+                            bundle.find("\"frames\": " + std::to_string(status.frames_written) +
+                                        ",") != std::string::npos,
+                        "Camera bundle header missing");
+                require(bundle.find("\"state\": \"complete\"") != std::string::npos &&
+                            bundle.find("\"view\": [") != std::string::npos,
+                        "Camera bundle record state missing");
+                if (mode == 0) {
+                    // The float EXR sequence: one file per color frame, named by
+                    // the zero-based color index, and recorded in the manifest.
+                    require(fs::exists(mode_root / L"depth" / L"exr"),
+                            "EXR sequence directory missing");
+                    std::size_t exr_files = 0;
+                    for (const auto& entry : fs::directory_iterator(mode_root / L"depth" / L"exr"))
+                        if (entry.path().extension() == L".exr")
+                            ++exr_files;
+                    require(exr_files == static_cast<std::size_t>(status.frames_written),
+                            "EXR count differs from the color frames");
+                    std::ifstream exr_manifest(mode_root / L"depth" / L"manifest.json");
+                    const std::string exr_text((std::istreambuf_iterator<char>(exr_manifest)), {});
+                    require(exr_text.find("\"exr\": \"exr/") != std::string::npos,
+                            "EXR sequence missing from the manifest");
+                }
                 // This test stops with a GPU copy still pending. Sidecar range
                 // must describe encoded output, excluding that unwritten tail.
                 std::ifstream metadata(path.wstring() + L".shot.json");
@@ -295,6 +324,9 @@ int wmain(int argc, wchar_t** argv) {
                             "Color recording size missing from the scaled depth manifest");
                     require(fs::exists(mode_root / L"depth" / L"preview_80x60.raw"),
                             "Scaled depth preview size missing");
+                    require(bundle.find("\"width\": 160") != std::string::npos &&
+                                bundle.find("\"height\": 120") != std::string::npos,
+                            "Scaled scene camera bundle size missing");
                 }
                 std::ofstream report(root / (std::to_wstring(mode) + L".status"));
                 report << status.frames_written << " " << status.frames_dropped << "\n";

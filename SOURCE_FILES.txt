@@ -742,6 +742,7 @@ native/ui_override/panorama/layout/hud_hideout.xml
 native/ui_override/panorama/styles/citadel_prewarm_assets_status.css
 docs/RELEASE_NOTES_0.6.52-alpha.md
 docs/RELEASE_NOTES_0.6.53-alpha.md
+docs/RELEASE_NOTES_0.6.54-alpha.md
 tests/test_authored_tangents.py
 tests/test_tangent_ui.py
 tests/test_tangent_editor.py
@@ -750,3 +751,11 @@ dolly/curve_preview.py
 dolly/visualization_preview_wire.py
 tests/test_visualization_preview.py
 tests/test_curve_preview.py
+docs/CAMERA_BUNDLE.md
+dolly/camera_bundle.py
+tests/test_camera_bundle.py
+dolly/depth_normals.py
+tests/test_depth_normals.py
+dolly/depth_exr.py
+tests/test_depth_exr.py
+tests/fixtures/depth-frame.exr

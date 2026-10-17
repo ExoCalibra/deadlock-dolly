@@ -113,6 +113,20 @@ void check(D3D_DRIVER_TYPE driver, DXGI_FORMAT format, DXGI_FORMAT view_format) 
         require(result == ReadbackResult::ready, "GPU readback did not finish");
         require(raw.frame.sample == sample && raw.frame.replay_time == 10,
                 "Readback mixed sample IDs or times");
+        require(raw.frame.projection.view_valid, "Readback did not retain the view calibration");
+        const auto& retained = raw.frame.projection;
+        require(retained.view_matrix[0] == 1 && retained.view_matrix[5] == 1 &&
+                    retained.view_matrix[10] == 1 && retained.view_matrix[15] == 1,
+                "Readback view matrix changed");
+        require(retained.position[0] == 0 && retained.up[1] == 1 && retained.forward[2] == -1,
+                "Readback camera vectors changed");
+        require(retained.projection_matrix[0] == 1 && retained.projection_matrix[5] == 1 &&
+                    retained.projection_matrix[11] == 7.0f * (sample + 1) &&
+                    retained.projection_matrix[14] == -1,
+                "Readback projection matrix changed");
+        require(std::abs(retained.near_clip - 7.0 * (sample + 1)) < 1e-3,
+                "Readback near clip changed");
+        require(!std::isfinite(retained.far_clip), "Readback far clip must stay infinite");
         require(raw.pixels.size() == 17 * 3 * 4, "Padded GPU rows leaked to CPU frame");
         std::vector<float> distance(17 * 3);
         require(convert(raw.pixels.data(), raw.pixels.size(), 17 * 4, 17, 3, raw.format,
@@ -153,6 +167,39 @@ void check(D3D_DRIVER_TYPE driver, DXGI_FORMAT format, DXGI_FORMAT view_format) 
             "Conflicting per-view calibrations were resolved by binding order");
     queue.reset();
     require(queue.pending() == 0 && queue.error() == 0, "Reset retained stale GPU slots");
+    // A duplicate binding that agrees on the projection but disagrees on the
+    // retained view must also fail: conflicting calibrations are never
+    // resolved by binding order.
+    const auto view_base = calibration_data(7.0f);
+    auto rotated = view_base;
+    const auto view_put = [&rotated](unsigned offset, float value) {
+        std::memcpy(rotated.data() + 128 + offset, &value, 4);
+    };
+    view_put(128, 0);
+    view_put(136, 1);
+    view_put(160, -1);
+    view_put(168, 0);
+    view_put(448, -1);
+    view_put(456, 0);
+    context.p->UpdateSubresource(calibration.p, 0, nullptr, view_base.data(), 0, 0);
+    context.p->UpdateSubresource(unrelated.p, 0, nullptr, rotated.data(), 0, 0);
+    require(queue.enqueue(device.p, context.p, source.p, frame, bindings, 2) ==
+                ReadbackResult::ready,
+            "Could not queue conflicting view test");
+    context.p->Flush();
+    auto view_result = ReadbackResult::pending;
+    const auto view_limit = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (view_result == ReadbackResult::pending &&
+           std::chrono::steady_clock::now() < view_limit) {
+        view_result = queue.poll(context.p, empty);
+        if (view_result == ReadbackResult::pending)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(view_result == ReadbackResult::failed,
+            "Conflicting view calibrations were resolved by binding order");
+    queue.reset();
+    require(queue.pending() == 0 && queue.error() == 0,
+            "Reset retained stale slots after view conflict");
 }
 }
 int main(int argc, char**) {

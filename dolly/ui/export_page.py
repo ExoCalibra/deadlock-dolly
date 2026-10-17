@@ -110,6 +110,9 @@ class ExportPage:
                   style="CardMuted.TLabel", wraplength=320).pack(anchor="w", pady=(0, GAP))
         self.video_depth_exr_checkbox = ttk.Checkbutton(passes, style="Card.TCheckbutton", text="EXR sequence (float)", variable=state.video_depth_exr)
         self.video_depth_exr_checkbox.pack(anchor="w", pady=(0, GAP))
+        # The sequence needs the depth master; the app keeps this in step with
+        # depth changes from either UI.
+        self.video_depth_exr_checkbox.configure(state="normal" if state.video_depth.get() else "disabled")
         self.video_layer_checkboxes = []
         for title, var in (("World layer", state.video_layer_world), ("Players layer (alpha)", state.video_layer_players), ("Effects layer (alpha)", state.video_layer_effects)):
             cb = ttk.Checkbutton(passes, style="Card.TCheckbutton", text=title, variable=var, command=commands.layer_toggled)

@@ -225,7 +225,13 @@ ReadbackResult Readback::poll(ID3D11DeviceContext* context, RawFrame& output) no
                     const auto& prior = metadata.projection;
                     ambiguous |= prior.inverse_z != candidate.inverse_z ||
                                  prior.viewport_min != candidate.viewport_min ||
-                                 prior.viewport_max != candidate.viewport_max;
+                                 prior.viewport_max != candidate.viewport_max ||
+                                 prior.view_valid != candidate.view_valid;
+                    if (prior.view_valid && candidate.view_valid)
+                        ambiguous |= prior.view_matrix != candidate.view_matrix ||
+                                     prior.projection_matrix != candidate.projection_matrix ||
+                                     prior.position != candidate.position ||
+                                     prior.up != candidate.up || prior.forward != candidate.forward;
                 } else {
                     metadata.projection = candidate;
                     calibrated = true;
