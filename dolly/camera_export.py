@@ -11,7 +11,6 @@ pos:      (x, y, z) -> (x, y, z)
 rotation: (x, y, z), R = Rz * Ry * Rx
 fov:      (horizontalAperture / 2) / tan(fov / 2)
 """
-# TODO: Fix comp size - only works for 16:9
 
 from __future__ import annotations
 
@@ -64,7 +63,7 @@ def horizontal_fov(lens_scale: float, aspect_ratio: float) -> float:
 
 
 def comp_size(standard_aspect: float, width: int = DEFAULT_COMP) -> tuple[int, int]:
-    """Default comp size for the shot's standard aspect, with an even height."""
+    """The shot's standard aspect, with an even height."""
     height = max(2, int(round(width / standard_aspect / 2)) * 2)
     return width, height
 

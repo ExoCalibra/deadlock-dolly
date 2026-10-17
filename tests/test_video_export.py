@@ -809,6 +809,25 @@ class VideoGuiTests(unittest.TestCase):
         self.assertIn("var FRAMES = 30;", text)
         self.assertIn("var frameNumbers = [" + ",".join(map(str, range(30))) + "];", text)
 
+    def test_camera_exports_match_the_recorded_frame_size(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app.video_usd_camera = Var(True)
+        folder = Path(self.folder.name)
+        self.app._start_video_recording()
+        self.finish_color_take()
+        self.assertIn("var COMP_HEIGHT = 1080;", (folder / "shot_camera.jsx").read_text("ascii"))
+        for width, height, aperture in ((2560, 1080, "15.1875"), (1920, 1200, "22.5"),
+                                        (1440, 1080, "27"), (3440, 1440, "15.069767")):
+            with self.subTest(size=(width, height)):
+                self.app._start_video_recording()
+                self.app._video_operation_done({"state": "completed", "width": width, "height": height})
+                script = (folder / "shot_camera.jsx").read_text("ascii")
+                self.assertIn(f"var COMP_WIDTH = {width};", script)
+                self.assertIn(f"var COMP_HEIGHT = {height};", script)
+                self.assertIn(f"float verticalAperture = {aperture}\n",
+                              (folder / "shot_camera.usda").read_text("ascii"))
+
     def test_ae_camera_prefers_camera_data(self):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(True)

@@ -621,6 +621,10 @@ class DollyApp:
         # Without camera data, the recorded frame count ends the camera where an early finish ended the video.
         written = (status or {}).get("frames_written")
         video_frames = written if type(written) is int and written > 0 else None
+        # Match the recorded frame size, whatever the window's aspect ratio.
+        width, height = ((status or {}).get(name) for name in ("width", "height"))
+        size = ({"width": width, "height": height}
+                if all(type(value) is int and value > 0 for value in (width, height)) else {})
         for attribute, export, suffix, label in (
                 ("_ae_camera_take", "export_jsx", "_camera.jsx", "After Effects camera"),
                 ("_usd_camera_take", "export_usda", "_camera.usda", "USD camera")):
@@ -632,7 +636,7 @@ class DollyApp:
             path = video.with_name(video.stem + suffix)
             try:
                 warnings = getattr(camera_export, export)(project, path, fps, camera_data=camera_data,
-                                                          speed=speed, video_frames=video_frames)
+                                                          speed=speed, video_frames=video_frames, **size)
             except (OSError, ValueError) as exc:
                 # The video is already saved; a camera sidecar failure must not fail the take.
                 self._log(f"{label} was not saved: {exc}")
