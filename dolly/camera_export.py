@@ -145,8 +145,12 @@ def sample_camera_data(path: str | Path, fps: float) -> Take:
 
 
 def load_take(project: Project, fps: float, camera_data: str | Path | None = None,
-              speed: float = 1.0, video_frames: int | None = None) -> Take:
+              speed: float = 1.0, video_frames: int | None = None, pov: bool = False) -> Take:
     """Saved camera data when available; otherwise the shot's keyframes."""
+    if pov:
+        if camera_data is None:
+            raise ValueError("Player POV recording saved no camera data")
+        return sample_camera_data(camera_data, fps)
     if camera_data is not None:
         take = sample_camera_data(camera_data, fps)
     else:
@@ -244,14 +248,14 @@ def ae_rotations(frames: list[Frame]) -> list[tuple[float, float, float]]:
 def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = None,
               width: int | None = None, height: int | None = None,
               speed: float = 1.0, video_frames: int | None = None,
-              video: str | None = None) -> tuple[str, list[str]]:
+              video: str | None = None, pov: bool = False) -> tuple[str, list[str]]:
     """Return the JSX source and accuracy warnings for a shot.
 
     With the native camera available, every frame is sampled; otherwise the
     path is sampled from its keyframes. Video is the recorded file's name,
     which the script imports from its own folder.
     """
-    take = load_take(project, fps, camera_data, speed, video_frames)
+    take = load_take(project, fps, camera_data, speed, video_frames, pov)
     frames = take.frames
     default_width, default_height = comp_size(project.standard_aspect)
     width, height = width or default_width, height or default_height
@@ -417,9 +421,10 @@ def usd_samples(frames: list[Frame], values) -> str:
 
 def build_usda(project: Project, fps: float, *, camera_data: str | Path | None = None,
                width: int | None = None, height: int | None = None,
-               speed: float = 1.0, video_frames: int | None = None) -> tuple[str, list[str]]:
+               speed: float = 1.0, video_frames: int | None = None,
+               pov: bool = False) -> tuple[str, list[str]]:
     """Return the USD stage and accuracy warnings for a shot."""
-    take = load_take(project, fps, camera_data, speed, video_frames)
+    take = load_take(project, fps, camera_data, speed, video_frames, pov)
     frames = take.frames
     default_width, default_height = comp_size(project.standard_aspect)
     width, height = width or default_width, height or default_height

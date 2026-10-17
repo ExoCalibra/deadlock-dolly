@@ -829,6 +829,46 @@ class VideoGuiTests(unittest.TestCase):
                 self.assertIn(f"float verticalAperture = {aperture}\n",
                               (folder / "shot_camera.usda").read_text("ascii"))
 
+    def start_pov_take(self):
+        self.app.project = Project()
+        self.app.video_source = Var("Player POV")
+        self.app.video_pov_duration = Var("5")
+        self.app.controller = Mock()
+        self.app.controller.status.return_value = {"tick": 640, "game_ui_visible": True}
+        self.app.video_ae_camera = Var(True)
+        self.app.video_usd_camera = Var(True)
+        self.app._start_video_recording()
+        self.app._error.assert_not_called()
+
+    def test_pov_camera_exports_from_the_recorded_camera_data(self):
+        self.start_pov_take()
+        folder = Path(self.folder.name)
+        (folder / "shot.mp4.camera.json").write_text(json.dumps({
+            "format": "deadlock-dolly-camera", "version": 1, "fps": 60, "fixed_step": True,
+            "frames_written": 3,
+            "fields": ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll",
+                       "horizontal_fov"],
+            "frames": [[f, f / 60, f / 60, 900 + f, 0, 64, 0, 90, 0, 100] for f in range(3)]}), "utf-8")
+        self.finish_color_take()
+        script = (folder / "shot_camera.jsx").read_text("ascii")
+        self.assertIn('var SHOT_NAME = "Player POV";', script)
+        self.assertIn("var FRAMES = 3;", script)
+        self.assertIn("var ORIGIN = [900,-64,0];", script)
+        self.assertIn("var dollyKeys = [];", script)  # The POV keys are placeholders, never markers.
+        layer = (folder / "shot_camera.usda").read_text("ascii")
+        self.assertNotIn("Key_", layer)
+        self.app._log.assert_any_call("USD camera saved to " + str(folder / "shot_camera.usda"))
+
+    def test_pov_camera_without_camera_data_is_not_saved(self):
+        self.start_pov_take()
+        self.finish_color_take()
+        # Never fall back to the placeholder keys, which would export a camera stuck at 0,0,0.
+        self.assertEqual(sorted(p.name for p in Path(self.folder.name).glob("*_camera.*")), [])
+        self.app._log.assert_any_call(
+            "After Effects camera was not saved: this Player POV recording saved no camera data")
+        self.app._log.assert_any_call(
+            "USD camera was not saved: this Player POV recording saved no camera data")
+
     def test_ae_camera_prefers_camera_data(self):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(True)

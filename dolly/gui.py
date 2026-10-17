@@ -632,12 +632,12 @@ class DollyApp:
             setattr(self, attribute, None)
             if take is None:
                 continue
-            project, fps, speed = take
+            project, fps, speed, pov = take
             path = video.with_name(video.stem + suffix)
             try:
                 warnings = getattr(camera_export, export)(project, path, fps, camera_data=camera_data,
                                                           speed=speed, video_frames=video_frames,
-                                                          **size, **extra)
+                                                          pov=pov, **size, **extra)
             except (OSError, ValueError) as exc:
                 # The video is already saved; a camera sidecar failure must not fail the take.
                 self._log(f"{label} was not saved: {exc}")
@@ -792,10 +792,9 @@ class DollyApp:
         self._bone_take_project = copy.deepcopy(bone_project)
         project = self._pov_project or bone_project or (Project.from_dict(self.project.to_dict()) if len(self.project.keyframes) >= 2 else None)
         frozen = False if pov else self.frozen.get()
-        # Player POV has no shot camera to export.
         # Export speed only applies to fixed-step takes.
         speed = options.speed if options.fixed_step else 1.0
-        camera_take = (project, options.fps, speed) if not pov and project is not None else None
+        camera_take = (project, options.fps, speed, pov) if project is not None else None
         for attribute, variable in (("_ae_camera_take", "video_ae_camera"),
                                     ("_usd_camera_take", "video_usd_camera")):
             ticked = getattr(self, variable, None)
