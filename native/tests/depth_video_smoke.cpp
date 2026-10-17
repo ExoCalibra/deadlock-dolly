@@ -246,6 +246,18 @@ int wmain(int argc, wchar_t** argv) {
             if (expected == video::State::completed) {
                 require(fs::exists(path) && fs::exists(mode_root / L"depth" / L"manifest.json"),
                         "Completed pair missing output");
+                require(fs::exists(mode_root / L"depth" / L"camera.json"),
+                        "Completed pair missing the camera bundle");
+                std::ifstream camera(mode_root / L"depth" / L"camera.json");
+                const std::string bundle((std::istreambuf_iterator<char>(camera)), {});
+                require(bundle.find("\"format\": \"deadlock-dolly-camera\"") != std::string::npos &&
+                            bundle.find("\"complete\": true") != std::string::npos &&
+                            bundle.find("\"frames\": " + std::to_string(status.frames_written) +
+                                        ",") != std::string::npos,
+                        "Camera bundle header missing");
+                require(bundle.find("\"state\": \"complete\"") != std::string::npos &&
+                            bundle.find("\"view\": [") != std::string::npos,
+                        "Camera bundle record state missing");
                 // This test stops with a GPU copy still pending. Sidecar range
                 // must describe encoded output, excluding that unwritten tail.
                 std::ifstream metadata(path.wstring() + L".shot.json");
@@ -270,6 +282,9 @@ int wmain(int argc, wchar_t** argv) {
                             "Color recording size missing from the scaled depth manifest");
                     require(fs::exists(mode_root / L"depth" / L"preview_80x60.raw"),
                             "Scaled depth preview size missing");
+                    require(bundle.find("\"width\": 160") != std::string::npos &&
+                                bundle.find("\"height\": 120") != std::string::npos,
+                            "Scaled scene camera bundle size missing");
                 }
                 std::ofstream report(root / (std::to_wstring(mode) + L".status"));
                 report << status.frames_written << " " << status.frames_dropped << "\n";
