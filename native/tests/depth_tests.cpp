@@ -83,15 +83,39 @@ int main(int argc, char** argv) {
         Projection parsed;
         require(read_per_view_projection(per_view.data(), per_view.size(), 17, 3, parsed),
                 "Valid per-view layout rejected");
+        require(parsed.view_valid, "Complete calibration did not retain the view");
+        require(parsed.view_matrix[0] == 1 && parsed.view_matrix[5] == 1 &&
+                    parsed.view_matrix[10] == 1 && parsed.view_matrix[15] == 1,
+                "Retained view matrix changed");
+        require(parsed.projection_matrix[0] == 1 && parsed.projection_matrix[5] == 1 &&
+                    parsed.projection_matrix[11] == 7 && parsed.projection_matrix[14] == -1,
+                "Retained projection matrix changed");
+        require(parsed.position[0] == 0 && parsed.position[1] == 0 && parsed.position[2] == 0 &&
+                    parsed.up[1] == 1 && parsed.forward[2] == -1,
+                "Retained camera vectors changed");
+        close_to(static_cast<float>(parsed.near_clip), 7, "Retained near clip changed");
+        require(std::isinf(parsed.far_clip), "Retained far clip must stay infinite");
         require(!read_per_view_projection(per_view.data(), per_view.size(), 16, 3, parsed),
                 "Projection for a different viewport accepted");
         const auto saved_per_view = per_view;
-        for (unsigned offset : {128u, 140u, 188u, 224u, 236u, 264u, 328u, 336u, 376u, 436u, 456u}) {
+        for (unsigned offset : {128u, 140u, 188u, 196u, 200u, 204u, 208u, 216u, 220u, 224u, 236u,
+                                264u, 328u, 336u, 376u, 436u, 456u}) {
             per_view = saved_per_view;
             put(offset, 123);
             require(!read_per_view_projection(per_view.data(), per_view.size(), 17, 3, parsed),
                     "Corrupt or unrelated per-view buffer accepted");
         }
+        for (unsigned offset : {192u, 212u}) {
+            per_view = saved_per_view;
+            put(offset, 0);
+            require(!read_per_view_projection(per_view.data(), per_view.size(), 17, 3, parsed),
+                    "Zero projection scale accepted");
+        }
+        per_view = saved_per_view;
+        put(128, std::numeric_limits<float>::infinity());
+        require(!read_per_view_projection(per_view.data(), per_view.size(), 17, 3, parsed),
+                "Non-finite view matrix accepted");
+        per_view = saved_per_view;
 
         // D24 little-endian words. Stencil is deliberately nonzero and each
         // row has four poison padding bytes that must never become a pixel.

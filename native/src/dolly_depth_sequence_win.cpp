@@ -76,6 +76,18 @@ struct Sequence::Impl {
     bool owned = false, complete = false, write_exr = false, write_mov = false;
     long failure = 0;
     std::vector<float> linear;
+    // Per-frame camera records for camera.json. Bounded: the cap keeps memory
+    // and the file finite for pathological takes, and a truncated list is
+    // never presented as a complete bundle.
+    struct CameraRecord {
+        std::uint64_t frame = 0, sample = 0;
+        double replay_time = 0;
+        std::uint64_t pts = 0;
+        Projection projection;
+    };
+    static constexpr std::size_t kCameraRecordLimit = 65536;
+    std::vector<CameraRecord> camera_records;
+    bool camera_truncated = false;
     HANDLE preview = INVALID_HANDLE_VALUE;
     std::wstring preview_name;
     std::uint32_t preview_width = 0, preview_height = 0;
@@ -114,7 +126,8 @@ struct Sequence::Impl {
                         const auto x = px * 2 + dx;
                         if (x >= frame.width)
                             continue;
-                        nearest = std::min(nearest, double(linear[std::size_t(y) * frame.width + x]));
+                        nearest =
+                            std::min(nearest, double(linear[std::size_t(y) * frame.width + x]));
                     }
                 }
                 const double scaled = std::isfinite(nearest) ? nearest / kDepthPreviewMax : 0.0;
@@ -134,7 +147,8 @@ struct Sequence::Impl {
         return false;
     }
     template <class Write>
-    bool file(const std::wstring& base, const std::wstring& name, Write write, bool replace = false) {
+    bool file(const std::wstring& base, const std::wstring& name, Write write,
+              bool replace = false) {
         const auto path = base + L"\\" + name;
         const auto temporary = path + L".part";
         const HANDLE handle = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
@@ -153,8 +167,8 @@ struct Sequence::Impl {
         }
         if (!CloseHandle(handle))
             good = false;
-        if (good && MoveFileExW(temporary.c_str(), path.c_str(),
-                                replace ? MOVEFILE_REPLACE_EXISTING : 0))
+        if (good &&
+            MoveFileExW(temporary.c_str(), path.c_str(), replace ? MOVEFILE_REPLACE_EXISTING : 0))
             return true;
         const auto error = good ? GetLastError() : ERROR_WRITE_FAULT;
         // Only this function's atomically created temporary file is removed.
@@ -193,6 +207,63 @@ struct Sequence::Impl {
                 out << ",\n  \"order\": \"zero-based encoded color frame index\","
                        "\n  \"capture_pts\": \"dollyCapturePTS100ns records capture time; "
                        "encoded video timing may differ\"\n}\n";
+                return out.good();
+            },
+            true);
+    }
+    // Camera bundle (format v1): the per-frame camera calibration the renderer
+    // actually used, written only at finalization so a cancelled or failed
+    // take never keeps a bundle. Conventions: docs/CAMERA_BUNDLE.md.
+    bool camera_bundle() noexcept {
+        return file(
+            L"camera.json",
+            [&](std::ostream& out) {
+                bool complete = !camera_truncated && camera_records.size() == written;
+                for (const auto& record : camera_records)
+                    complete = complete && record.projection.view_valid;
+                out.precision(9);
+                out << "{\n  \"format\": \"deadlock-dolly-camera\",\n  \"version\": 1,\n"
+                       "  \"complete\": "
+                    << (complete ? "true" : "false") << ",\n  \"frames\": " << written
+                    << ",\n  \"width\": " << width << ",\n  \"height\": " << height
+                    << ",\n  \"color_width\": " << color_width
+                    << ",\n  \"color_height\": " << color_height
+                    << ",\n  \"units\": \"positive camera-axis game units\",\n";
+                if (!complete)
+                    out << "  \"partial_reason\": \""
+                        << (camera_truncated ? "truncated" : "missing-view") << "\",\n";
+                out << "  \"records\": [";
+                for (std::size_t i = 0; i < camera_records.size(); ++i) {
+                    const auto& record = camera_records[i];
+                    const auto& p = record.projection;
+                    out << (i ? ",\n" : "\n") << "    {\"frame\": " << record.frame
+                        << ", \"sample\": " << record.sample
+                        << ", \"replay_time\": " << record.replay_time
+                        << ", \"capture_pts_100ns\": " << record.pts << ", \"state\": \""
+                        << (p.view_valid ? "complete" : "projection-only") << "\"";
+                    if (p.view_valid) {
+                        out << ",\n     \"view\": [";
+                        for (unsigned k = 0; k < 16; ++k)
+                            out << (k ? ", " : "") << p.view_matrix[k];
+                        out << "],\n     \"position\": [" << p.position[0] << ", " << p.position[1]
+                            << ", " << p.position[2] << "],\n     \"up\": [" << p.up[0] << ", "
+                            << p.up[1] << ", " << p.up[2] << "],\n     \"forward\": ["
+                            << p.forward[0] << ", " << p.forward[1] << ", " << p.forward[2] << "]";
+                    }
+                    out << ",\n     \"projection\": [";
+                    for (unsigned k = 0; k < 16; ++k)
+                        out << (k ? ", " : "") << p.projection_matrix[k];
+                    out << "],\n     \"inverse_z\": [" << p.inverse_z[0] << ", " << p.inverse_z[1]
+                        << ", " << p.inverse_z[2] << ", " << p.inverse_z[3]
+                        << "],\n     \"viewport\": [" << p.viewport_min << ", " << p.viewport_max
+                        << "],\n     \"near\": " << p.near_clip << ", \"far\": ";
+                    if (std::isfinite(p.far_clip))
+                        out << p.far_clip;
+                    else
+                        out << "null";
+                    out << "}";
+                }
+                out << "\n  ]\n}\n";
                 return out.good();
             },
             true);
@@ -259,6 +330,11 @@ bool Sequence::write(const RawFrame& raw, std::uint64_t pts) noexcept {
                 }))
                 return false;
         }
+        if (s.camera_records.size() < Impl::kCameraRecordLimit)
+            s.camera_records.push_back(
+                {s.written, frame.sample, frame.replay_time, pts, frame.projection});
+        else
+            s.camera_truncated = true;
         s.width = frame.width;
         s.height = frame.height;
         s.last_sample = frame.sample;
@@ -276,6 +352,8 @@ bool Sequence::finish(std::uint64_t encoded_color_frames) noexcept {
             return s.fail(ERROR_INVALID_DATA);
         s.close_preview();
         if (!s.manifest(true))
+            return false;
+        if (!s.camera_bundle())
             return false;
         s.complete = true;
         return true;
@@ -296,6 +374,9 @@ void Sequence::discard() noexcept {
         // The manifest is always written by this sequence (provisional at
         // begin, verified at finish), so cancellation removes it.
         DeleteFileW((s.directory + L"\\manifest.json").c_str());
+        // The camera bundle is written only at finalization; removal is
+        // defensive for any interrupted rewrite.
+        DeleteFileW((s.directory + L"\\camera.json").c_str());
         if (s.write_mov)
             DeleteFileW((s.directory + L"\\depth.mov").c_str());
         s.close_preview();

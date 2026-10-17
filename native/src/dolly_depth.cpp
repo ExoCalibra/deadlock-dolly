@@ -127,6 +127,16 @@ bool read_per_view_projection(const void* bytes, std::size_t size, std::uint32_t
     for (unsigned index : {8u, 9u, 12u, 13u})
         if (!near(at(192 + index * 4), 0))
             return false;
+    // The same reviewed matrix supplies the horizontal/vertical scale that the
+    // retained camera bundle records, so its other off-diagonal entries must be
+    // the structural zeros of a non-oblique perspective and both scales must be
+    // present.
+    for (unsigned index : {1u, 2u, 3u, 4u, 6u, 7u})
+        if (!near(at(192 + index * 4), 0))
+            return false;
+    const double scale_x = at(192), scale_y = at(212);
+    if (!std::isfinite(scale_x) || scale_x == 0 || !std::isfinite(scale_y) || scale_y == 0)
+        return false;
     const double p[] = {at(232), at(236), at(248), at(252)};
     const auto& q = candidate.inverse_z;
     if (!near(p[0] * q[0] + p[1] * q[2], 1) || !near(p[0] * q[1] + p[1] * q[3], 0) ||
@@ -162,6 +172,29 @@ bool read_per_view_projection(const void* bytes, std::size_t size, std::uint32_t
         !(std::isinf(far_clip) ? std::isinf(at(380)) && at(380) > 0
                                : near(at(380), far_clip, .001)))
         return false;
+    // Retained calibration for the camera bundle: the values above are already
+    // verified; copy them and keep every recorded number finite.
+    for (unsigned index = 0; index < 16; ++index) {
+        candidate.view_matrix[index] = at(128 + index * 4);
+        candidate.projection_matrix[index] = at(192 + index * 4);
+    }
+    for (unsigned component = 0; component < 3; ++component) {
+        candidate.position[component] = at(416 + component * 4);
+        candidate.up[component] = at(432 + component * 4);
+        candidate.forward[component] = at(448 + component * 4);
+    }
+    const auto finite = [](const auto& values) {
+        for (double value : values)
+            if (!std::isfinite(value))
+                return false;
+        return true;
+    };
+    if (!finite(candidate.view_matrix) || !finite(candidate.projection_matrix) ||
+        !finite(candidate.position) || !finite(candidate.up) || !finite(candidate.forward))
+        return false;
+    candidate.near_clip = near_clip;
+    candidate.far_clip = far_clip;
+    candidate.view_valid = true;
     output = candidate;
     return true;
 }

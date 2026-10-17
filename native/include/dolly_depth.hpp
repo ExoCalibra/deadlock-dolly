@@ -11,6 +11,17 @@ namespace dolly::depth {
 struct Projection {
     std::array<double, 4> inverse_z{};
     double viewport_min = 0, viewport_max = 1;
+    // Retained from the same validated buffer when the full layout parsed: the
+    // world->view affine matrix (row-vector convention, row-major), the camera
+    // position/up/forward vectors, the clip-from-view projection matrix
+    // (column-vector convention, row-major) and the linearized clip range.
+    // view_valid stays false for a hand-built projection-only record; see
+    // docs/CAMERA_BUNDLE.md for the stored conventions.
+    std::array<double, 16> view_matrix{};
+    std::array<double, 16> projection_matrix{};
+    std::array<double, 3> position{}, up{}, forward{};
+    double near_clip = 0, far_clip = 0;
+    bool view_valid = false;
     bool valid() const noexcept;
     // Positive camera-axis distance in game units; +infinity means the far
     // endpoint of an infinite projection. False means invalid calibration/data.

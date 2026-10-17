@@ -97,6 +97,28 @@ unrelated files are preserved. Resource reset can finish a matching prefix,
 with pending GPU pairs counted as dropped. Paired fixed-step export fails on
 backpressure timeout instead of continuing with an unreported missing sample.
 
+### Camera bundle (camera.json)
+
+Finalized depth sequences also write `camera.json` beside the manifest: for
+every admitted output frame, the per-view camera calibration the renderer
+actually used (world->view matrix, camera position/up/forward, projection
+matrix, inverse-Z coefficients, viewport and linearized clip range) and the
+frame identity (`frame`, `sample`, `replay_time`, `capture_pts_100ns`). The
+format, conventions and reprojection rules are documented for creators in
+`docs/CAMERA_BUNDLE.md`; `dolly/camera_bundle.py` loads, validates and
+reprojects through it, and `dolly/export_audit.py` cross-checks it against the
+manifest without requiring one from earlier takes.
+
+The values are retained by the same reviewed reader that calibrates the depth
+(`read_per_view_projection`); the reader also verifies the projection's
+structural zeros and horizontal/vertical scale before a frame counts as fully
+calibrated, and conflicting per-view bindings are still rejected as a whole
+(two buffers that agree on the projection but disagree on the view are never
+resolved by binding order). The bundle is written only at finalization, so a
+cancelled or failed take never keeps one; a frame without the full layout is
+recorded as `projection-only`, which marks the bundle partial instead of
+claiming completeness.
+
 The paired depth master is captured at the verified scene target's own size.
 Upscaling or resolution scaling renders the scene below the window size, so the
 scene target can be smaller than the color recording; the depth data then keeps
