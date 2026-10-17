@@ -184,12 +184,12 @@ class ScriptTests(unittest.TestCase):
 
     @staticmethod
     def write_camera_data(folder, rows, frames_written=10, **overrides):
-        data = {"format": "deadlock-dolly-camera", "version": 1, "fps": 60, "fixed_step": True,
+        data = {"format": "deadlock-dolly-camera-track", "version": 1, "fps": 60, "fixed_step": True,
                 "frames_written": frames_written,
                 "fields": ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll",
                            "horizontal_fov"],
                 "frames": rows, **overrides}
-        path = Path(folder) / "shot.mp4.camera.json"
+        path = Path(folder) / "shot.mp4.camera-track.json"
         path.write_text(json.dumps(data), "utf-8")
         return path
 
@@ -262,7 +262,9 @@ class ScriptTests(unittest.TestCase):
 
     def test_invalid_camera_data_is_rejected(self):
         good = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90]]
-        cases = (dict(format="other"), dict(version=2), dict(fields=["frame"]), dict(frames=[]),
+        # "deadlock-dolly-camera" is the depth take's camera bundle, a different layout.
+        cases = (dict(format="other"), dict(format="deadlock-dolly-camera"), dict(version=2),
+                 dict(fields=["frame"]), dict(frames=[]),
                  dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 200]]),
                  dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, float("nan")]]),
                  dict(frames=good * 2))

@@ -843,8 +843,8 @@ class VideoGuiTests(unittest.TestCase):
     def test_pov_camera_exports_from_the_recorded_camera_data(self):
         self.start_pov_take()
         folder = Path(self.folder.name)
-        (folder / "shot.mp4.camera.json").write_text(json.dumps({
-            "format": "deadlock-dolly-camera", "version": 1, "fps": 60, "fixed_step": True,
+        (folder / "shot.mp4.camera-track.json").write_text(json.dumps({
+            "format": "deadlock-dolly-camera-track", "version": 1, "fps": 60, "fixed_step": True,
             "frames_written": 3,
             "fields": ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll",
                        "horizontal_fov"],
@@ -873,9 +873,9 @@ class VideoGuiTests(unittest.TestCase):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(True)
         self.app._start_video_recording()
-        camera_data = Path(self.folder.name) / "shot.mp4.camera.json"
+        camera_data = Path(self.folder.name) / "shot.mp4.camera-track.json"
         camera_data.write_text(json.dumps({
-            "format": "deadlock-dolly-camera", "version": 1, "fps": 60, "fixed_step": True,
+            "format": "deadlock-dolly-camera-track", "version": 1, "fps": 60, "fixed_step": True,
             "frames_written": 2,
             "fields": ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", "roll",
                        "horizontal_fov"],

@@ -108,7 +108,7 @@ void capture(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceContex
              const depth::SceneFrame* scene = nullptr, double replay_time = -1,
              bool native_clock = false) noexcept;
 // Rendered camera: Position, pitch/yaw/roll in degrees and horizontal FOV
-// Recorded per encoded frame into <video>.camera.json.
+// Recorded per encoded frame into <video>.camera-track.json.
 struct CameraSample {
     double position[3]{}, angles[3]{};
     double horizontal_fov = 0;

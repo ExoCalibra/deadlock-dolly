@@ -296,7 +296,7 @@ int wmain(int argc, wchar_t** argv) {
                         "Clock metadata did not match the written frames");
                 // Only the native view clock carries a rendered camera. Its
                 // sidecar has exactly one row per encoded frame.
-                const auto camera_path = fs::path(path.wstring() + L".camera.json");
+                const auto camera_path = fs::path(path.wstring() + L".camera-track.json");
                 if (mode == 0) {
                     std::ifstream camera_file(camera_path);
                     const std::string camera((std::istreambuf_iterator<char>(camera_file)), {});
@@ -304,7 +304,7 @@ int wmain(int argc, wchar_t** argv) {
                     for (auto at = camera.find("\n    ["); at != std::string::npos;
                          at = camera.find("\n    [", at + 1))
                         ++rows;
-                    require(camera.find("\"format\": \"deadlock-dolly-camera\"") != std::string::npos &&
+                    require(camera.find("\"format\": \"deadlock-dolly-camera-track\"") != std::string::npos &&
                                 rows == status.frames_written,
                             "Camera metadata did not match the written frames");
                     video::publish_path_replay_time(false, 0);

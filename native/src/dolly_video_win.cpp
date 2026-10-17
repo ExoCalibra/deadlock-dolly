@@ -334,10 +334,10 @@ bool write_camera_sidecar(const Session& s) noexcept {
     if (s.camera_trace.empty())
         return false;
     std::FILE* file = nullptr;
-    if (_wfopen_s(&file, (s.path + L".camera.json").c_str(), L"wb") != 0 || !file)
+    if (_wfopen_s(&file, (s.path + L".camera-track.json").c_str(), L"wb") != 0 || !file)
         return false;
     std::fprintf(file,
-                 "{\n  \"format\": \"deadlock-dolly-camera\",\n  \"version\": 1,\n"
+                 "{\n  \"format\": \"deadlock-dolly-camera-track\",\n  \"version\": 1,\n"
                  "  \"fps\": %u,\n  \"fixed_step\": %s,\n  \"frames_written\": %llu,\n"
                  "  \"fields\": [\"frame\", \"video_time\", \"phase\", \"x\", \"y\", \"z\", "
                  "\"pitch\", \"yaw\", \"roll\", \"horizontal_fov\"],\n  \"frames\": [",

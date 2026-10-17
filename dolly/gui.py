@@ -619,7 +619,7 @@ class DollyApp:
     def _export_camera(self, video, status=None):
         """Save the camera beside the video in every ticked format."""
         from . import camera_export
-        camera_data = video.with_name(video.name + ".camera.json")
+        camera_data = video.with_name(video.name + ".camera-track.json")
         camera_data = camera_data if camera_data.is_file() else None
         # Without camera data, the recorded frame count ends the camera where an early finish ended the video.
         written = (status or {}).get("frames_written")

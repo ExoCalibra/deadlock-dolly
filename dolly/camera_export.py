@@ -120,7 +120,7 @@ def sample_camera_data(path: str | Path, fps: float) -> Take:
     if not math.isfinite(fps) or fps <= 0:
         raise ValueError(f"Invalid fps ({fps})")
     data = json.loads(Path(path).read_text("utf-8"))
-    if (not isinstance(data, dict) or data.get("format") != "deadlock-dolly-camera"
+    if (not isinstance(data, dict) or data.get("format") != "deadlock-dolly-camera-track"
             or data.get("version") != 1 or data.get("fields") != CAMERA_FIELDS):
         raise ValueError("Not a supported camera path")
     rows = data.get("frames")
