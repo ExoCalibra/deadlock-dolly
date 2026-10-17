@@ -613,11 +613,14 @@ class DollyApp:
             self.video_path.set(path)
             self._remember_export_folder()
 
-    def _export_camera(self, video):
+    def _export_camera(self, video, status=None):
         """Save the camera beside the video in every ticked format."""
         from . import camera_export
         camera_data = video.with_name(video.name + ".camera.json")
         camera_data = camera_data if camera_data.is_file() else None
+        # Without camera data, the recorded frame count ends the camera where an early finish ended the video.
+        written = (status or {}).get("frames_written")
+        video_frames = written if type(written) is int and written > 0 else None
         for attribute, export, suffix, label in (
                 ("_ae_camera_take", "export_jsx", "_camera.jsx", "After Effects camera"),
                 ("_usd_camera_take", "export_usda", "_camera.usda", "USD camera")):
@@ -625,10 +628,11 @@ class DollyApp:
             setattr(self, attribute, None)
             if take is None:
                 continue
-            project, fps = take
+            project, fps, speed = take
             path = video.with_name(video.stem + suffix)
             try:
-                warnings = getattr(camera_export, export)(project, path, fps, camera_data=camera_data)
+                warnings = getattr(camera_export, export)(project, path, fps, camera_data=camera_data,
+                                                          speed=speed, video_frames=video_frames)
             except (OSError, ValueError) as exc:
                 # The video is already saved; a camera sidecar failure must not fail the take.
                 self._log(f"{label} was not saved: {exc}")
@@ -784,7 +788,9 @@ class DollyApp:
         project = self._pov_project or bone_project or (Project.from_dict(self.project.to_dict()) if len(self.project.keyframes) >= 2 else None)
         frozen = False if pov else self.frozen.get()
         # Player POV has no shot camera to export.
-        camera_take = (project, options.fps) if not pov and project is not None else None
+        # Export speed only applies to fixed-step takes.
+        speed = options.speed if options.fixed_step else 1.0
+        camera_take = (project, options.fps, speed) if not pov and project is not None else None
         for attribute, variable in (("_ae_camera_take", "video_ae_camera"),
                                     ("_usd_camera_take", "video_usd_camera")):
             ticked = getattr(self, variable, None)
@@ -908,7 +914,7 @@ class DollyApp:
                 self._log("Layer alpha saved to " + str(master))
             elif getattr(self, "_active_layer_take", None) is None:
                 self._log("Video saved to " + str(self.video_export.output_path))
-                self._export_camera(self.video_export.output_path)
+                self._export_camera(self.video_export.output_path, status)
             directory = self._next_take_directory()
             if not directory.is_dir():
                 directory = Path(self.video_path.get()).parent

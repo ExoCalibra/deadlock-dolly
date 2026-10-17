@@ -115,11 +115,34 @@ class SamplingTests(unittest.TestCase):
         self.assertEqual(len(warnings), 2)
         self.assertIn("attach", warnings[0].lower())
 
+    def test_export_speed_stretches_the_camera_over_the_longer_video(self):
+        shot = Project(keyframes=[camera(0, x=0), camera(1, x=100)], interpolation="linear")
+        take = sample_camera(shot, 30, speed=.5) 
+        self.assertEqual((len(take.frames), take.video_frames), (61, 61))
+        self.assertAlmostEqual(take.frames[30].time, 1)
+        self.assertAlmostEqual(take.frames[30].position[0], 50)
+        self.assertAlmostEqual(take.frames[-1].position[0], 100)
+        self.assertEqual(len(sample_camera(shot, 30, speed=2).frames), 16)
+
+    def test_an_early_finish_ends_the_camera_with_the_video(self):
+        shot = Project(keyframes=[camera(0, x=0), camera(1, x=100)], interpolation="linear")
+        take = sample_camera(shot, 30, video_frames=10)
+        self.assertEqual((len(take.frames), take.video_frames), (10, 10))
+        self.assertAlmostEqual(take.frames[-1].position[0], 30)
+        take = sample_camera(shot, 30, video_frames=40)
+        self.assertEqual((len(take.frames), take.video_frames), (31, 40))
+        self.assertIn("var FRAMES = 10;", build_jsx(shot, 30, video_frames=10)[0])
+        self.assertIn("endTimeCode = 9", build_usda(shot, 30, video_frames=10)[0])
+
     def test_rejects_invalid_fps_and_empty_shots(self):
         with self.assertRaises(ValueError):
             sample_camera(Project(keyframes=[camera(0)]), 0)
         with self.assertRaises(ValueError):
             sample_camera(Project(), 30)
+        with self.assertRaises(ValueError):
+            sample_camera(Project(keyframes=[camera(0)]), 30, speed=0)
+        with self.assertRaises(ValueError):
+            sample_camera(Project(keyframes=[camera(0)]), 30, video_frames=0)
 
 
 class ScriptTests(unittest.TestCase):

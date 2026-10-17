@@ -786,6 +786,29 @@ class VideoGuiTests(unittest.TestCase):
         self.app._log.assert_any_call("After Effects camera saved to " + str(script))
         self.assertIsNone(self.app._ae_camera_take)
 
+    def test_fallback_camera_follows_fixed_step_export_speed(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app.video_export_speed = Var(".5")
+        script = Path(self.folder.name) / "shot_camera.jsx"
+        for fixed_step, frames in ((True, 121), (False, 61)):
+            with self.subTest(fixed_step=fixed_step):
+                self.app.video_fixed_step.set(fixed_step)
+                self.app._start_video_recording()
+                self.finish_color_take()
+                self.assertIn(f"var FRAMES = {frames};", script.read_text("ascii"))
+
+    def test_fallback_camera_ends_with_an_early_finish(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        self.finish_color_take()
+        self.app._start_video_recording()
+        self.app._video_operation_done({"state": "completed", "frames_written": 30})
+        text = (Path(self.folder.name) / "shot_camera.jsx").read_text("ascii")
+        self.assertIn("var FRAMES = 30;", text)
+        self.assertIn("var frameNumbers = [" + ",".join(map(str, range(30))) + "];", text)
+
     def test_ae_camera_prefers_camera_data(self):
         self.app.project = self.two_camera_project()
         self.app.video_ae_camera = Var(True)

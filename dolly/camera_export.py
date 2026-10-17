@@ -69,23 +69,30 @@ def comp_size(standard_aspect: float, width: int = DEFAULT_COMP) -> tuple[int, i
     return width, height
 
 
-def sample_camera(project: Project, fps: float) -> Take:
-    """Sample the camera data once per frame."""
+def sample_camera(project: Project, fps: float, speed: float = 1.0,
+                  video_frames: int | None = None) -> Take:
+    """Sample the camera data once per video frame."""
     if not math.isfinite(fps) or fps <= 0:
         raise ValueError(f"Invalid fps ({fps})")
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError(f"Invalid export speed ({speed})")
+    if video_frames is not None and video_frames < 1:
+        raise ValueError(f"Invalid frame count ({video_frames})")
 
     project.validate()
     if not project.keyframes:
         raise ValueError("Add a camera keyframe before exporting the camera.")
 
-    duration = project.duration
+    duration = project.duration / speed
     count = int(math.floor(duration * fps + 1e-9)) + 1
+    if video_frames is not None:
+        count = min(count, video_frames)
     has_lens = any(key.lens_scale is not None for key in project.keyframes)
     frames = []
 
     for index in range(count):
         time = index / fps
-        pose = project.evaluate(time)
+        pose = project.evaluate(time * speed)
         lens = pose["lens_scale"] if has_lens else DEFAULT_LENS
         frames.append(Frame(index, time, (pose["x"], pose["y"], pose["z"]),
                             (pose["pitch"], pose["yaw"], pose["roll"]),
@@ -97,7 +104,7 @@ def sample_camera(project: Project, fps: float) -> Take:
     if not has_lens:
         warnings.append("No captured lens, assuming a standard 90-degree lens.")
 
-    return Take(frames, len(frames), warnings)
+    return Take(frames, video_frames or len(frames), warnings)
 
 
 def sample_camera_data(path: str | Path, fps: float) -> Take:
@@ -129,11 +136,12 @@ def sample_camera_data(path: str | Path, fps: float) -> Take:
     return Take(frames, video_frames, [])
 
 
-def load_take(project: Project, fps: float, camera_data: str | Path | None = None) -> Take:
+def load_take(project: Project, fps: float, camera_data: str | Path | None = None,
+              speed: float = 1.0, video_frames: int | None = None) -> Take:
     """Saved camera data when available; otherwise the shot's keyframes."""
     if camera_data is not None:
         return sample_camera_data(camera_data, fps)
-    return sample_camera(project, fps)
+    return sample_camera(project, fps, speed, video_frames)
 
 
 # After Effects (.jsx)
@@ -193,13 +201,14 @@ def ae_rotations(frames: list[Frame]) -> list[tuple[float, float, float]]:
 
 
 def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = None,
-              width: int | None = None, height: int | None = None) -> tuple[str, list[str]]:
+              width: int | None = None, height: int | None = None,
+              speed: float = 1.0, video_frames: int | None = None) -> tuple[str, list[str]]:
     """Return the JSX source and accuracy warnings for a shot.
 
     With the native camera available, every frame is sampled; otherwise the
     path is sampled from its keyframes.
     """
-    take = load_take(project, fps, camera_data)
+    take = load_take(project, fps, camera_data, speed, video_frames)
     frames = take.frames
     default_width, default_height = comp_size(project.standard_aspect)
     width, height = width or default_width, height or default_height
@@ -337,9 +346,10 @@ def usd_samples(frames: list[Frame], values) -> str:
 
 
 def build_usda(project: Project, fps: float, *, camera_data: str | Path | None = None,
-               width: int | None = None, height: int | None = None) -> tuple[str, list[str]]:
+               width: int | None = None, height: int | None = None,
+               speed: float = 1.0, video_frames: int | None = None) -> tuple[str, list[str]]:
     """Return the USD stage and accuracy warnings for a shot."""
-    take = load_take(project, fps, camera_data)
+    take = load_take(project, fps, camera_data, speed, video_frames)
     frames = take.frames
     default_width, default_height = comp_size(project.standard_aspect)
     width, height = width or default_width, height or default_height
