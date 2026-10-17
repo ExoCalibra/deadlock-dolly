@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from dolly.export_audit import audit_take, main
+from test_camera_bundle import bundle, partial_record, record
 
 
 def sidecar(folder: Path, video: str, frames: int) -> None:
@@ -94,6 +95,46 @@ class ExportAuditTests(unittest.TestCase):
             self.assertEqual(main([str(self.take)]), 0)
             sidecar(self.take, "paired.mp4", 0)
             self.assertEqual(main([str(self.take)]), 1)
+
+    def write_camera_bundle(self, folder: Path, frames: int, complete: bool = True) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
+        payload = bundle([record(index) for index in range(frames)], complete=complete)
+        (folder / "camera.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_camera_bundle_passes_when_consistent(self):
+        depth_manifest(self.take / "depth", 2)
+        self.write_camera_bundle(self.take / "depth", 2)
+        result = audit_take(self.take)
+        self.assertTrue(result["ok"], result["findings"])
+        self.assertEqual(result["takes"]["depth"]["camera_frames"], 2)
+
+    def test_camera_bundle_frame_mismatch_is_flagged(self):
+        depth_manifest(self.take / "depth", 2)
+        self.write_camera_bundle(self.take / "depth", 1)
+        result = audit_take(self.take)
+        self.assertTrue(any("camera bundle" in finding and "frame count differs" in finding
+                            for finding in result["findings"]), result["findings"])
+
+    def test_camera_bundle_malformed_is_flagged(self):
+        depth_manifest(self.take / "depth", 1)
+        (self.take / "depth" / "camera.json").write_text("{", encoding="utf-8")
+        result = audit_take(self.take)
+        self.assertTrue(any("camera bundle is unreadable" in finding
+                            for finding in result["findings"]), result["findings"])
+
+    def test_camera_bundle_incomplete_for_completed_take_is_flagged(self):
+        depth_manifest(self.take / "depth", 1)
+        payload = bundle([partial_record(0)], complete=False, partial_reason="missing-view")
+        (self.take / "depth" / "camera.json").write_text(json.dumps(payload), encoding="utf-8")
+        result = audit_take(self.take)
+        self.assertTrue(any("camera bundle" in finding and "not complete" in finding
+                            for finding in result["findings"]), result["findings"])
+
+    def test_absent_camera_bundle_is_not_a_finding(self):
+        depth_manifest(self.take / "depth", 2)
+        result = audit_take(self.take)
+        self.assertTrue(result["ok"], result["findings"])
+        self.assertFalse(any("camera bundle" in finding for finding in result["findings"]))
 
 
 if __name__ == "__main__":

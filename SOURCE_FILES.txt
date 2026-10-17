@@ -748,3 +748,6 @@ dolly/curve_preview.py
 dolly/visualization_preview_wire.py
 tests/test_visualization_preview.py
 tests/test_curve_preview.py
+docs/CAMERA_BUNDLE.md
+dolly/camera_bundle.py
+tests/test_camera_bundle.py
