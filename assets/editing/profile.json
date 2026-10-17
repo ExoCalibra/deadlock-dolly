@@ -1,11 +1,11 @@
 {
   "format": 1,
-  "description": "Build6785 reviewed offline. Retained editing baseline: complete camera/startup/observer consumers and named schema, relevant HUD CSS, hero identity/model/selectability and portraits verified. Engine/tier0/scene/renderer/audio/particle/schema modules are identical to6782. Local mod-manager settings are excluded. Journaled exact restoration remains; live acceptance is separate.",
-  "gameinfo_sha256": "1037523d910f8ff277538175fbbd09fae73346e3e511989886ad6ce13a677424",
+  "description": "Build 6793 reviewed offline. Stock editing baseline adopted from the 6793 gameinfo with the third-party mod-manager SearchPaths block replaced by the stock shape (optional language glob, citadel and core) and the SwapChainSampleableDepth stock option excluded; Dolly preserves the user's installed addon mounts separately and journaled gameinfo swapping remains. Live acceptance is recorded separately.",
+  "gameinfo_sha256": "e6518881d40cd7dd0af9a48a7aa1976574b5062d2d551807cf7fdd940cc7bade",
   "modules": {
-    "citadel/bin/win64/client.dll": "fadaf78301af6d47d286de6199d1fd0aba7053f6ab597afa3de55369f72424c6",
-    "bin/win64/engine2.dll": "34901dc81a2135bb5a7932b47278b2b21550d01513924a3072b244a89bf74110",
-    "bin/win64/tier0.dll": "5c9fc2b512afeb3b523c3e2093102300e28119035b32b6a12f12bdab38a3f17d"
+    "citadel/bin/win64/client.dll": "d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460",
+    "bin/win64/engine2.dll": "44bb357a1baf4765043042de3234112e18ea0db7e0b637f18385bb21f8338707",
+    "bin/win64/tier0.dll": "ec99a83124781f051cfdc74f536a6462d92cb1fb5d3b7053fe7d1427fa01d45b"
   },
-  "unlocker_server_sha256": "d81b26bb1301866db23aed2866bfb2ae57acfaad8932e964b0b33d0bec562b15"
+  "unlocker_server_sha256": "8c67dc79f082a45a69c5eac99bd4cfd9e965d74154f3ce0bdf30a224158b4293"
 }
