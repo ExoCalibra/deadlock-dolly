@@ -4,8 +4,14 @@ Offline foundation for the geometric-normals deliverable (SourceMVM roadmap,
 Phase 4). Inputs are the depth master's per-pixel positive camera-axis
 distances (as recorded for a paired take) and the matching camera bundle
 record; the output is one unit normal per pixel plus validity and quality
-masks. This module performs no file I/O — the capture experiment these
-fixtures authorize will supply the arrays.
+masks. This module performs no file I/O; ``dolly/depth_exr.py`` reads the
+take's single-channel float EXR frames and the capture experiment supplies the
+arrays.
+
+Prefer the take's float EXR sequence as the input. The grayscale depth.mov is
+delivery data quantized through limited-range 10-bit luma: one code step is
+about 75 units at the 8192-unit scale (measured on a real take), which would
+dominate normal detail; the mov is only suitable for previews.
 
 Conventions (matrix conventions live in ``docs/CAMERA_BUNDLE.md``):
 

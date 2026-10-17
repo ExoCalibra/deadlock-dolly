@@ -753,3 +753,6 @@ dolly/camera_bundle.py
 tests/test_camera_bundle.py
 dolly/depth_normals.py
 tests/test_depth_normals.py
+dolly/depth_exr.py
+tests/test_depth_exr.py
+tests/fixtures/depth-frame.exr

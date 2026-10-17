@@ -133,7 +133,9 @@ SourceMVM roadmap's synthetic fixtures (plane, slanted plane, sphere, crease,
 silhouette, far/invalid depth, known camera rotation) live in
 `tests/test_depth_normals.py`. File plumbing and any native capture pass are
 deliberately not part of this foundation; the depth master already carries the
-required per-pixel distances.
+required per-pixel distances. `dolly/depth_exr.py` reads the sequence's
+single-channel float EXR frames directly — FFmpeg cannot decode that shape —
+and is checked against a fixture written by the native producer.
 
 The paired depth master is captured at the verified scene target's own size.
 Upscaling or resolution scaling renders the scene below the window size, so the
