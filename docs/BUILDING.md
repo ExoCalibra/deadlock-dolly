@@ -64,8 +64,8 @@ actual packaged-editor startup fails. Inspect `build/checks/` after a failure.
 
 Successful outputs are under `dist/`:
 
-- `Deadlock_Dolly_0.6.52-alpha_Windows_x64.zip`
-- `Deadlock_Dolly_0.6.52-alpha_Source.zip`
+- `Deadlock_Dolly_0.6.54-alpha_Windows_x64.zip`
+- `Deadlock_Dolly_0.6.54-alpha_Source.zip`
 - `SHA256SUMS.txt`
 
 The portable ZIP contains a `DeadlockDolly` folder with `Dolly.exe`, `_internal`,

@@ -24,7 +24,7 @@
 Capture the free camera, shape a shot and play it back with animated framing and
 camera variables.
 
-**Current source: 0.6.52-alpha.** The portable Windows build opens through
+**Current source: 0.6.54-alpha.** The portable Windows build opens through
 `Dolly.exe`. Python and Tcl/Tk are bundled; no separate installation is needed.
 
 **THIS MOD INJECTS CODE INTO DEADLOCK — USE AT YOUR OWN RISK.**
@@ -374,6 +374,8 @@ separate terms in [assets/README.md](assets/README.md).
 Recent releases and the complete history live in the [changelog](docs/CHANGELOG.md)
 and the per-version [release notes](docs/).
 
+- **[0.6.54-alpha](docs/RELEASE_NOTES_0.6.54-alpha.md)** — startup that waits out a slow shader rebuild, per-frame camera files for paired depth takes, and a float EXR choice that can't be silently dropped.
+- **[0.6.53-alpha](docs/RELEASE_NOTES_0.6.53-alpha.md)** — Deadlock build 6793 support, authored arrival/departure handles with live drag previews, and quieter replay pauses, with Follow held back on that build until its live re-check.
 - **[0.6.52-alpha](docs/RELEASE_NOTES_0.6.52-alpha.md)** — matte UI polish, shared curve editing, a dedicated Controls page, fitted bottom timeline and Dolly-branded loading screen, building on @tbhtho's UI rework.
 - **0.6.51-alpha** — explicit update approval and published release highlights inside the desktop app.
 - **0.6.50-alpha** — visible Finish recording controls and safe camera editing while a take is open.

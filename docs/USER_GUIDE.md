@@ -1,9 +1,10 @@
 # Deadlock Dolly — user guide
 
 Dolly connects its desktop editor and in-game panel to the same camera project.
-Version [0.6.52-alpha](RELEASE_NOTES_0.6.52-alpha.md) brings matte UI polish,
-shared Position / Rotation / Framing curves, a dedicated desktop Controls page
-and a timeline that fits its controls near the bottom of the game screen.
+Version [0.6.54-alpha](RELEASE_NOTES_0.6.54-alpha.md) keeps Dolly's startup
+verifying while Deadlock is still compiling shaders after a game update, adds a
+per-frame camera file to every paired depth take, and prevents the float EXR
+choice from being accepted and then dropped.
 The [in-game editor guide](UI_REWORK.md) covers curve editing, player selection
 and saved layouts, building on the UI rework contributed by
 [@tbhtho](https://github.com/tbhtho).
@@ -534,6 +535,14 @@ the shot again for each one. The passes land in subfolders of the take, and you
 do not need to press anything between takes. Press **Finish recording** only to
 end the color take early; the queued passes still follow. **Discard recording**
 drops the current take instead.
+
+A paired depth take also writes **camera.json** beside its frames: the exact
+per-frame camera the take was rendered with, ready for a compositor or a 3D
+scene. The stored conventions are documented in
+[camera bundles](CAMERA_BUNDLE.md), and the take's audit report checks the camera
+file against the take (run `python -m dolly.export_audit <take folder>` for the
+same check on its own). The float **EXR sequence** option is only selectable once
+**Depth master** is ticked, in both the desktop and the in-game panel.
 
 **Frozen preview** is off by default. It moves along shot seconds through the
 currently paused scene rather than resuming or seeking to the shot's start.
