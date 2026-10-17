@@ -349,6 +349,9 @@ class DollyApp:
         self.video_fixed_step = tk.BooleanVar(value=False)
         self.video_depth = tk.BooleanVar(value=False)
         self.video_depth_exr = tk.BooleanVar(value=False)
+        # The EXR sequence requires the depth master; follow the variable so
+        # the gate also covers in-game depth changes (editor events).
+        self.video_depth.trace_add("write", self._sync_depth_controls)
         self.video_layer_world = tk.BooleanVar(value=False)
         self.video_layer_players = tk.BooleanVar(value=False)
         self.video_layer_effects = tk.BooleanVar(value=False)
@@ -685,6 +688,20 @@ class DollyApp:
         if self.video_depth.get():
             self.video_fixed_step.set(True)
         else:
+            self.video_depth_exr.set(False)
+
+    def _sync_depth_controls(self, *_args):
+        """Gate the EXR sequence control on the depth master in both UIs.
+
+        A depth change can come from this window or from the in-game panel, so
+        the gate follows the variable instead of one control's click. While the
+        depth master is off the EXR control is greyed out (the in-game panel
+        greys it the same way), and an EXR tick never survives without depth.
+        """
+        checkbox = getattr(self, "video_depth_exr_checkbox", None)
+        if checkbox is not None:
+            checkbox.configure(state="normal" if self.video_depth.get() else "disabled")
+        if not self.video_depth.get() and self.video_depth_exr.get():
             self.video_depth_exr.set(False)
 
     def _layer_toggled(self):
