@@ -865,9 +865,9 @@ class VideoGuiTests(unittest.TestCase):
         # Never fall back to the placeholder keys, which would export a camera stuck at 0,0,0.
         self.assertEqual(sorted(p.name for p in Path(self.folder.name).glob("*_camera.*")), [])
         self.app._log.assert_any_call(
-            "After Effects camera was not saved: this Player POV recording saved no camera data")
+            "After Effects camera was not saved: Player POV recording saved no camera data")
         self.app._log.assert_any_call(
-            "USD camera was not saved: this Player POV recording saved no camera data")
+            "USD camera was not saved: Player POV recording saved no camera data")
 
     def test_ae_camera_prefers_camera_data(self):
         self.app.project = self.two_camera_project()

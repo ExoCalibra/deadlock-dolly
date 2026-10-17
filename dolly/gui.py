@@ -596,7 +596,7 @@ class DollyApp:
         pov = self.video_source.get() == "Player POV"
         single_attach = len(self.project.keyframes) == 1 and self.project.keyframes[0].source == "attach"
         if pov or single_attach:
-            self.video_pov_controls.pack(fill="x")
+            self.video_pov_controls.pack(fill="x", before=self.video_camera_options)
         else:
             self.video_pov_controls.pack_forget()
         self.video_start_button.configure(text="Record POV" if pov else "Record video")
@@ -3765,7 +3765,7 @@ class DollyApp:
         if hasattr(self, "video_pov_controls"):
             single_attach = len(self.project.keyframes) == 1 and self.project.keyframes[0].source == "attach"
             if self.video_source.get() == "Player POV" or single_attach:
-                self.video_pov_controls.pack(fill="x")
+                self.video_pov_controls.pack(fill="x", before=self.video_camera_options)
             else:
                 self.video_pov_controls.pack_forget()
         if hasattr(self, "video_source") and self.video_source.get() == "Player POV":

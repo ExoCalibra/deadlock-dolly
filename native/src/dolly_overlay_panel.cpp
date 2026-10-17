@@ -1758,20 +1758,6 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                     if (ImGui::Combo("##export-source", &source, "Camera path / Bone camera\0Player POV\0"))
                         commit(12, double(source), EditorAction::SetVideoSource);
                     const bool pov = source != 0;
-                    if (!pov) {
-                        bool ae_camera = shown(11, state.video_ae_camera ? 1.0 : 0.0) != 0.0;
-                        if (ImGui::Checkbox("Export After Effects camera (.jsx)", &ae_camera))
-                            commit(11, ae_camera ? 1.0 : 0.0, EditorAction::SetVideoAeCamera);
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip(
-                                "Save the shot's camera as an After Effects script beside the finished video.");
-                        bool usd_camera = shown(14, state.video_usd_camera ? 1.0 : 0.0) != 0.0;
-                        if (ImGui::Checkbox("Export USD camera (.usda)", &usd_camera))
-                            commit(14, usd_camera ? 1.0 : 0.0, EditorAction::SetVideoUsdCamera);
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip(
-                                "Save the shot's camera as a USD layer beside the finished video, for Blender, Davinci Resolve and other 3D apps.");
-                    }
                     const bool single_attach = state.camera_count == 1 && state.attach_selected;
                     if (pov || single_attach) {
                         const double duration = shown(13, state.pov_duration);
@@ -1796,6 +1782,19 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                             ImGui::TextWrapped(
                                 "Select a hero with Game Follow or F9, then pause at the start. F8: return here. Record POV hides the HUD and stops after this segment.");
                     }
+                    // Below the replay duration: camera path and Player POV takes both record their camera.
+                    bool ae_camera = shown(11, state.video_ae_camera ? 1.0 : 0.0) != 0.0;
+                    if (ImGui::Checkbox("Export After Effects camera (.jsx)", &ae_camera))
+                        commit(11, ae_camera ? 1.0 : 0.0, EditorAction::SetVideoAeCamera);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Save the recorded camera as an After Effects script beside the finished video.");
+                    bool usd_camera = shown(14, state.video_usd_camera ? 1.0 : 0.0) != 0.0;
+                    if (ImGui::Checkbox("Export USD camera (.usda)", &usd_camera))
+                        commit(14, usd_camera ? 1.0 : 0.0, EditorAction::SetVideoUsdCamera);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Save the recorded camera as a USD layer beside the finished video, for Blender, Davinci Resolve and other 3D apps.");
                     ImGui::EndDisabled();
                     if (!pov && !state.camera_count) {
                         ImGui::TextWrapped("Capture at least two camera views to record a shot.");

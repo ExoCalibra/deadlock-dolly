@@ -171,6 +171,7 @@ def build_export(app):
     app.video_path_entry.bind("<FocusOut>", app._remember_export_folder)
     app.video_path_entry.bind("<Return>", app._remember_export_folder)
     app.video_pov_controls = view.video_pov_controls
+    app.video_camera_options = view.video_camera_options
     app.video_pov_duration_combo = view.video_pov_duration_combo
     app.video_reconstructed_audio_check = view.video_reconstructed_audio_check
     app.video_ae_camera_check = view.video_ae_camera_check
