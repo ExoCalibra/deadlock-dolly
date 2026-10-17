@@ -68,9 +68,21 @@ class SharedWidgetTests(unittest.TestCase):
         first_outline = marker._outline
         first_path = marker.coords(first_outline)
         # Native hit testing and the actual ttk mouse binding remain in charge.
+        # winfo_containing answers with the desktop's current stacking, so put the
+        # test window at a known on-screen position and above other applications
+        # first. Without that, an unrelated window covering this point reads as
+        # "no widget here" and this asserts a stacking failure that never happened.
         button = buttons[1]
-        self.assertIs(self.root.winfo_containing(button.winfo_rootx()+button.winfo_width()//2,
-                                               button.winfo_rooty()+button.winfo_height()//2), button)
+        center = (button.winfo_rootx()+button.winfo_width()//2,
+                  button.winfo_rooty()+button.winfo_height()//2)
+        self.root.geometry('+40+40')
+        self.root.lift()
+        self.root.attributes('-topmost', True)
+        self.root.update()
+        try:
+            self.assertIs(self.root.winfo_containing(*center), button)
+        finally:
+            self.root.attributes('-topmost', False)
         clock = [10.0]
         with patch('dolly.ui.widgets.time.monotonic', side_effect=lambda: clock[0]), \
              patch.object(ttk.Style, 'configure', side_effect=AssertionError('Animation changes global styles')), \
