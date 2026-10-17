@@ -183,6 +183,36 @@ class ReprojectionTests(unittest.TestCase):
         self.assertIsNone(project_point(loaded, item, (0, 0, 7)))
         self.assertIsNone(project_point(loaded, item, (0, 0, 0)))
 
+    def test_moved_camera_records_track_the_same_point(self):
+        # The camera shifts along +X between records; the same world point must
+        # move left on screen exactly as the translation predicts.
+        records = []
+        for index, shift in enumerate((0.0, 1.0, 3.0)):
+            data = record(index)
+            data["view"] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -shift, 0, 0, 1]
+            data["position"] = [shift, 0, 0]
+            records.append(data)
+        loaded = parse_bundle(bundle(records))
+        self.assertEqual(validate_bundle(loaded), [])
+        for index, shift in enumerate((0.0, 1.0, 3.0)):
+            projected = project_point(loaded, loaded.records[index], (0, 0, -7))
+            self.assertAlmostEqual(projected.x, (1.0 - shift / 7.0) * 50.0, places=9)
+            self.assertAlmostEqual(projected.y, 25.0, places=9)
+            self.assertAlmostEqual(projected.distance, 7.0, places=9)
+
+    def test_collinear_world_points_stay_collinear_on_screen(self):
+        # A projective map sends lines to lines; an axis swap or sign error
+        # breaks this, so the plane fixture catches broken pixel mappings.
+        loaded = parse_bundle(bundle([record(0)]))
+        item = loaded.records[0]
+        line = [(-3.0, 0.0, -10.0), (0.5, 2.0, -10.0), (4.0, 4.0, -10.0)]
+        pixels = [project_point(loaded, item, point) for point in line]
+        for projected in pixels:
+            self.assertIsNotNone(projected)
+        (x0, y0), (x1, y1), (x2, y2) = ((projected.x, projected.y) for projected in pixels)
+        twice_area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+        self.assertAlmostEqual(twice_area, 0.0, places=6)
+
     def test_forward_and_inverse_agree_for_distances(self):
         loaded = parse_bundle(bundle([record(0)]))
         item = loaded.records[0]
