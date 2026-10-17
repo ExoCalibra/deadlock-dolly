@@ -10,8 +10,8 @@ arrays.
 
 Prefer the take's float EXR sequence as the input. The grayscale depth.mov is
 delivery data quantized through limited-range 10-bit luma: one code step is
-about 75 units at the 8192-unit scale (measured on a real take), which would
-dominate normal detail; the mov is only suitable for previews.
+about 9.4 camera-axis units at the 8192-unit scale (measured on a real take),
+which would dominate normal detail; the mov is only suitable for previews.
 
 Conventions (matrix conventions live in ``docs/CAMERA_BUNDLE.md``):
 
