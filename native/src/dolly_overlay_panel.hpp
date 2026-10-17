@@ -33,10 +33,11 @@ public:
         panel_font = heading_font = title_font = nullptr;
         panel_scale = 1.0f;
     }
-    bool guides_visible(const EditorSnapshot& state) noexcept;
+    bool guides_visible(const EditorSnapshot& state, bool desktop_preview = false) noexcept;
+    bool preview_guides_visible(const EditorSnapshot&, const VisualizationPreview&) noexcept;
     bool framing_grid_visible(const EditorSnapshot& state) noexcept;
     void draw_path_guides(const EditorSnapshot& state,
-                          const std::shared_ptr<const VisualizationPath>& path);
+                          const std::shared_ptr<const VisualizationPath>& path, bool desktop_preview = false);
     void draw_framing_grid(const EditorSnapshot& state);
     bool shader_notice_visible(const EditorSnapshot& state) const noexcept;
     void draw_shader_notice();
@@ -72,7 +73,7 @@ public:
     unsigned curve_lane_count() const noexcept { return curve_lane_count_; }
     double curve_view_start() const noexcept { return curve_view_start_; }
     double curve_view_end() const noexcept { return curve_view_end_; }
-    bool curve_editing() const noexcept { return position_graph_dragging_ || position_value_editing_; }
+    bool curve_editing() const noexcept { return position_graph_dragging_ || position_value_editing_ || tangent_dragging_ || tangent_value_editing_; }
     std::uint32_t curve_before_revision() const noexcept { return curve_before_ ? curve_before_->project_revision() : 0; }
     std::uint64_t curve_before_session() const noexcept { return curve_before_ ? curve_before_->session_id() : 0; }
     ImVec4 curve_plot_rect(unsigned channel) const noexcept { return channel < 7 ? curve_plot_rects_[channel] : ImVec4(); }
@@ -95,6 +96,9 @@ public:
         return curve_before_ && channel < 7 && index < curve_before_->graph_keys().size()
             ? curve_before_->graph_keys()[index].authored_pose[channel] : 0;
     }
+    ImVec2 curve_tangent_point(unsigned side) const noexcept { return side<2 ? tangent_points_[side] : ImVec2(); }
+    ImVec4 curve_tangent_mode_rect() const noexcept { return tangent_mode_rect_; }
+    ImVec4 curve_tangent_value_rect(unsigned side) const noexcept { return side<2 ? tangent_value_rects_[side] : ImVec4(); }
 
 private:
     bool layout_editing_ = false, reduced_motion_ = false, classic_layout_ = false, layout_custom_ = false;
@@ -195,10 +199,24 @@ private:
     float position_graph_mouse_y_ = 0, position_graph_units_per_pixel_ = 1;
     ImVec2 position_graph_selected_point_{};
     bool curve_view_ = false, curve_compare_ = false, curve_show_before_ = false;
+    std::uint32_t curve_preview_token_ = 0, curve_preview_index_ = 0;
+    CameraPose curve_preview_anchor_{};
+    double curve_preview_sent_at_ = -1e30;
+    void start_curve_preview(const VisualizationPath&,unsigned index,unsigned channel);
+    void clear_curve_preview() noexcept;
     bool curve_fit_pending_ = true, curve_resize_pending_ = false, curve_panning_ = false;
     int curve_group_ = 0, curve_axes_[3]{0, 4, 6};
     unsigned curve_lanes_ = 3, curve_lane_count_ = 1;
     std::uint64_t curve_session_ = 0, curve_edit_session_ = 0;
+    bool tangent_dragging_ = false, tangent_value_editing_ = false;
+    unsigned tangent_side_ = 0, tangent_axis_ = 0, tangent_mode_ = 0;
+    std::uint32_t tangent_revision_ = 0, tangent_index_ = 0;
+    std::uint64_t tangent_session_ = 0;
+    double tangent_time_ = 0, tangent_draft_[2]{}, tangent_original_[2]{};
+    double tangent_dt_ = 0, tangent_units_per_pixel_ = 0;
+    float tangent_mouse_y_ = 0;
+    ImVec2 tangent_points_[2]{};
+    ImVec4 tangent_mode_rect_{}, tangent_value_rects_[2]{};
     double curve_view_start_ = 0, curve_view_end_ = 1, curve_duration_seen_ = -1, curve_start_seen_ = 0;
     std::size_t curve_key_count_seen_ = 0;
     double curve_pan_mouse_ = 0, curve_pan_start_ = 0, curve_pan_end_ = 1;

@@ -22,11 +22,9 @@ curves; their final timestamp extends the overall native shot duration.
 
 from __future__ import annotations
 
-import math
 import struct
 
-from .path import (Project, _monotone_tangents, _position_tangents, _spline_tangents,
-                   _unwrap, channel_value)
+from .path import Project
 
 
 CHANNELS = ("x", "y", "z", "pitch", "yaw", "roll", "aspect_ratio")
@@ -58,31 +56,23 @@ The callback consumes these coefficients rather than a sampled pose stream.
     if len(keys) > MAX_CAMERA_KEYS:
         raise ValueError(f"Native camera paths support at most {MAX_CAMERA_KEYS:,} camera keys")
     times = [float(key.time) for key in keys]
-    channels: list[tuple[list[float], int, int, list[float]]] = []
+    channels: list[tuple[tuple[float, ...], int, int, tuple[float, ...], tuple[float, ...]]] = []
     names = CHANNELS + (("lens_scale",) if any(k.lens_scale is not None for k in keys) else ())
     for name in names:
-        values = [float(channel_value(key, name)) for key in keys]
-        if name in ("yaw", "roll") and project.rotation_mode == "shortest":
-            values = _unwrap(values)
-        interpolation = project.lens_interpolation if name in ("aspect_ratio", "lens_scale") else project.interpolation
+        samples = project._camera_channel_samples(name)
+        values, interpolation = samples.values, samples.interpolation
         # The native clamp bit follows the evaluator: the spline mode is
         # intentionally unclamped for every channel.
-        flags = int(name not in ("x", "y", "z") and interpolation != "spline")
+        requested_interpolation = (project.lens_interpolation
+                                   if name in ("aspect_ratio", "lens_scale") else project.interpolation)
+        flags = int(name not in ("x", "y", "z") and requested_interpolation != "spline")
         kind = 0 if interpolation == "step" else 1
-        tangents = [0.0] * len(keys)
-        if len(keys) > 2 and interpolation in ("smooth", "spline"):
-            try:
-                if interpolation == "spline":
-                    candidate = _spline_tangents(times, values)
-                else:
-                    candidate = (_monotone_tangents if flags else _position_tangents)(times, values)
-                if all(math.isfinite(value) for value in candidate):
-                    tangents = candidate
-                    kind = 2
-            except ArithmeticError:
-                # Exactly the same full-channel fallback as Project.evaluate.
-                pass
-        channels.append((values, kind, flags, tangents))
+        incoming = outgoing = (0.0,) * len(keys)
+        if samples.tangents is not None:
+            incoming = samples.incoming_tangents or samples.tangents
+            outgoing = samples.outgoing_tangents or samples.tangents
+            kind = 2
+        channels.append((values, kind, flags, incoming, outgoing))
     result = bytearray((LENS_HEADER if len(names) == 8 else HEADER).pack(
         MAGIC, 2 if len(names) == 8 else VERSION, len(keys) - 1, len(names), 0,
         project.duration, times[0], times[-1],
@@ -91,9 +81,9 @@ The callback consumes these coefficients rather than a sampled pose stream.
     ))
     for index in range(len(keys) - 1):
         result.extend(SEGMENT_TIMES.pack(times[index], times[index + 1]))
-        for values, kind, flags, tangents in channels:
+        for values, kind, flags, incoming, outgoing in channels:
             result.extend(CHANNEL_RECORD.pack(
                 kind, flags, values[index], values[index + 1],
-                tangents[index], tangents[index + 1],
+                outgoing[index], incoming[index + 1],
             ))
     return bytes(result)

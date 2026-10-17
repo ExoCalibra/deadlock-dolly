@@ -175,6 +175,43 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertEqual(bytes(self.memory[nb.PAYLOAD_OFFSET:nb.PAYLOAD_OFFSET + len(payload)]), payload)
         self.assertEqual(self.project.to_dict(), before)
 
+    def test_reprepare_replaces_same_size_playback_payload_after_xyz_edit(self):
+        from dolly.native_effects import SHOT_HEADER
+        from dolly.native_path import HEADER as PATH_HEADER, SEGMENT_TIMES, CHANNEL_RECORD
+
+        self.prepare()
+        first_header = self.header()
+        first = bytes(self.memory[nb.PAYLOAD_OFFSET:nb.PAYLOAD_OFFSET+first_header[9]])
+        self.prepare()  # Same shape and values still prepare a new command.
+        same_header = self.header()
+        self.assertGreater(same_header[2], first_header[2])
+        self.assertEqual(bytes(self.memory[nb.PAYLOAD_OFFSET:nb.PAYLOAD_OFFSET+same_header[9]]), first)
+        self.project.keyframes[1].x = 240
+        self.prepare()
+        changed_header = self.header()
+        changed = bytes(self.memory[nb.PAYLOAD_OFFSET:nb.PAYLOAD_OFFSET+changed_header[9]])
+        self.assertGreater(changed_header[2], same_header[2])
+        self.assertGreater(changed_header[3], same_header[3])
+        self.assertEqual(len(first), len(changed))
+        self.assertNotEqual(first, changed)
+        magic, version, camera_bytes, _effects_bytes, reserved = SHOT_HEADER.unpack_from(changed)
+        self.assertEqual((magic, version, reserved), (b'DLYSHOT2', 1, 0))
+        camera_start = SHOT_HEADER.size
+        path_header = PATH_HEADER.unpack_from(changed, camera_start)
+        self.assertEqual(path_header[:4], (b'DLYPATH\0', 1, 1, 7))
+        offset = camera_start+PATH_HEADER.size+SEGMENT_TIMES.size
+        kind, flags, left, right, depart, arrive = CHANNEL_RECORD.unpack_from(changed, offset)
+        self.assertEqual((kind, flags, left, right, depart, arrive), (1,0,0,240,0,0))
+        # Independent midpoint evaluation of the actual uploaded linear record.
+        self.assertEqual((left+right)/2, 120)
+        first_right = CHANNEL_RECORD.unpack_from(first, offset)[3]
+        self.assertEqual(first_right/2, 50)
+        self.assertEqual(changed[offset+CHANNEL_RECORD.size:camera_start+camera_bytes],
+                         first[offset+CHANNEL_RECORD.size:camera_start+camera_bytes])
+        self.bridge.play()
+        self.assertEqual(self.header()[4], 2)
+        self.assertEqual(bytes(self.memory[nb.PAYLOAD_OFFSET:nb.PAYLOAD_OFFSET+len(changed)]), changed)
+
     def test_prepare_marks_an_opt_in_confetti_shot(self):
         self.project.confetti_enabled = True
         self.project.confetti_spawn_height = 1250

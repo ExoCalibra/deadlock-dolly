@@ -32,6 +32,8 @@
 #include <utility>
 #include <iterator>
 
+namespace dolly { extern video::Status recording_status_stub; }
+
 static ImGuiContext* screenshot_context = nullptr;
 namespace {
 bool available = false;
@@ -52,6 +54,7 @@ struct ObservedAction {
     dolly::CameraPose pose{};
 };
 std::vector<ObservedAction> observed_actions;
+std::vector<ObservedAction> observed_previews;
 void require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -160,8 +163,30 @@ std::vector<unsigned char> curve_packet(unsigned count = 10, unsigned revision =
                                         double yaw_offset = 0, bool unwrapped = false, bool position_only_change = false,
                                         double key_step = 3, double key_start = 0,
                                         const std::vector<dolly::CameraPose>* explicit_keys = nullptr,
-                                        const std::vector<dolly::CameraPose>* authored_keys = nullptr) {
+                                        const std::vector<dolly::CameraPose>* authored_keys = nullptr,
+                                        bool tangents = false, unsigned tangent_mode = 0, double tangent_value = 5) {
     require(count >= 1 && key_step>0 && key_start>=0, "Curve fixture needs ordered camera times");
+    // Screenshot-only input can come from the real Python compiler so the
+    // displayed Hermite curve and its published handle slopes share one source.
+    // Ordinary regression fixtures never read external packets.
+    if(std::getenv("DOLLY_UI_TEST_LAYOUT")) if(const auto* file=std::getenv("DOLLY_UI_TEST_CAPTURE_PACKET")) {
+        std::ifstream input(file,std::ios::binary|std::ios::ate);
+        require(input.good(),"Cannot open compiled screenshot viewer packet");
+        const auto size=static_cast<std::streamoff>(input.tellg());
+        require(size>=std::streamoff(dolly::kVisualizationHeaderBytes) &&
+                size<=std::streamoff(dolly::kVisualizationMappingBytes),"Compiled screenshot packet exceeds viewer bounds");
+        std::vector<unsigned char> packet(static_cast<std::size_t>(size));input.seekg(0);
+        input.read(reinterpret_cast<char*>(packet.data()),size);
+        require(input.good(),"Cannot read complete compiled screenshot viewer packet");
+        dolly::VisualizationPath path;std::string error;
+        require(path.load(packet.data(),packet.size(),error),"Compiled screenshot viewer packet failed normal parser");
+        require(path.enabled() && path.camera_count()==count && path.selected_camera()==selected &&
+                path.project_revision()==revision && path.session_id()==session &&
+                path.graph_keys().front().time==key_start &&
+                path.graph_keys().back().time==key_start+(count-1)*key_step,
+                "Compiled screenshot packet differs from the requested scene identity/times");
+        return packet;
+    }
     std::vector<dolly::CameraPose> keys;
     const double other_change=position_only_change ? 0 : change;
     for (unsigned i = 0; i < count; ++i)
@@ -202,7 +227,7 @@ std::vector<unsigned char> curve_packet(unsigned count = 10, unsigned revision =
     }
     std::vector<unsigned char> packet{'D', 'L', 'Y', 'V', 'I', 'S', '0', '1'};
     append_u32(packet, 2); // Complete, even mapping sequence.
-    append_u32(packet, 3);
+    append_u32(packet, tangents ? 4 : 3);
     append_u32(packet, 1);
     append_u32(packet, selected);
     append_u32(packet, count);
@@ -211,8 +236,8 @@ std::vector<unsigned char> curve_packet(unsigned count = 10, unsigned revision =
     append_u32(packet, 8);
     append_u32(packet, revision);
     append_u64(packet, session);
-    append_u32(packet, count * 64);
-    append_u32(packet, unwrapped ? 1 : 0);
+    append_u32(packet, count * (tangents ? 136 : 64));
+    append_u32(packet, (unwrapped ? 1 : 0) | (tangents ? 2 : 0));
     append_u32(packet, 0);
     require(packet.size() == dolly::kVisualizationHeaderBytes, "Curve fixture header size drifted");
     for (unsigned key = 0; key < count; ++key) append_double(packet, key_start+key*key_step);
@@ -220,6 +245,10 @@ std::vector<unsigned char> curve_packet(unsigned count = 10, unsigned revision =
         for (double value : authored_keys ? (*authored_keys)[key] : keys[key]) append_double(packet, value);
         append_u32(packet, key == 1 ? 1 : 0); // One attached key exercises read-only UI.
         append_u32(packet, 0);
+        if(tangents) for(unsigned axis=0;axis<3;++axis) {
+            append_u32(packet,tangent_mode);append_u32(packet,0);
+            append_double(packet,tangent_mode==1 ? 0 : tangent_value);append_double(packet,tangent_mode==1 ? 0 : tangent_value);
+        }
     }
     packet.insert(packet.end(), path.begin(), path.end());
     return packet;
@@ -269,6 +298,9 @@ std::vector<unsigned char> viewer_packet(double first_x = 100) {
 class SyntheticViewer {
     HANDLE mapping = nullptr;
     unsigned char* memory = nullptr;
+    HANDLE preview_mapping=nullptr;
+    unsigned char* preview_memory=nullptr;
+    std::uint32_t preview_sequence=0;
     std::wstring name, viewer_name;
     std::uint32_t sequence = 0;
 
@@ -303,6 +335,8 @@ public:
     ~SyntheticViewer() { close(); }
     void close() noexcept {
         dolly::visualization_worker_tick(name.c_str(), false);
+        if(preview_memory) {UnmapViewOfFile(preview_memory);preview_memory=nullptr;}
+        if(preview_mapping) {CloseHandle(preview_mapping);preview_mapping=nullptr;}
         if (memory) {
             UnmapViewOfFile(memory);
             memory = nullptr;
@@ -323,6 +357,21 @@ public:
         MemoryBarrier();
         InterlockedExchange(reinterpret_cast<volatile LONG*>(memory + 8),
                             static_cast<LONG>(sequence));
+    }
+    void publish_preview(const std::vector<unsigned char>& packet) {
+        require(packet.size()>=64 && packet.size()<=dolly::kVisualizationMappingBytes,"Invalid synthetic preview length");
+        if(!preview_memory) {
+            const auto requested=viewer_name+L".preview";
+            preview_mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,
+                DWORD(dolly::kVisualizationMappingBytes),requested.c_str());
+            require(preview_mapping!=nullptr,"Cannot create synthetic preview mapping");
+            preview_memory=static_cast<unsigned char*>(MapViewOfFile(preview_mapping,FILE_MAP_ALL_ACCESS,0,0,dolly::kVisualizationMappingBytes));
+            require(preview_memory!=nullptr,"Cannot map synthetic preview packet");
+        }
+        preview_sequence+=2;
+        InterlockedExchange(reinterpret_cast<volatile LONG*>(preview_memory+8),LONG(preview_sequence-1));
+        std::memcpy(preview_memory,packet.data(),8);std::memcpy(preview_memory+12,packet.data()+12,packet.size()-12);
+        MemoryBarrier();InterlockedExchange(reinterpret_cast<volatile LONG*>(preview_memory+8),LONG(preview_sequence));
     }
     void tick() {
         Sleep(110);
@@ -360,6 +409,75 @@ public:
         require(remaining == nullptr, "Viewer retained its mapping after disconnect");
     }
 };
+
+std::vector<unsigned char> preview_packet(const std::vector<unsigned char>& inner,unsigned source,unsigned token,
+                                         unsigned index,unsigned channel,double time,unsigned revision=7,
+                                         std::uint64_t session=0x12345678abcdef01ULL) {
+    std::vector<unsigned char> packet{'D','L','Y','P','R','V','0','1'};
+    append_u32(packet,2);append_u32(packet,1);append_u32(packet,inner.empty() ? 0 : 1);
+    append_u32(packet,source);append_u32(packet,token);append_u32(packet,revision);append_u64(packet,session);
+    append_u32(packet,index);append_u32(packet,channel);append_double(packet,time);
+    append_u32(packet,unsigned(inner.size()));append_u32(packet,0);
+    require(packet.size()==64,"Synthetic preview envelope size drifted");
+    packet.insert(packet.end(),inner.begin(),inner.end());return packet;
+}
+
+static void preview_runtime_regressions(SyntheticViewer& viewer) {
+    auto base_bytes=curve_packet(10,7,0x12345678abcdef01ULL,0,false,4,0,false,false,3,0,nullptr,nullptr,true,3);
+    auto draft_bytes=curve_packet(10,7,0x12345678abcdef01ULL,10,false,4,0,false,true,3,0,nullptr,nullptr,true,3);
+    viewer.publish(base_bytes);viewer.tick();const auto base=dolly::visualization_snapshot();
+    auto packet=preview_packet(draft_bytes,1,6001,4,0,12);
+    viewer.publish_preview(packet);viewer.tick();auto preview=dolly::visualization_preview_snapshot();
+    require(preview && preview->path->points().front()[0]==base->points().front()[0]+10 &&
+            dolly::visualization_snapshot()==base,"Render-only mapping replaced or failed to preview the committed path");
+    dolly::VisualizationView view;view.pose={0,0,0,0,0,0,16./9};view.horizontal_fov=90;view.width=1920;view.height=1080;
+    dolly::VisualizationGeometry before,after;
+    require(dolly::project_visualization(*base,view,before) && dolly::project_visualization(*preview->path,view,after) &&
+            before.line_count && after.line_count && before.lines[0].a.x!=after.lines[0].a.x,
+            "Preview did not deform the scene projection at a fixed camera viewpoint");
+    dolly::OverlayPanel policy;dolly::EditorSnapshot state{};
+    state.enabled=state.ready=state.paused=state.manual_active=true;state.owner=dolly::EditorOwner::Flight;
+    state.view_width=1920;state.view_height=1080;state.focused=false;
+    require(policy.preview_guides_visible(state,*preview) && policy.guides_visible(state),
+            "Desktop editing cannot retain preview and committed fallback without focus");
+    state.playing=true;require(!policy.preview_guides_visible(state,*preview),"Playback renders a draft preview");state.playing=false;
+    const auto recording=dolly::recording_status_stub.state;
+    dolly::recording_status_stub.state=dolly::video::State::starting;
+    require(!policy.preview_guides_visible(state,*preview),"Recording renders a draft preview");
+    dolly::recording_status_stub.state=recording;
+    // The lease is 750 ms and is compared against GetTickCount64, which advances
+    // in ~15.6 ms system-tick steps. Sleeping only just past the lease made the
+    // quantised difference land on exactly 750 every so often, failing the strict
+    // ">" comparison. Sleep well past one tick so the check measures the lease
+    // rather than the clock's resolution.
+    Sleep(900);
+    require(!dolly::visualization_preview_snapshot(),
+            "Unrefreshed preview survived its lease");
+    require(dolly::visualization_snapshot()==base,
+            "An unrefreshed preview discarded the saved graph");
+    viewer.publish_preview(packet);viewer.tick();require(bool(dolly::visualization_preview_snapshot()),"Fresh heartbeat did not renew preview");
+    auto empty=preview_packet({},0,0,0,0,0,0,0);viewer.publish_preview(empty);viewer.tick();
+    require(!dolly::visualization_preview_snapshot(),"Empty invalid-draft clear left preview visible");
+    viewer.publish_preview(packet);viewer.tick();require(bool(dolly::visualization_preview_snapshot()),"Invalid draft could not recover within its gesture");
+    viewer.publish_preview(preview_packet({},1,6001,4,0,12));viewer.tick();
+    viewer.publish_preview(packet);viewer.tick();
+    require(!dolly::visualization_preview_snapshot(),"A terminal desktop token revived from a late packet");
+    const auto token=dolly::visualization_begin_native_preview(*base,4,0);
+    packet=preview_packet(draft_bytes,2,token,4,0,12);viewer.publish_preview(packet);viewer.tick();
+    require(bool(dolly::visualization_preview_snapshot()),"Current native gesture could not render its draft");
+    dolly::visualization_end_native_preview(token);
+    require(!dolly::visualization_preview_snapshot(),"Native cancellation waited for Python before hiding preview");
+    viewer.publish_preview(packet);viewer.tick();require(!dolly::visualization_preview_snapshot(),"Late native packet revived a cancelled gesture");
+    packet=preview_packet(draft_bytes,1,6002,4,0,12);viewer.publish_preview(packet);viewer.tick();
+    auto invalid=packet;invalid[0]='X';viewer.publish_preview(invalid);viewer.tick();
+    require(!dolly::visualization_preview_snapshot() && dolly::visualization_snapshot()==base &&
+            dolly::visualization_runtime_state()==dolly::VisualizationRuntimeState::Ready,
+            "Invalid optional preview damaged the authoritative viewer boundary");
+    viewer.publish_preview(packet);viewer.tick();
+    viewer.publish(curve_packet(10,8,0x12345678abcdef01ULL,0,false,4,0,false,false,3,0,nullptr,nullptr,true,3));viewer.tick();
+    require(!dolly::visualization_preview_snapshot(),"Changed committed revision retained an old preview");
+    viewer.publish(viewer_packet());viewer.tick();
+}
 
 struct DrawRegions {
     std::size_t panel = 0, guides = 0;
@@ -520,6 +638,10 @@ void check_guide_visibility(IDXGISwapChain* chain, ID3D11Device* device,
             break;
         }
         pixels = draw();
+        if(test.field==4 || test.field==5) {
+            require(pixels.guides>30 && pixels.panel==0,"Desktop focus must retain only paused render-only guides");
+            continue;
+        }
         if (pixels.guides || pixels.panel) {
             char message[128]{};
             std::snprintf(message, sizeof(message), "%s left editing graphics visible",
@@ -782,7 +904,8 @@ bool editor_roster_snapshot(EditorRoster& out) noexcept {
 }
 bool editor_enqueue(EditorAction action, double value, const CameraPose* pose) noexcept {
     try {
-        observed_actions.push_back({action, value, pose ? (*pose)[0] : 0,
+        auto& events=action>=EditorAction::PreviewCameraCurveValue ? observed_previews : observed_actions;
+        events.push_back({action, value, pose ? (*pose)[0] : 0,
                                     pose ? (*pose)[1] : 0, pose ? *pose : CameraPose{}});
     } catch (...) {
         return false;
@@ -3398,6 +3521,139 @@ static void unified_curve_regressions(SyntheticViewer& viewer, float font_scale=
     snapshot=original;viewer.publish(viewer_packet());viewer.tick();
     std::puts("Unified curves: group/channel edits, release-only session payloads, guards/cancel, aligned Compare, stable Before and full-shot selection passed.");
 }
+static void tangent_ui_regressions(SyntheticViewer& viewer,float font_scale) {
+    constexpr std::uint64_t session=0x12345678aabbccddULL;
+    const auto original=snapshot;const auto original_revision=camera_revision_stub;
+    const auto original_recording=dolly::recording_status_stub.state;
+    auto* previous=ImGui::GetCurrentContext();auto* ctx=ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);auto& io=ImGui::GetIO();
+    io.IniFilename=nullptr;io.DisplaySize=ImVec2(1920,1080);io.DeltaTime=1.f/60;
+    io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
+    dolly::OverlayPanel panel;panel.style_panel();panel.initialize_layout();panel.load_panel_fonts(font_scale);
+    ImGui::GetStyle().ScaleAllSizes(font_scale);io.Fonts->Build();
+    snapshot.enabled=snapshot.focused=snapshot.ready=snapshot.paused=true;
+    snapshot.busy=snapshot.playing=snapshot.attach_preview=snapshot.bone_picker=snapshot.object_picker=false;
+    snapshot.owner=dolly::EditorOwner::Panel;snapshot.camera_count=10;snapshot.selected_camera=4;snapshot.duration=27;
+    camera_revision_stub=7;dolly::recording_status_stub.state=dolly::video::State::idle;
+    auto frame=[&]{ImGui::NewFrame();panel.draw_panel(snapshot);panel.draw_lite_campaths(snapshot);
+                  panel.draw_lite_timeline(snapshot);ImGui::Render();};
+    auto settle=[&]{for(int i=0;i<5;++i)frame();};
+    auto publish=[&](unsigned mode=0,unsigned revision=7,std::uint64_t identity=0x12345678aabbccddULL,double value=5) {
+        camera_revision_stub=revision;
+        viewer.publish(curve_packet(10,revision,identity,0,false,snapshot.selected_camera,0,false,false,3,0,nullptr,nullptr,true,mode,value));
+        viewer.tick();settle();
+    };
+    publish();auto* timeline=ImGui::FindWindowByName("##lite-timeline");
+    ctx->NavNextActivateId=timeline->GetID("Curves###lite-curves-mode");settle();
+    auto press_handle=[&](unsigned side) {
+        const auto point=panel.curve_tangent_point(side),key=panel.curve_selected_point(0);
+        require(point.x>0 && std::hypot(point.x-key.x,point.y-key.y)<=56.1f*font_scale &&
+                std::hypot(point.x-key.x,point.y-key.y)>=18.f*font_scale,
+                "XYZ tangent arm is missing or longer than the compact visual bound");
+        io.AddMousePosEvent(point.x,point.y);frame();frame();observed_actions.clear();observed_previews.clear();
+        io.AddMouseButtonEvent(0,true);frame();require(panel.curve_editing(),"Round XYZ tangent tip cannot start a gesture");
+        return point;
+    };
+    auto point=press_handle(1);io.AddMousePosEvent(point.x,point.y-10*font_scale);
+    for(unsigned i=0;i<12;++i)frame();
+    require(observed_actions.empty() && observed_previews.size()>=2 &&
+            observed_previews.back().action==dolly::EditorAction::PreviewCameraPositionTangents &&
+            observed_previews.back().pose[2]>5 && observed_previews.back().pose[6]>0,
+            "A held native handle did not stream guarded stationary preview heartbeats before committing");
+    io.AddMouseButtonEvent(0,false);settle();
+    require(observed_actions.size()==1 && observed_actions[0].action==dolly::EditorAction::SetCameraPositionTangents &&
+            observed_actions[0].value==51 && observed_actions[0].pose[1]==5 && observed_actions[0].pose[2]>5 &&
+            observed_actions[0].pose[0]==7 && observed_actions[0].pose[3]==12 &&
+            observed_actions[0].pose[4]==double(std::uint32_t(session)) &&
+            observed_actions[0].pose[5]==double(std::uint32_t(session>>32)),
+            "Auto XYZ handle did not send one independent atomic pair with complete identity");
+    require(observed_previews.back().action==dolly::EditorAction::ClearCameraCurvePreview,
+            "Native handle release did not terminate its render-only preview");
+    publish(2);point=press_handle(1);io.AddMousePosEvent(point.x,point.y-10*font_scale);frame();frame();
+    io.AddMouseButtonEvent(0,false);settle();
+    require(observed_actions.size()==1 && observed_actions[0].value==50 &&
+            observed_actions[0].pose[1]==observed_actions[0].pose[2] && observed_actions[0].pose[1]>5,
+            "Linked XYZ handle did not retain equal arrival/departure slopes");
+    publish(3);point=press_handle(0);io.AddMousePosEvent(point.x,point.y-10*font_scale);frame();frame();
+    io.AddMouseButtonEvent(0,false);settle();
+    require(observed_actions.size()==1 && observed_actions[0].value==51 &&
+            observed_actions[0].pose[1]<5 && observed_actions[0].pose[2]==5,
+            "Broken arrival handle changed departure or the slope sign");
+    publish(3,7,session,3.1234567890123);
+    const auto precise_field=panel.curve_tangent_value_rect(0);
+    io.AddMousePosEvent((precise_field.x+precise_field.z)*.5f,(precise_field.y+precise_field.w)*.5f);frame();frame();
+    observed_actions.clear();io.AddKeyEvent(ImGuiMod_Ctrl,true);frame();io.AddMouseButtonEvent(0,true);frame();
+    io.AddMouseButtonEvent(0,false);frame();io.AddKeyEvent(ImGuiMod_Ctrl,false);frame();
+    require(ctx->ActiveId && ctx->InputTextState.ID==ctx->ActiveId,"Fractional tangent cannot open precise input");
+    io.AddKeyEvent(ImGuiKey_Enter,true);frame();io.AddKeyEvent(ImGuiKey_Enter,false);settle();
+    require(observed_actions.empty() && !panel.curve_editing(),
+            "Untouched fractional tangent focus/Enter rounded the original or dispatched an Undoable edit");
+    publish();point=press_handle(1);io.AddMousePosEvent(point.x,point.y-8*font_scale);frame();
+    io.AddMouseButtonEvent(1,true);frame();io.AddMouseButtonEvent(1,false);io.AddMouseButtonEvent(0,false);settle();
+    require(observed_actions.empty() && !panel.curve_editing(),"Right-click committed an XYZ handle draft");
+    for(bool new_session:{false,true}) {
+        publish();point=press_handle(1);io.AddMousePosEvent(point.x,point.y-8*font_scale);frame();
+        publish(0,new_session ? 7 : 8,new_session ? session+1 : session);
+        io.AddMouseButtonEvent(0,false);settle();
+        require(observed_actions.empty() && !panel.curve_editing(),"Changed revision/session committed a tangent draft");
+    }
+    publish();auto mode_rect=panel.curve_tangent_mode_rect();
+    require(mode_rect.z>mode_rect.x,"XYZ tangent mode control is missing");
+    io.AddMousePosEvent((mode_rect.x+mode_rect.z)*.5f,(mode_rect.y+mode_rect.w)*.5f);frame();
+    io.AddMouseButtonEvent(0,true);frame();io.AddMouseButtonEvent(0,false);settle();
+    require(ctx->OpenPopupStack.Size && ctx->OpenPopupStack.back().Window,"XYZ tangent mode menu cannot open");
+    observed_actions.clear();ctx->NavNextActivateId=ctx->OpenPopupStack.back().Window->GetID("Flat");settle();
+    require(observed_actions.size()==1 && observed_actions[0].value==49 &&
+            observed_actions[0].pose[1]==0 && observed_actions[0].pose[2]==0,
+            "Flat mode did not send a slope-free atomic reset");
+    publish(3);const auto numeric=panel.curve_tangent_value_rect(0);
+    io.AddMousePosEvent((numeric.x+numeric.z)*.5f,(numeric.y+numeric.w)*.5f);frame();frame();
+    io.AddKeyEvent(ImGuiMod_Ctrl,true);frame();io.AddMouseButtonEvent(0,true);frame();
+    io.AddMouseButtonEvent(0,false);frame();io.AddKeyEvent(ImGuiMod_Ctrl,false);frame();
+    require(ctx->ActiveId && ctx->InputTextState.ID==ctx->ActiveId,"Arrival slope cannot accept precise numeric input");
+    observed_actions.clear();io.AddInputCharactersUTF8("12.12345678901234");frame();
+    require(observed_actions.empty() && panel.curve_editing(),"Typing a slope committed before field completion");
+    io.AddKeyEvent(ImGuiKey_Enter,true);frame();io.AddKeyEvent(ImGuiKey_Enter,false);settle();
+    require(observed_actions.size()==1 && observed_actions[0].value==51 &&
+            observed_actions[0].pose[1]==12.12345678901234 && observed_actions[0].pose[2]==5,
+            "Precise arrival slope lost double precision, changed departure or dispatched twice");
+    publish();const auto key=panel.curve_selected_point(0);
+    io.AddMousePosEvent(key.x,key.y);frame();frame();observed_actions.clear();observed_previews.clear();
+    io.AddMouseButtonEvent(0,true);frame();io.AddMousePosEvent(key.x,key.y-10*font_scale);
+    for(unsigned i=0;i<12;++i)frame();
+    require(observed_actions.empty() && observed_previews.size()>=2 &&
+            observed_previews.back().action==dolly::EditorAction::PreviewCameraCurveValue &&
+            observed_previews.back().pose[1]==0 && observed_previews.back().pose[6]>0,
+            "Native key drag did not preview without committing the saved camera");
+    const auto drafted_value=observed_previews.back().pose[2];
+    io.AddMouseButtonEvent(0,false);settle();
+    require(observed_actions.size()==1 && observed_actions[0].action==dolly::EditorAction::SetCameraCurveValue &&
+            observed_actions[0].pose[2]==drafted_value &&
+            observed_previews.back().action==dolly::EditorAction::ClearCameraCurvePreview,
+            "Native key release did not commit exactly the previewed value and terminate preview");
+    for(unsigned gate=0;gate<4;++gate) {
+        publish();const auto tip=panel.curve_tangent_point(1);
+        if(gate==0)snapshot.paused=false;
+        if(gate==1)snapshot.attach_preview=true;
+        if(gate==2)dolly::recording_status_stub.state=dolly::video::State::starting;
+        if(gate==3)snapshot.selected_camera=1;
+        if(gate==3)publish();else settle();
+        observed_actions.clear();io.AddMousePosEvent(tip.x,tip.y);frame();
+        io.AddMouseButtonEvent(0,true);frame();io.AddMousePosEvent(tip.x,tip.y-10);frame();
+        io.AddMouseButtonEvent(0,false);settle();
+        require(observed_actions.empty() && !panel.curve_editing(),"Blocked/attached XYZ handle changed authoring");
+        snapshot.paused=true;snapshot.attach_preview=false;snapshot.selected_camera=4;
+        dolly::recording_status_stub.state=dolly::video::State::idle;
+    }
+    publish();auto dormant=curve_packet(10,7,session,0,false,4,0,false,false,3,0,nullptr,nullptr,true,3);
+    dormant[56]&=~2u;viewer.publish(dormant);viewer.tick();settle();
+    require(panel.curve_tangent_point(0).x==0 && panel.curve_tangent_point(1).x==0 &&
+            panel.curve_tangent_mode_rect().z==0,"Dormant XYZ handles are editable outside Smooth");
+    ImGui::DestroyContext(ctx);ImGui::SetCurrentContext(previous);snapshot=original;
+    camera_revision_stub=original_revision;dolly::recording_status_stub.state=original_recording;
+    observed_actions.clear();viewer.publish(viewer_packet());viewer.tick();
+}
+
 static void timeline_bottom_dock_regressions() {
     auto* previous=ImGui::GetCurrentContext();const auto original=snapshot;
     bool docked=true;
@@ -3754,6 +4010,7 @@ int main(int argc, char** argv) {
         const bool graph_screenshot = layout_screenshot &&
             (std::getenv("DOLLY_UI_TEST_POSITION_GRAPH") || std::getenv("DOLLY_UI_TEST_CURVES"));
         double screenshot_curve_step=3;
+        bool screenshot_tangents=false;unsigned screenshot_tangent_mode=0;
         unsigned render_width = lite_screenshot ? 1920 : 800;
         unsigned render_height = lite_screenshot ? 1080 : (screenshot ? 1100 : 600);
         if (layout_screenshot) {
@@ -3890,8 +4147,23 @@ int main(int argc, char** argv) {
                 screenshot_curve_step=value/(snapshot.camera_count-1);
             }
             snapshot.selected_camera=std::min(3u,snapshot.camera_count-1);
+            if(const auto* selected=std::getenv("DOLLY_UI_TEST_SELECTED_CAMERA"))
+                snapshot.selected_camera=unsigned(std::clamp(std::atoi(selected),0,int(snapshot.camera_count)-1));
+            if(const auto* pose=std::getenv("DOLLY_UI_TEST_VIEW_POSE")) {
+                require(std::sscanf(pose,"%lf,%lf,%lf,%lf,%lf,%lf,%lf",&snapshot.pose[0],&snapshot.pose[1],
+                    &snapshot.pose[2],&snapshot.pose[3],&snapshot.pose[4],&snapshot.pose[5],&snapshot.pose[6])==7,
+                    "Invalid screenshot viewing pose");
+                for(double value:snapshot.pose)require(std::isfinite(value) && std::abs(value)<=1e8,"Invalid screenshot viewing pose component");
+                require(snapshot.pose[6]>=.5 && snapshot.pose[6]<=4,"Invalid screenshot viewing aspect");
+            }
+            if(const auto* mode=std::getenv("DOLLY_UI_TEST_TANGENT_MODE")) {
+                const char* modes[]{"auto","flat","linked","broken"};bool found=false;
+                for(unsigned i=0;i<4;++i) if(std::strcmp(mode,modes[i])==0) {screenshot_tangent_mode=i;found=true;}
+                require(found,"Unknown XYZ tangent screenshot fixture mode");screenshot_tangents=true;
+            }
             viewer.publish(curve_packet(snapshot.camera_count,7,0x12345678abcdef01ULL,0,false,
-                snapshot.selected_camera,0,false,false,screenshot_curve_step));viewer.tick();
+                snapshot.selected_camera,0,false,false,screenshot_curve_step,0,nullptr,nullptr,
+                screenshot_tangents,screenshot_tangent_mode));viewer.tick();
         }
         if (screenshot) {
             snapshot.dof_available = true;
@@ -4304,7 +4576,8 @@ int main(int argc, char** argv) {
                 activate_curve("Show original###Show Before");
                 camera_revision_stub=8;
                 viewer.publish(curve_packet(snapshot.camera_count,8,0x12345678abcdef01ULL,12,false,
-                    snapshot.selected_camera,0,false,false,screenshot_curve_step));viewer.tick();
+                    snapshot.selected_camera,0,false,false,screenshot_curve_step,0,nullptr,nullptr,
+                    screenshot_tangents,screenshot_tangent_mode));viewer.tick();
                 for(int i=0;i<5;++i)render_curves();
                 activate_curve("Frame all###Fit");
             }
@@ -4342,6 +4615,50 @@ int main(int argc, char** argv) {
                             "Rendered graph tooltip lacks padding or leaves the viewport");
                 }
                 require(tooltip,"Actual graph camera hover did not open a tooltip");
+            }
+            if(const auto* file=std::getenv("DOLLY_UI_TEST_CAPTURE_PREVIEW_PACKET")) {
+                const auto base=dolly::visualization_snapshot();const auto pose=snapshot.pose;
+                std::ifstream input(file,std::ios::binary|std::ios::ate);
+                require(input.good(),"Cannot open compiled screenshot preview packet");
+                const auto size=static_cast<std::streamoff>(input.tellg());
+                require(size>=64 && size<=std::streamoff(dolly::kVisualizationMappingBytes),"Screenshot preview packet length is invalid");
+                std::vector<unsigned char> bytes(static_cast<std::size_t>(size));input.seekg(0);
+                input.read(reinterpret_cast<char*>(bytes.data()),size);require(input.good(),"Cannot read screenshot preview packet");
+                dolly::VisualizationPreview parsed;std::string error;
+                require(base && parsed.load(bytes.data(),bytes.size(),*base,error) && parsed.path,
+                    "Screenshot preview packet failed normal identity/parser validation");
+                const auto* stage=std::getenv("DOLLY_UI_TEST_PREVIEW_CAPTURE_STAGE");if(!stage)stage="during";
+                const bool before=std::strcmp(stage,"before")==0,clear=std::strcmp(stage,"clear")==0;
+                require(before || clear || std::strcmp(stage,"during")==0,"Unknown screenshot preview stage");
+                if(std::getenv("DOLLY_UI_TEST_PREVIEW_UNFOCUSED")) {
+                    require(parsed.source==1,"Unfocused preview capture requires a desktop draft");
+                    snapshot.focused=false;snapshot.owner=dolly::EditorOwner::Unfocused;
+                }
+                unsigned token=parsed.token;
+                if(!before) {
+                    if(parsed.source==2) {
+                        token=dolly::visualization_begin_native_preview(*base,parsed.index,parsed.channel);
+                        for(unsigned i=0;i<4;++i)bytes[24+i]=static_cast<unsigned char>(token>>(8*i));
+                    }
+                    viewer.publish_preview(bytes);viewer.tick();
+                    require(bool(dolly::visualization_preview_snapshot()),"Actual preview mapping did not publish screenshot draft");
+                    if(clear) {
+                        if(parsed.source==2) {
+                            dolly::visualization_end_native_preview(token);
+                            require(!dolly::visualization_preview_snapshot(),"Screenshot native cancel did not hide draft immediately");
+                        }
+                        viewer.publish_preview(preview_packet({},parsed.source,token,parsed.index,parsed.channel,parsed.time,
+                            parsed.revision,parsed.session));viewer.tick();
+                        require(!dolly::visualization_preview_snapshot(),"Screenshot terminal clear retained draft");
+                    }
+                }
+                for(int i=0;i<5;++i)render_curves();
+                require(dolly::visualization_snapshot()==base && snapshot.pose==pose,
+                    "Render-only screenshot preview changed the committed graph or viewing camera");
+                if(!snapshot.focused) require(!ImGui::GetIO().WantCaptureMouse && !ImGui::GetIO().WantCaptureKeyboard,
+                    "Unfocused desktop preview captured game input");
+                std::printf("Render-only preview capture %s: source %u token %u, committed revision %u/session %llu; fixed view preserved.\n",
+                    stage,parsed.source,token,base->project_revision(),static_cast<unsigned long long>(base->session_id()));
             }
         }
 
@@ -4445,7 +4762,7 @@ int main(int argc, char** argv) {
                 require(SUCCEEDED(chain->Present(0,0)),"Settled screenshot Present failed");
             }
         }
-        if(graph_screenshot) {
+        if(graph_screenshot && snapshot.focused) {
             // Curves keeps full-size main controls in a deliberately scrollable
             // viewport. Prove that the bottom controls can actually be reached,
             // then restore the original scroll before capturing the image.
@@ -4541,7 +4858,8 @@ int main(int argc, char** argv) {
                 for (const auto* name : {"Deadlock Dolly", "##lite-campaths", "##lite-timeline"}) {
                     const auto* window = ImGui::FindWindowByName(name);
                     if (!window || !window->Active) {
-                        require(render_width < 900 || render_height < 650,
+                        require(render_width < 900 || render_height < 650 ||
+                                    std::getenv("DOLLY_UI_TEST_PREVIEW_UNFOCUSED"),
                                 "A desktop working surface disappeared");
                         continue;
                     }
@@ -4622,6 +4940,9 @@ int main(int argc, char** argv) {
         ui_rework_regressions();
         unified_curve_regressions(viewer);
         unified_curve_regressions(viewer,1.5f);
+        tangent_ui_regressions(viewer,1.f);
+        tangent_ui_regressions(viewer,1.5f);
+        preview_runtime_regressions(viewer);
         // Exercise rendered UI shortcuts with local ImGui events. This is not
         // OS-wide input and does not launch or attach to Deadlock.
         {

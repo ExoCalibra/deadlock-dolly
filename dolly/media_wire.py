@@ -12,7 +12,7 @@ STATUS = struct.Struct("<8s10I3Q2I768s768s768s2Q")
 VIDEO_STATES = ("idle", "starting", "recording", "finalizing", "completed", "cancelled", "failed")
 COMMANDS = {"start_video": 1, "stop_video": 2, "cancel_video": 3,
             "configure_reshade": 4, "disable_reshade": 5, "toggle_reshade": 6,
-            "start_source_audio": 7, "stop_source_audio": 8}
+            "start_source_audio": 7, "stop_source_audio": 8, "silence_ui": 9}
 # Encoder values match native dolly::video::Encoder.
 ENCODERS = ("media_foundation", "ffmpeg")
 # Codec values match native dolly::video::Codec. libx264/libx265 require a GPL

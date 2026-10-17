@@ -191,6 +191,103 @@ void test_curve_contract() {
     auto mismatched = curve_packet(3); change_number(mismatched, metadata, 12345);
     require(!path.load(mismatched.data(), mismatched.size(), error), "Unrelated authoring position accepted");
 }
+std::vector<unsigned char> tangent_packet() {
+    auto bytes=curve_packet(3);
+    const std::size_t metadata=64+3*8;
+    std::vector<unsigned char> expanded;
+    for(unsigned index=0;index<3;++index) {
+        expanded.insert(expanded.end(),bytes.begin()+metadata+index*64,bytes.begin()+metadata+(index+1)*64);
+        for(unsigned axis=0;axis<3;++axis) {
+            u32(expanded,axis);u32(expanded,0);
+            number(expanded,axis==1 ? 0 : 5);number(expanded,axis==1 ? 0 : 5);
+        }
+    }
+    bytes.erase(bytes.begin()+metadata,bytes.begin()+metadata+3*64);
+    bytes.insert(bytes.begin()+metadata,expanded.begin(),expanded.end());
+    change_u32(bytes,12,4);change_u32(bytes,52,3*136);change_u32(bytes,56,2);
+    return bytes;
+}
+void test_tangent_contract() {
+    auto bytes=tangent_packet();dolly::VisualizationPath path;std::string error;
+    require(path.load(bytes.data(),bytes.size(),error) && path.smooth_position(),"ABI4 XYZ tangent metadata rejected");
+    require(path.graph_keys()[1].tangents[0].incoming==5 && path.graph_keys()[1].tangents[2].mode==2,
+            "XYZ tangent modes/slopes changed in native parsing");
+    dolly::CameraPose request{17,12.125,-8.25,1,0x89abcdef,0xf1234567,0};
+    require(dolly::valid_visualization_tangent_action(path,12+3,request),"Atomic broken tangent pair rejected");
+    require(!dolly::valid_visualization_tangent_action(path,12+2,request),"Unequal linked tangent pair accepted");
+    request[2]=request[1];require(dolly::valid_visualization_tangent_action(path,12+2,request),"Linked tangent pair rejected");
+    request[1]=request[2]=1e12;
+    require(dolly::valid_visualization_tangent_action(path,12+2,request),"Finite short-interval slopes received a world-coordinate cap");
+    request[1]=request[2]=0;
+    for(unsigned mode:{0u,1u}) require(dolly::valid_visualization_tangent_action(path,12+mode,request),"Auto/Flat reset rejected");
+    request[1]=1;require(!dolly::valid_visualization_tangent_action(path,12,request),"Auto accepted authored slopes");
+    request[1]=request[2]=0;
+    for(unsigned field:{0u,3u,4u,5u,6u}) {
+        auto stale=request;stale[field]+=1;
+        require(!dolly::valid_visualization_tangent_action(path,15,stale),"Stale tangent gesture accepted");
+    }
+    for(double invalid:{-1.,12.5,36.,std::numeric_limits<double>::infinity()})
+        require(!dolly::valid_visualization_tangent_action(path,invalid,request),"Malformed tangent target accepted");
+    auto dormant=bytes;change_u32(dormant,56,0);
+    require(path.load(dormant.data(),dormant.size(),error) && !path.smooth_position() &&
+            path.graph_keys()[1].tangents[2].incoming==5 &&
+            !dolly::valid_visualization_tangent_action(path,15,request),"Dormant tangents were lost or editable outside Smooth");
+    const std::size_t tangent=64+3*8+136+64;
+    for(unsigned offset:{0u,4u}) {
+        auto malformed=bytes;change_u32(malformed,tangent+offset,9);
+        require(!path.load(malformed.data(),malformed.size(),error),"Malformed XYZ tangent metadata accepted");
+    }
+    auto nonfinite=bytes;change_number(nonfinite,tangent+8,std::numeric_limits<double>::infinity());
+    require(!path.load(nonfinite.data(),nonfinite.size(),error),"Nonfinite XYZ tangent metadata accepted");
+}
+void test_preview_envelope() {
+    const auto base_bytes=tangent_packet();dolly::VisualizationPath base;std::string error;
+    require(base.load(base_bytes.data(),base_bytes.size(),error),"Preview base fixture rejected");
+    auto inner=base_bytes;
+    const std::size_t metadata=64+3*8,blob=metadata+3*136;
+    change_number(inner,metadata+136+8,12); // The middle camera moves from Y2 to Y12.
+    change_number(inner,blob+160+16+40+16,12);
+    change_number(inner,blob+160+296+16+40+8,12);
+    std::vector<unsigned char> bytes{'D','L','Y','P','R','V','0','1'};
+    u32(bytes,2);u32(bytes,1);u32(bytes,1);u32(bytes,1);u32(bytes,77);u32(bytes,17);
+    u32(bytes,0x89abcdef);u32(bytes,0xf1234567);u32(bytes,1);u32(bytes,1);number(bytes,1);
+    u32(bytes,unsigned(inner.size()));u32(bytes,0);bytes.insert(bytes.end(),inner.begin(),inner.end());
+    dolly::VisualizationPreview preview;
+    require(preview.load(bytes.data(),bytes.size(),base,error) && preview.source==1 && preview.token==77 &&
+            preview.path && preview.path->graph_keys()[1].pose[1]==12 && base.graph_keys()[1].pose[1]==2,
+            "Render-only preview did not preserve an independent committed graph");
+    auto maximum_token=bytes;change_u32(maximum_token,24,0xffffffff);
+    require(preview.load(maximum_token.data(),maximum_token.size(),base,error) && preview.token==0xffffffff,
+            "Maximum nonzero u32 preview token was rejected");
+    auto zero_token=bytes;change_u32(zero_token,24,0);
+    require(!preview.load(zero_token.data(),zero_token.size(),base,error),"Enabled preview accepted a zero token");
+    for(unsigned offset:{12u,16u,20u,28u,32u,40u,44u,56u,60u}) {
+        auto malformed=bytes;change_u32(malformed,offset,0xffffffff);
+        if(preview.load(malformed.data(),malformed.size(),base,error))
+            throw std::runtime_error("Malformed preview envelope accepted at byte "+std::to_string(offset));
+    }
+    auto wrong_time=bytes;change_number(wrong_time,48,1.125);
+    require(!preview.load(wrong_time.data(),wrong_time.size(),base,error),"Retimed preview anchor accepted");
+    auto clear=bytes;clear.resize(64);change_u32(clear,16,0);change_u32(clear,56,0);
+    require(preview.load(clear.data(),clear.size(),base,error) && !preview.path && preview.token==77,
+            "Identified terminal preview clear rejected");
+    for(unsigned offset:{20u,24u,28u,32u}) {
+        auto partial=clear;change_u32(partial,offset,0);
+        if(offset==32)change_u32(partial,36,0);
+        require(!preview.load(partial.data(),partial.size(),base,error),"Partial terminal preview identity accepted");
+    }
+    for(unsigned offset:{40u,44u}) {
+        auto malformed=clear;change_u32(malformed,offset,0xffffffff);
+        require(!preview.load(malformed.data(),malformed.size(),base,error),"Terminal preview clear accepted an out-of-range target");
+    }
+    auto negative_time=clear;change_number(negative_time,48,-1);
+    require(!preview.load(negative_time.data(),negative_time.size(),base,error),"Terminal preview clear accepted negative time");
+    for(std::size_t i=20;i<64;++i)clear[i]=0;
+    require(preview.load(clear.data(),clear.size(),base,error) && !preview.path && !preview.token,
+            "Empty preview clear rejected");
+    auto partial_empty=clear;change_u32(partial_empty,28,17);
+    require(!preview.load(partial_empty.data(),partial_empty.size(),base,error),"Empty preview clear accepted partial identity");
+}
 dolly::VisualizationView view() {
     dolly::VisualizationView v;
     v.pose = {0, 0, 0, 0, 0, 0, 2};
@@ -290,6 +387,8 @@ void self_test() {
     test_projection();
     test_world_camera_markers();
     test_curve_contract();
+    test_tangent_contract();
+    test_preview_envelope();
     for (bool step : {false, true}) {
         auto lens_bytes = packet(3, 2048, 64, step, true);
         dolly::VisualizationPath lens_path;

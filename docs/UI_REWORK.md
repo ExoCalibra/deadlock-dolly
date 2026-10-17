@@ -134,6 +134,56 @@ stacked graphs and an original snapshot. Its path interpolation and rotation
 reset controls remain available. Both editors use the normal shot save and
 undo history.
 
+### Saved arrival and departure handles
+
+In the desktop Camera page or the in-game timeline's **Curves** view, select a
+free camera in the **Position** graph and choose X, Y or Z. With path
+interpolation set to **Smooth**, the **Arrival** and
+**Departure** controls set that axis's slope in world units per shot second.
+Drag a round handle vertically or type a slope; in-game numeric fields support
+Ctrl+click to type. The short handle lines are a display aid: zooming or resizing
+them does not change the saved slope or the camera's time and position.
+Each completed edit is one Undo step, and unfinished drags are cancelled
+when the selection, shot or editing state changes.
+
+With path guides enabled in a paused replay, dragging a graph key or a Position
+handle previews the path line and camera markers in the game. You can stand back
+and inspect the changing path from your current view. The desktop graph's value
+also follows the drag. Release to save the adjustment, or right-click to cancel
+and restore the saved path. Double-clicking a key or handle still lets you drag;
+double-click empty graph space to fit the curve.
+
+**Auto** uses Dolly's calculated slope. **Flat** sets both slopes to zero;
+flatten all three axes for a stationary arrival/departure at that camera.
+**Linked** keeps both slopes equal; **Broken** lets them differ. These are value
+curve handles with fixed horizontal positions, rather than separate time keys.
+The first camera has no arrival segment, and the last has no departure segment.
+
+Handles affect **XYZ movement in Smooth only**. Switching to Linear or Spline
+preserves the saved handles while using that mode's normal interpolation.
+Returning to Smooth restores their effect. Rotation and framing retain their
+existing interpolation. The desktop and in-game graph, preview and normal
+export use the same saved movement. In-game edits require a paused replay and
+Dolly's panel input; **right-click** cancels an adjustment without closing F8.
+
+Handles survive save/reopen, Undo and Update view/recapture. Shots containing
+authored handles use project format 12 and need a Dolly version that supports it;
+shots without handles keep their existing format. Converting the shot's tick
+rate preserves motion at corresponding replay ticks by scaling slopes with
+time. Editing an individual camera time keeps its saved units-per-second slope.
+
+## Level the camera again
+
+While the replay is paused and Dolly owns the camera, press **R** to level the
+view and return it to the shot's normal aspect and zoom. Use it after banking
+with the roll keys or reframing with the wheel or the FOV box.
+
+Level view changes only the live camera you are composing with. No saved camera,
+project value or Undo step is touched, so pressing **R** never edits your shot;
+selecting another camera or previewing one again returns that camera's own
+framing. Rebind it under **Controls** like any other shortcut — **Ctrl+Alt+R**
+stays Replace.
+
 ## Find a player or a replay moment
 
 A newly loaded replay starts with the full timeline in view. Dolly reads the

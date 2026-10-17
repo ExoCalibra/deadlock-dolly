@@ -72,7 +72,9 @@ bool OverlayPanel::lite_campaths_visible(const EditorSnapshot& state) const noex
     return lite_mode_ && state.enabled && state.focused && state.owner == EditorOwner::Panel;
 }
 void OverlayPanel::cancel_position_graph() noexcept {
+    clear_curve_preview();
     position_graph_dragging_ = position_value_editing_ = false;
+    tangent_dragging_ = tangent_value_editing_ = false;
     position_graph_escape_ = true;
     curve_panning_ = false;
 }

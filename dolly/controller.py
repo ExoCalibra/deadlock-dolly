@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import re
+import tempfile
 import threading
 import time
 import zipfile
@@ -431,6 +432,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
     def _request(self, command, timeout=3.0, allow_error=False, completion_patterns=None,
                  allow_truncated=False):
         self._require_connection()
+        self._silence_interface_cue(command)
         extra = {"allow_truncated": True} if allow_truncated else {}
         try:
             if completion_patterns is None:
@@ -454,6 +456,66 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         if error and not allow_error:
             raise RuntimeError(error)
         return output
+
+    def _silence_interface_cue(self, command):
+        """Decline the game's interface cue for Dolly's own replay pause/resume.
+
+        Deadlock plays a stock interface ping whenever a replay pauses or resumes,
+        and there is no setting that turns it off. Dolly is the one issuing those
+        commands, so it arms a short window in the sound bridge first -- and waits
+        for that arm to be acknowledged, because the worker picks commands up on
+        its own cadence while the pause lands on the game's next frame. Best
+        effort by design: a build or a session without the sound hooks simply
+        keeps the cue, and nothing here may delay or fail the pause itself.
+        """
+        if "demo_pause" not in command and "demo_resume" not in command:
+            return
+        self._trace_interface_voices()
+        silence = getattr(self._native_bridge(), "silence_ui", None)
+        if not callable(silence):
+            return
+        armed = bool(silence())
+        if getattr(self, "_interface_silence_state", None) != armed:
+            self._interface_silence_state = armed
+            LOG.info("Interface cue silence %s for the replay pause/resume window.",
+                     "armed" if armed else "unavailable; the game's own cue still plays")
+
+    def _trace_interface_voices(self):
+        """Development only: write the sound events around one pause to a CSV.
+
+        Enabled with DOLLY_TRACE_UI_VOICES=1. The native hook that Dolly already
+        installs for clip audio records every started voice with its soundevent
+        name and asset path, so this identifies a cue by name instead of guessing
+        it from its path. The file is rewritten for each traced transition.
+        """
+        if os.environ.get("DOLLY_TRACE_UI_VOICES") != "1":
+            return
+        bridge = self._native_bridge()
+        start = getattr(bridge, "start_source_audio", None)
+        stop = getattr(bridge, "stop_source_audio", None)
+        if not callable(start) or not callable(stop):
+            return
+        path = os.path.join(tempfile.gettempdir(), "dolly-ui-voice-trace.csv")
+        try:
+            # The capture creates a .state.csv sidecar with CREATE_NEW, so a
+            # leftover from an earlier trace would make the next one fail and
+            # leave only an empty CSV behind.
+            for name in (path, path + ".state.csv"):
+                if os.path.exists(name):
+                    os.remove(name)
+            start(path)
+        except Exception as exc:
+            LOG.info("Interface voice trace could not start: %s", exc)
+            return
+
+        def finish():
+            try:
+                stop()
+                LOG.info("Interface voice trace written to %s", path)
+            except Exception as exc:
+                LOG.info("Interface voice trace could not finish: %s", exc)
+
+        threading.Timer(.6, finish).start()
 
     def _require_demo(self, require_tick=True, *, timeout=3):
         # No arguments: demo_goto reports current playback position; it does

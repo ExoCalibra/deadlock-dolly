@@ -10,7 +10,7 @@ Legacy FOV values remain in saved shots solely for backwards compatibility.
 from __future__ import annotations
 
 from bisect import bisect_right
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import math
 from pathlib import Path
@@ -30,6 +30,7 @@ PARTICLE_FORMAT_VERSION = 8
 LENS_FORMAT_VERSION = 9
 SPLINE_FORMAT_VERSION = 10
 OBJECTS_FORMAT_VERSION = 11
+TANGENTS_FORMAT_VERSION = 12
 MAX_OBJECTS = 64
 CONFETTI_SPAWN_HEIGHT_DEFAULT = 250.0
 CONFETTI_SPAWN_HEIGHT_MIN = 100.0
@@ -45,6 +46,11 @@ ATTACH_POINTS = ("eyes", "weapon", "bone")
 _BONE_NAME = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_.]*|\$cloth_m[0-9]+p[0-9]+)")
 ATTACH_BONE_LIMIT = 64
 CURVE_CHANNELS = ("pitch", "yaw", "roll")
+POSITION_CHANNELS = ("x", "y", "z")
+TANGENT_MODES = ("auto", "flat", "linked", "broken")
+# The existing render-view bridge rejects XYZ positions outside this bound.
+# Apply it only to newly authored Smooth segments, preserving legacy paths.
+AUTHORED_POSITION_LIMIT = 1e8
 ATTACH_OFFSET_LIMIT = 10000.0
 ATTACH_SMOOTHING_MAX = 5.0
 ATTACH_MODEL_LIMIT = 260
@@ -226,6 +232,38 @@ def _attach_dict(attach: AttachKey) -> dict[str, Any]:
     return data
 
 
+@dataclass(frozen=True)
+class CameraTangent:
+    """Optional incoming/outgoing XYZ derivatives, in world units per second.
+
+    Auto follows the shot's existing interpolation. Flat sets both derivatives
+    to zero; Linked shares one derivative; Broken stores each side separately.
+    Authored values only affect Smooth motion and stay saved in other modes.
+    """
+
+    mode: str = "auto"
+    incoming: float | None = None
+    outgoing: float | None = None
+
+
+def _validate_camera_tangent(tangent: Any, label: str) -> None:
+    if not isinstance(tangent, CameraTangent):
+        raise ValueError(f"{label} must be a CameraTangent")
+    _choice(tangent.mode, TANGENT_MODES, f"{label}.mode")
+    if tangent.mode in ("auto", "flat"):
+        if tangent.incoming is not None or tangent.outgoing is not None:
+            raise ValueError(f"{label} {tangent.mode} mode cannot contain slopes")
+        return
+    incoming = _finite(tangent.incoming, f"{label}.incoming")
+    outgoing = _finite(tangent.outgoing, f"{label}.outgoing")
+    if tangent.mode == "linked" and incoming != outgoing:
+        raise ValueError(f"{label} linked slopes must be equal")
+
+
+def _authored_tangents(key: "Keyframe") -> dict[str, CameraTangent]:
+    return {name: tangent for name, tangent in key.tangents.items() if tangent.mode != "auto"}
+
+
 @dataclass
 class Keyframe:
     time: float
@@ -248,6 +286,7 @@ class Keyframe:
     # Captured tan(horizontal FOV / 2) / aspect. Independent of the game's
     # spectator lens, which can change when a replay restarts.
     lens_scale: float | None = None
+    tangents: dict[str, CameraTangent] = field(default_factory=dict)
 
 
 @dataclass
@@ -281,6 +320,14 @@ def _keyframe_dict(key: Keyframe) -> dict[str, Any]:
         override = getattr(key, "curve_" + channel)
         if override is not None:
             data["curve_" + channel] = override
+    authored = _authored_tangents(key)
+    if authored:
+        data["tangents"] = {
+            channel: {"mode": tangent.mode, **(
+                {"incoming": tangent.incoming, "outgoing": tangent.outgoing}
+                if tangent.mode in ("linked", "broken") else {})}
+            for channel, tangent in authored.items()
+        }
     return data
 
 
@@ -402,9 +449,48 @@ def _spline_tangents(times: list[float], values: list[float]) -> list[float]:
     return derivatives
 
 
+def _validate_authored_segment(left: float, right: float, span: float,
+                               outgoing: float, incoming: float, label: str) -> None:
+    """Check the whole Hermite segment against the bridge's position contract."""
+    depart, arrive = span * outgoing, span * incoming
+    if not math.isfinite(depart) or not math.isfinite(arrive):
+        raise ValueError(f"{label} slopes are too large for this camera interval")
+    # Scale before forming polynomial coefficients: even finite derivatives
+    # can otherwise overflow the derivative quadratic used to locate extrema.
+    scale = max(abs(left), abs(right), abs(depart), abs(arrive), 1.0)
+    p0, p1, m0, m1 = left / scale, right / scale, depart / scale, arrive / scale
+    a, b, c = 2 * p0 - 2 * p1 + m0 + m1, -3 * p0 + 3 * p1 - 2 * m0 - m1, m0
+    quadratic, linear = 3 * a, 2 * b
+    candidates = [0.0, 1.0]
+    if quadratic == 0:
+        if linear != 0:
+            candidates.append(-c / linear)
+    else:
+        discriminant = linear * linear - 4 * quadratic * c
+        if discriminant >= 0:
+            root = math.sqrt(discriminant)
+            q = -.5 * (linear + math.copysign(root, linear))
+            if q == 0:
+                candidates.append(-linear / (2 * quadratic))
+            else:
+                candidates.extend((q / quadratic, c / q))
+    for u in candidates:
+        if not 0 <= u <= 1:
+            continue
+        u2, u3 = u * u, u * u * u
+        value = ((2 * u3 - 3 * u2 + 1) * left
+                 + (u3 - 2 * u2 + u) * depart
+                 + (-2 * u3 + 3 * u2) * right + (u3 - u2) * arrive)
+        if not math.isfinite(value) or abs(value) > AUTHORED_POSITION_LIMIT:
+            raise ValueError(f"{label} leaves the supported camera position range "
+                             f"(±{AUTHORED_POSITION_LIMIT:g} units); reduce the slopes")
+
+
 def _sample(times: list[float], values: list[float], time: float,
             interpolation: str, monotone: bool = True,
-            tangents: tuple[float, ...] | None = None) -> float:
+            tangents: tuple[float, ...] | None = None,
+            incoming_tangents: tuple[float, ...] | None = None,
+            outgoing_tangents: tuple[float, ...] | None = None) -> float:
     if time <= times[0] or len(times) == 1:
         return values[0]
     if time >= times[-1]:
@@ -414,7 +500,7 @@ def _sample(times: list[float], values: list[float], time: float,
         return values[left]
     span = times[left + 1] - times[left]
     fraction = (time - times[left]) / span
-    if interpolation == "linear" or len(times) == 2:
+    if interpolation == "linear" or (len(times) == 2 and incoming_tangents is None):
         return (1 - fraction) * values[left] + fraction * values[left + 1]
     if tangents is None:
         try:
@@ -429,10 +515,12 @@ def _sample(times: list[float], values: list[float], time: float,
         if not all(math.isfinite(value) for value in tangents):
             return (1 - fraction) * values[left] + fraction * values[left + 1]
     u2, u3 = fraction * fraction, fraction * fraction * fraction
+    incoming = tangents if incoming_tangents is None else incoming_tangents
+    outgoing = tangents if outgoing_tangents is None else outgoing_tangents
     value = ((2 * u3 - 3 * u2 + 1) * values[left]
-             + (u3 - 2 * u2 + fraction) * span * tangents[left]
+             + (u3 - 2 * u2 + fraction) * span * outgoing[left]
              + (-2 * u3 + 3 * u2) * values[left + 1]
-             + (u3 - u2) * span * tangents[left + 1])
+             + (u3 - u2) * span * incoming[left + 1])
     if not math.isfinite(value):
         return (1 - fraction) * values[left] + fraction * values[left + 1]
     if monotone and interpolation != "spline":
@@ -457,10 +545,13 @@ class CameraChannelSamples:
     interpolation: str
     monotone: bool
     tangents: tuple[float, ...] | None = None
+    incoming_tangents: tuple[float, ...] | None = None
+    outgoing_tangents: tuple[float, ...] | None = None
 
     def evaluate(self, time: float) -> float:
         return _sample(self.times, self.values, _finite(time, "Evaluation time"),
-                       self.interpolation, self.monotone, self.tangents)
+                       self.interpolation, self.monotone, self.tangents,
+                       self.incoming_tangents, self.outgoing_tangents)
 
 
 @dataclass
@@ -540,7 +631,28 @@ class Project:
                 override = getattr(key, "curve_" + channel)
                 if override is not None:
                     _finite(override, f"Camera keyframe {i}.curve_{channel}")
+            _object(key.tangents, f"Camera keyframe {i} tangents")
+            _members(key.tangents, POSITION_CHANNELS, "camera tangent channel")
+            for channel, tangent in key.tangents.items():
+                _validate_camera_tangent(tangent, f"Camera keyframe {i}.{channel} tangent")
         _validate_times(self.keyframes, "Camera keyframes")
+        if self.interpolation == "smooth" and len(self.keyframes) > 1:
+            for channel in POSITION_CHANNELS:
+                authored = [key.tangents.get(channel, CameraTangent()).mode != "auto"
+                            for key in self.keyframes]
+                if not any(authored):
+                    continue
+                samples = self._camera_channel_samples(channel)
+                if samples.incoming_tangents is None:
+                    raise ValueError(f"Authored {channel.upper()} slopes cannot be represented at these camera times")
+                for index in range(len(self.keyframes) - 1):
+                    if authored[index] or authored[index + 1]:
+                        _validate_authored_segment(
+                            samples.values[index], samples.values[index + 1],
+                            samples.times[index + 1] - samples.times[index],
+                            samples.outgoing_tangents[index], samples.incoming_tangents[index + 1],
+                            f"Authored {channel.upper()} segment {index + 1}",
+                        )
 
         _array(self.tracks, "Cvar tracks")
         seen: set[str] = set()
@@ -592,19 +704,38 @@ class Project:
         factor = _finite(self.tick_rate, "Tick rate") / rate
         if not math.isfinite(factor) or factor <= 0:
             raise ValueError("This shot's current tick rate is invalid; set Ticks/second manually.")
-        for key in self.keyframes:
-            key.time = _finite(key.time, "Camera time") * factor
-        for track in self.tracks:
-            for key in track.keys:
-                key.time = _finite(key.time, "Track time") * factor
-        self.tick_rate = rate
         self.validate()
+        keys = []
+        for key in self.keyframes:
+            # Derivatives use seconds, including while authored handles are
+            # dormant in Linear or Spline. Preserve their replay-time shape.
+            tangents = {
+                channel: (CameraTangent(tangent.mode,
+                                        _finite(tangent.incoming / factor, "Incoming camera slope"),
+                                        _finite(tangent.outgoing / factor, "Outgoing camera slope"))
+                          if tangent.mode in ("linked", "broken") else tangent)
+                for channel, tangent in key.tangents.items()
+            }
+            keys.append(replace(key, time=key.time * factor, tangents=tangents))
+        tracks = [replace(track, keys=[replace(key, time=key.time * factor) for key in track.keys])
+                  for track in self.tracks]
+        replace(self, keyframes=keys, tracks=tracks, tick_rate=rate).validate()
+        for key, retimed in zip(self.keyframes, keys):
+            key.time, key.tangents = retimed.time, retimed.tangents
+        for track, retimed in zip(self.tracks, tracks):
+            for key, retimed_key in zip(track.keys, retimed.keys):
+                key.time = retimed_key.time
+        self.tick_rate = rate
 
     def camera_channel_samples(self, name: str) -> CameraChannelSamples:
         """Prepare an immutable graph evaluator without changing the project."""
         self.validate()
         if not self.keyframes:
             raise ValueError("Add a camera keyframe before evaluating the shot")
+        return self._camera_channel_samples(name)
+
+    def _camera_channel_samples(self, name: str) -> CameraChannelSamples:
+        """Prepare a channel after the caller has validated this project."""
         fields = CAMERA_FIELDS + (("lens_scale",) if any(k.lens_scale is not None for k in self.keyframes) else ())
         if name not in fields:
             raise KeyError(name)
@@ -615,7 +746,9 @@ class Project:
         interpolation = self.lens_interpolation if name in ("aspect_ratio", "lens_scale") else self.interpolation
         monotone = name not in ("x", "y", "z")
         tangents = None
-        if interpolation not in ("step", "linear") and len(times) > 2:
+        authored = (interpolation == "smooth" and name in POSITION_CHANNELS
+                    and any(name in _authored_tangents(key) for key in self.keyframes))
+        if interpolation not in ("step", "linear") and (len(times) > 2 or (authored and len(times) > 1)):
             try:
                 derivatives = (_spline_tangents(times, values) if interpolation == "spline" else
                                (_monotone_tangents if monotone else _position_tangents)(times, values))
@@ -626,7 +759,76 @@ class Project:
                 interpolation = "linear"
             else:
                 tangents = tuple(derivatives)
-        return CameraChannelSamples(times, values, interpolation, monotone, tangents)
+        incoming = outgoing = None
+        if authored and tangents is not None:
+            incoming_values, outgoing_values = list(tangents), list(tangents)
+            for index, key in enumerate(self.keyframes):
+                tangent = key.tangents.get(name, CameraTangent())
+                if tangent.mode == "flat":
+                    incoming_values[index] = outgoing_values[index] = 0.0
+                elif tangent.mode in ("linked", "broken"):
+                    incoming_values[index] = float(tangent.incoming)
+                    outgoing_values[index] = float(tangent.outgoing)
+            incoming, outgoing = tuple(incoming_values), tuple(outgoing_values)
+        return CameraChannelSamples(times, values, interpolation, monotone, tangents, incoming, outgoing)
+
+    def _camera_tangent_key(self, index: int, channel: str) -> Keyframe:
+        _choice(channel, POSITION_CHANNELS, "Camera tangent channel")
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(self.keyframes):
+            raise ValueError("Choose a camera keyframe for its tangent")
+        return self.keyframes[index]
+
+    def camera_tangent(self, index: int, channel: str) -> CameraTangent:
+        """Return the saved intent; an absent entry is automatic motion."""
+        return self._camera_tangent_key(index, channel).tangents.get(channel, CameraTangent())
+
+    def camera_tangent_slopes(self, index: int, channel: str) -> tuple[float, float]:
+        """Return effective incoming/outgoing world-units/second derivatives.
+
+        Dormant authored handles do not change the result in Linear or Spline.
+        An unrepresentable automatic derivative reports zero for the editor;
+        channel evaluation retains its established finite linear fallback.
+        """
+        self._camera_tangent_key(index, channel)
+        samples = self.camera_channel_samples(channel)
+        if samples.incoming_tangents is not None:
+            return samples.incoming_tangents[index], samples.outgoing_tangents[index]
+        if samples.tangents is not None:
+            return samples.tangents[index], samples.tangents[index]
+        if len(samples.times) == 1:
+            return 0.0, 0.0
+
+        def slope(left: int) -> float:
+            value = ((samples.values[left + 1] - samples.values[left])
+                     / (samples.times[left + 1] - samples.times[left]))
+            return value if math.isfinite(value) else 0.0
+
+        return slope(max(0, index - 1)), slope(min(index, len(samples.times) - 2))
+
+    def set_camera_tangent(self, index: int, channel: str, mode: str, *,
+                           incoming: float | None = None, outgoing: float | None = None) -> bool:
+        """Set saved intent without switching interpolation; return whether it changed.
+
+        Validation completes before any mutation. Selecting Auto removes the
+        optional metadata so an otherwise unedited shot keeps its old format.
+        """
+        key = self._camera_tangent_key(index, channel)
+        tangent = CameraTangent(mode, incoming, outgoing)
+        _validate_camera_tangent(tangent, "Camera tangent")
+        tangents = dict(key.tangents)
+        if mode == "auto":
+            if channel not in tangents:
+                return False
+            del tangents[channel]
+        elif self.camera_tangent(index, channel) == tangent:
+            return False
+        else:
+            tangents[channel] = tangent
+        keys = list(self.keyframes)
+        keys[index] = replace(key, tangents=tangents)
+        replace(self, keyframes=keys).validate()
+        key.tangents = tangents
+        return True
 
     def evaluate(self, time: float) -> dict[str, Any]:
         """Evaluate without state: forward playback and rewinds are identical.
@@ -645,17 +847,10 @@ class Project:
         time = _finite(time, "Evaluation time")
         if not self.keyframes:
             raise ValueError("Add a camera keyframe before evaluating the shot")
-        times = [float(key.time) for key in self.keyframes]
         result: dict[str, Any] = {}
         fields = CAMERA_FIELDS + (("lens_scale",) if any(k.lens_scale is not None for k in self.keyframes) else ())
         for name in fields:
-            values = [float(channel_value(key, name)) for key in self.keyframes]
-            wrap = self.rotation_mode == "shortest" and name in ("yaw", "roll")
-            if wrap:
-                values = _unwrap(values)
-            interpolation = self.lens_interpolation if name in ("aspect_ratio", "lens_scale") else self.interpolation
-            value = _sample(times, values, time, interpolation, monotone=name not in ("x", "y", "z"))
-            result[name] = value
+            result[name] = self._camera_channel_samples(name).evaluate(time)
         cvars = {name: validate_cvar_value(name, value) for name, value in self.setup_values.items()}
         for track in self.tracks:
             if track.keys:
@@ -702,6 +897,9 @@ class Project:
         if self.objects:
             version = OBJECTS_FORMAT_VERSION
             particles_used = True  # New-format files include the existing optional-setting schema.
+        if any(_authored_tangents(key) for key in self.keyframes):
+            version = TANGENTS_FORMAT_VERSION
+            particles_used = True
         return {
             "format": FORMAT_NAME,
             "version": version,
@@ -738,9 +936,9 @@ class Project:
                                    ROTATION_FORMAT_VERSION, BLEND_FORMAT_VERSION,
                                    CONFETTI_FORMAT_VERSION, PARTICLE_FORMAT_VERSION,
                                    LENS_FORMAT_VERSION, SPLINE_FORMAT_VERSION,
-                                   OBJECTS_FORMAT_VERSION):
+                                   OBJECTS_FORMAT_VERSION, TANGENTS_FORMAT_VERSION):
             raise ValueError(f"Unsupported project version: {version!r}; expected 1 through "
-                             f"{OBJECTS_FORMAT_VERSION}")
+                             f"{TANGENTS_FORMAT_VERSION}")
         allowed = ("format", "version", "name", "interpolation", "rotation_mode",
                    "start_tick", "tick_rate", "setup_values", "keyframes", "tracks")
         if version >= FORMAT_VERSION:
@@ -776,6 +974,8 @@ class Project:
                 allowed += ("source_blend",)
             if version >= LENS_FORMAT_VERSION:
                 allowed += ("lens_scale",)
+            if version >= TANGENTS_FORMAT_VERSION:
+                allowed += ("tangents",)
             _members(key, allowed, "camera keyframe")
             # A corrupt v2 shot must never silently lose its authored zoom.
             if version >= FORMAT_VERSION and "aspect_ratio" not in key:
@@ -805,6 +1005,20 @@ class Project:
                     pose["source_blend"] = key["source_blend"]
                 if "lens_scale" in key:
                     pose["lens_scale"] = key["lens_scale"]
+                if "tangents" in key:
+                    raw_tangents = _object(key["tangents"], f"Camera keyframe {i} tangents")
+                    _members(raw_tangents, POSITION_CHANNELS, "camera tangent channel")
+                    tangents = {}
+                    for channel, raw_tangent in raw_tangents.items():
+                        tangent_data = _object(raw_tangent, f"Camera keyframe {i}.{channel} tangent")
+                        _members(tangent_data, ("mode", "incoming", "outgoing"), "camera tangent")
+                        if "mode" not in tangent_data:
+                            raise ValueError("Camera tangent is missing required field: mode")
+                        tangent = CameraTangent(**tangent_data)
+                        _validate_camera_tangent(tangent, f"Camera keyframe {i}.{channel} tangent")
+                        if tangent.mode != "auto":
+                            tangents[channel] = tangent
+                    pose["tangents"] = tangents
                 for channel in CURVE_CHANNELS:
                     field_name = "curve_" + channel
                     if field_name in key:

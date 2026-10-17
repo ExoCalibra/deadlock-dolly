@@ -167,6 +167,10 @@ class NativeBridge(MediaTransport):
         self._viewer_sequence = 0
         self._viewer_enabled = False
         self._viewer_error = ""
+        self._preview_mapping = None
+        self._preview_sequence = 0
+        self._preview_enabled = False
+        self._preview_error = ""
         self.token = token
         self.editor_pid = editor_pid
         self.game_pid = 0
@@ -888,6 +892,26 @@ class NativeBridge(MediaTransport):
             self._store(offset + 8, even)
             self._editor_framing_grid_sequence = even
 
+    def configure_level_view(self, *, binding=None, standard_aspect=None):
+        """Optional level-view block: the key binding and the normal framing.
+
+        Native keeps the live-only reset; this block only carries the shortcut
+        and the project's normal aspect so nothing round-trips through Python
+        while the camera is being levelled.
+        """
+        from . import editor_wire as wire
+        with self._lock:
+            self._check_open()
+            previous = getattr(self, "_editor_level_view_sequence", 0)
+            odd, even = (previous + 1) & 0xffffffff, (previous + 2) & 0xffffffff
+            data = wire.pack_level_view(odd, binding, standard_aspect)
+            offset = wire.LEVEL_VIEW_OFFSET
+            self._store(offset + 8, odd)
+            self._mapping[offset:offset + 8] = data[:8]
+            self._mapping[offset + 12:offset + len(data)] = data[12:]
+            self._store(offset + 8, even)
+            self._editor_level_view_sequence = even
+
     def configure_object_picker(self, objects, *, active=False, preview=False, selected=-1,
                                 distance=None, binding=None):
         """Optional Object Picker block: the placed list and its bindable action.
@@ -1272,6 +1296,104 @@ class NativeBridge(MediaTransport):
                 except Exception as exc:
                     self._viewer_error = "Path viewer close: " + str(exc)
 
+    def _preview_store_sequence(self, value):
+        from . import visualization_preview_wire as wire
+        if self._atomic32 is None:
+            struct.pack_into("<I", self._preview_mapping, wire.SEQUENCE_OFFSET, value)
+        else:
+            slot = ctypes.c_int32.from_buffer(self._preview_mapping, wire.SEQUENCE_OFFSET)
+            self._atomic32(ctypes.byref(slot), ctypes.c_int32(value))
+
+    def _preview_write(self, packet):
+        from . import visualization_preview_wire as wire
+        sequence = struct.unpack_from("<I", packet, wire.SEQUENCE_OFFSET)[0]
+        self._preview_store_sequence(sequence-1)
+        self._preview_mapping[:wire.SEQUENCE_OFFSET] = packet[:wire.SEQUENCE_OFFSET]
+        self._preview_mapping[wire.SEQUENCE_OFFSET+4:len(packet)] = packet[wire.SEQUENCE_OFFSET+4:]
+        self._preview_store_sequence(sequence)
+        self._preview_sequence = sequence
+        self._preview_enabled = bool(struct.unpack_from("<I", packet, 16)[0])
+
+    def publish_visualization_preview(self, packet=None, **identity):
+        """Publish optional render-only bytes without touching committed guides.
+
+        ``packet`` is already compiled by the bounded gesture lifecycle. Only
+        its envelope sequence changes for a stationary-drag heartbeat.
+        """
+        from . import visualization_preview_wire as wire
+        with self._lock:
+            try:
+                self._check_open()
+                sequence = self._preview_sequence+2
+                if sequence > 0xFFFFFFFE:
+                    sequence = 2
+                wrapped = wire.build_preview(packet, sequence=sequence, **identity)
+                if self._preview_mapping is None:
+                    if packet is None:
+                        self._preview_error = ""
+                        return True
+                    name = "Local\\DeadlockDollyNative_"+self.token+".viewer.preview"
+                    if self._mapping_factory is None:
+                        if os.name != "nt":
+                            raise NativeBridgeError("Path preview transport requires Windows")
+                        mapping = mmap.mmap(-1, wire.MAPPING_BYTES, tagname=name, access=mmap.ACCESS_WRITE)
+                    else:
+                        mapping = self._mapping_factory(name, wire.MAPPING_BYTES)
+                    if len(mapping) != wire.MAPPING_BYTES:
+                        close = getattr(mapping, "close", None)
+                        if close is not None:
+                            close()
+                        raise NativeBridgeError("Path preview mapping has an unexpected size")
+                    self._preview_mapping = mapping
+                    mapping[:] = b"\0"*wire.MAPPING_BYTES
+                self._preview_write(wrapped)
+                self._preview_error = ""
+                return True
+            except Exception as exc:
+                self._preview_error = str(exc)
+                # Draft failure clears only the separate optional mapping.
+                if self._preview_mapping is not None:
+                    try:
+                        sequence = self._preview_sequence+2
+                        if sequence > 0xFFFFFFFE:
+                            sequence = 2
+                        self._preview_write(wire.build_preview(sequence=sequence))
+                    except Exception:
+                        self._preview_enabled = False
+                return False
+
+    def _close_visualization_preview(self):
+        if self._preview_mapping is None:
+            return
+        from . import visualization_preview_wire as wire
+        mapping = self._preview_mapping
+        try:
+            sequence = self._preview_sequence+2
+            if sequence > 0xFFFFFFFE:
+                sequence = 2
+            self._preview_store_sequence(sequence-1)
+            packet = wire.build_preview(sequence=sequence)
+            mapping[:8] = packet[:8]
+            mapping[12:] = packet[12:]+b"\0"*(wire.MAPPING_BYTES-len(packet))
+            self._preview_store_sequence(sequence)
+            self._preview_enabled = False
+        except Exception as exc:
+            self._preview_error = "Path preview close: "+str(exc)
+        finally:
+            self._preview_mapping = None
+            close = getattr(mapping, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception as exc:
+                    self._preview_error = "Path preview close: "+str(exc)
+
+    def visualization_preview_diagnostics(self):
+        with self._lock:
+            return {"mapping_open": self._preview_mapping is not None,
+                    "enabled": self._preview_enabled, "revision": self._preview_sequence,
+                    "error": self._preview_error}
+
     def visualization_diagnostics(self):
         with self._lock:
             return {"mapping_open": self._viewer_mapping is not None,
@@ -1299,6 +1421,7 @@ class NativeBridge(MediaTransport):
         result["graphics"] = self.graphics_diagnostics()
         result["input"] = self.input_diagnostics()
         result["visualization"] = self.visualization_diagnostics()
+        result["visualization_preview"] = self.visualization_preview_diagnostics()
         try:
             result["media"] = self.media_status()
         except (NativeBridgeError, OSError, ValueError) as exc:
@@ -1331,6 +1454,7 @@ class NativeBridge(MediaTransport):
                 if self._thread is not None and self._thread is not threading.current_thread():
                     self._thread.join(timeout=0.5)
                 with self._lock:
+                    self._close_visualization_preview()
                     self._close_visualization()
                     self._closed = True
                     close = getattr(self._mapping, "close", None)

@@ -87,9 +87,12 @@ class VisualizationTransportTests(unittest.TestCase):
 
     def test_authoring_revision_reaches_optional_mapping_without_camera_writes(self):
         main = bytes(self.maps[0][1])
+        self.project.set_camera_tangent(1, "x", "broken", incoming=-12, outgoing=55)
         self.assertTrue(self.bridge.publish_visualization(self.project, revision=17, session_id=0xFEDCBA9876543210))
         self.assertEqual(wire.HEADER.unpack_from(self.packet())[9], 17)
         self.assertEqual(wire.HEADER.unpack_from(self.packet())[10], 0xFEDCBA9876543210)
+        offset = wire.HEADER_BYTES + 2 * 8 + wire.KEY_METADATA.size
+        self.assertEqual(wire.KEY_METADATA.unpack_from(self.packet(), offset)[9:13], (3, 0, -12, 55))
         self.assertEqual(bytes(self.maps[0][1]), main)
 
     def test_selection_and_disable_publish_revisions_without_new_mapping(self):

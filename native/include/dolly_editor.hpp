@@ -146,9 +146,23 @@ enum class EditorAction : std::uint32_t {
     SetCameraPosition,
     SetCameraCurveValue,
     SelectCurveCamera,
+    SetCameraPositionTangents,
+    PreviewCameraCurveValue,
+    PreviewCameraPositionTangents,
+    ClearCameraCurvePreview,
+    // Live level-view reset. Appended so every existing action ID is unchanged.
+    LevelView,
     SetVideoAeCamera,
     SetVideoUsdCamera
 };
+static_assert(static_cast<std::uint32_t>(EditorAction::LevelView)==118,
+              "Stable level-view action ID");
+static_assert(static_cast<std::uint32_t>(EditorAction::PreviewCameraCurveValue)==115 &&
+              static_cast<std::uint32_t>(EditorAction::PreviewCameraPositionTangents)==116 &&
+              static_cast<std::uint32_t>(EditorAction::ClearCameraCurvePreview)==117,
+              "Stable render-only curve preview action IDs");
+static_assert(static_cast<std::uint32_t>(EditorAction::SetCameraPositionTangents) == 114,
+              "Stable XYZ arrival/departure action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::SetCameraCurveValue) == 112 &&
               static_cast<std::uint32_t>(EditorAction::SelectCurveCamera) == 113,
               "Stable unified curve action IDs");
@@ -156,9 +170,9 @@ static_assert(static_cast<std::uint32_t>(EditorAction::SetCameraPosition) == 111
               "Stable XYZ value-graph action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::SetPauseAfterCapture) == 110,
               "Stable pause-after-capture preference action ID");
-static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoAeCamera) == 114,
+static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoAeCamera) == 119,
               "Stable After Effects camera export action ID");
-static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoUsdCamera) == 115,
+static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoUsdCamera) == 120,
               "Stable USD camera export action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::TakeScreenshot) == 98,
               "Stable screenshot action ID");
@@ -369,6 +383,20 @@ static_assert(kEditorFramingGridOffset + sizeof(EditorFramingGridConfig) <=
 static_assert(static_cast<std::uint32_t>(EditorAction::SetCameraTime) == 95 &&
                   static_cast<std::uint32_t>(EditorAction::SetCameraRoll) == 96,
               "Stable inline camera edit action IDs");
+// Optional level-view block after the framing guide. Carries the bindable
+// action (same packed vk/modifier convention) and the project's normal aspect
+// ratio. The reset itself is live-only: it levels the paused camera's roll and
+// restores this framing without touching a saved camera, the project or Undo.
+constexpr std::size_t kEditorLevelViewOffset = 2 * 1024 * 1024 + 24448;
+struct EditorLevelViewConfig {
+    char magic[8];
+    std::uint32_t sequence, abi, flags, reserved;
+    double standard_aspect;
+};
+static_assert(sizeof(EditorLevelViewConfig) == 32, "Level view config layout");
+static_assert(kEditorLevelViewOffset + sizeof(EditorLevelViewConfig) <=
+                  2 * 1024 * 1024 + 24576,
+              "Level view config fits the mapping");
 static_assert(static_cast<std::uint32_t>(EditorAction::FramingGrid) == 97,
               "Stable framing guide action ID");
 // Object Picker config: its own 4 KiB page appended after the legacy tail
@@ -617,6 +645,13 @@ bool editor_attach_config(EditorAttachConfig& out) noexcept;
 bool editor_follow_config(EditorFollowConfig& out) noexcept;
 // Published framing-guide switch; false while no valid block has arrived.
 bool editor_framing_grid_enabled() noexcept;
+// Live level-view request: levels the paused camera and restores the published
+// normal framing. Consumed once per rendered manual frame; false when no
+// request was pending or the editor does not own the live manual camera.
+bool editor_apply_level_view(CameraPose& pose) noexcept;
+// Published level-view config (binding and normal framing); false while no
+// valid block has arrived.
+bool editor_level_view_config(EditorLevelViewConfig& out) noexcept;
 // Published Object Picker config; false while no valid block has arrived.
 bool editor_object_config(EditorObjectConfig& out) noexcept;
 bool editor_camera_list(EditorCameraList& out) noexcept;

@@ -31,6 +31,10 @@ std::shared_ptr<const EditorDofConfig> gDofConfig;
 std::shared_ptr<const EditorCitadelDofConfig> gCitadelDofConfig;
 std::shared_ptr<const EditorFollowConfig> gFollowConfig;
 std::shared_ptr<const EditorFramingGridConfig> gFramingGridConfig;
+std::shared_ptr<const EditorLevelViewConfig> gLevelViewConfig;
+// One-shot live reset armed by the level-view key; consumed on the next
+// rendered manual frame, so no project action, event or Undo step is created.
+std::atomic<bool> gLevelViewRequest{false};
 std::shared_ptr<const EditorObjectConfig> gObjectConfig;
 std::uint32_t gPropProbeSequence = 0;  // last consumed prop-probe request sequence
 std::shared_ptr<const EditorCameraList> gCameraList;
@@ -210,6 +214,17 @@ bool reserved_input(unsigned vk) noexcept {
         if (grid_vk && grid_vk == vk && grid_mods == modifiers())
             return true;
     }
+    // Level view is a plain single key, so it is swallowed only in the two owner
+    // modes that actually act on it. Swallowing it everywhere (as the framing
+    // guide's modifier chord does) would silently eat the game's own key while
+    // the panel is disabled, in the game UI, unfocused or behind ReShade.
+    if (owner == EditorOwner::Panel || owner == EditorOwner::Flight) {
+        auto level = std::atomic_load(&gLevelViewConfig);
+        const auto level_vk = level ? std::uint16_t(level->reserved & 0xffffu) : 0;
+        const auto level_mods = level ? std::uint16_t(level->reserved >> 16) : 0;
+        if (level_vk && level_vk == vk && level_mods == modifiers())
+            return true;
+    }
     for (unsigned i : {9u, 10u})
         if ((owner != EditorOwner::Console || (i == 9 && function_key(vk))) &&
             c->bindings[i].vk == vk && c->bindings[i].modifiers == modifiers())
@@ -296,6 +311,17 @@ void dispatch(EditorAction action) noexcept {
     }
     editor_enqueue(action);
 }
+// Arm the one-shot level-view reset. The key is only meaningful while the
+// editor owns the live paused manual camera; anything else is a silent no-op,
+// matching the enabled state of the other live framing controls.
+void editor_request_level_view() noexcept {
+    const auto state = editor_snapshot();
+    if (!state.enabled || !state.ready || !state.paused || !state.manual_active ||
+        state.playing || state.busy || state.attach_preview ||
+        editor_recording_locks_cameras(editor_recording_status().state))
+        return;
+    gLevelViewRequest.store(true, std::memory_order_release);
+}
 void dispatch_key_press(unsigned vk) noexcept {
     // Raw-input and window-message callers check foreground ownership before
     // recording a key. Shortcuts run only on that key's fresh down edge, never
@@ -349,7 +375,7 @@ void dispatch_key_press(unsigned vk) noexcept {
             return;
         }
     }
-    // The Object Picker is its own mode, toggled by its own binding (default R),
+    // The Object Picker is its own mode, toggled by its own binding (default B),
     // which also lives in the optional block. It opens from Panel/Flight and
     // closes when already open. While open it owns the panel and accepts the
     // same key to close, like a mode switch.
@@ -361,6 +387,19 @@ void dispatch_key_press(unsigned vk) noexcept {
             (owner == EditorOwner::Panel || owner == EditorOwner::Flight)) {
             const bool open = (objects->flags & 1u) != 0;
             editor_enqueue(open ? EditorAction::ObjectPickerCancel : EditorAction::ObjectPickerOpen);
+            return;
+        }
+    }
+    // Level view is a live-only reset of the paused camera; it never enqueues a
+    // project action, so the key simply arms the next manual frame. A plain
+    // letter must not fire while a Dolly text field is collecting typing.
+    if (auto level = std::atomic_load(&gLevelViewConfig)) {
+        EditorBinding level_binding{};
+        level_binding.vk = static_cast<std::uint16_t>(level->reserved & 0xffffu);
+        level_binding.modifiers = static_cast<std::uint16_t>(level->reserved >> 16);
+        if (level_binding.vk && binding_down(level_binding) && !gTextInput.load() &&
+            (owner == EditorOwner::Panel || owner == EditorOwner::Flight)) {
+            editor_request_level_view();
             return;
         }
     }
@@ -697,8 +736,40 @@ EditorBinding editor_binding_snapshot(EditorAction action) noexcept {
             result.vk = static_cast<std::uint16_t>(objects->reserved & 0xffffu);
             result.modifiers = static_cast<std::uint16_t>(objects->reserved >> 16);
         }
+    } else if (action == EditorAction::LevelView) {
+        if (auto level = std::atomic_load(&gLevelViewConfig)) {
+            result.vk = static_cast<std::uint16_t>(level->reserved & 0xffffu);
+            result.modifiers = static_cast<std::uint16_t>(level->reserved >> 16);
+        }
     }
     return result;
+}
+bool editor_level_view_config(EditorLevelViewConfig& out) noexcept {
+    auto level = std::atomic_load(&gLevelViewConfig);
+    if (!level || !gConnected.load())
+        return false;
+    out = *level;
+    return true;
+}
+// Arm the one-shot reset. The key is only meaningful while the editor owns the
+// live paused manual camera; anything else is a silent no-op, matching the
+// enabled state of the other live framing controls.
+bool editor_level_view_request() noexcept {
+    return gLevelViewRequest.exchange(false, std::memory_order_acq_rel);
+}
+bool editor_apply_level_view(CameraPose& pose) noexcept {
+    if (!editor_level_view_request())
+        return false;
+    auto level = std::atomic_load(&gLevelViewConfig);
+    if (!level || !gConnected.load())
+        return false;
+    // Level the horizon and return to the published normal framing. Only the
+    // live manual pose changes: no saved camera, project state or Undo entry.
+    pose[5] = 0.0;
+    if (std::isfinite(level->standard_aspect) && level->standard_aspect >= .5 &&
+        level->standard_aspect <= 4.0)
+        pose[6] = level->standard_aspect;
+    return true;
 }
 bool editor_framing_grid_enabled() noexcept {
     auto grid = std::atomic_load(&gFramingGridConfig);
@@ -788,8 +859,10 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
     if (!std::isfinite(value) ||
         std::uint32_t(action) > std::uint32_t(EditorAction::SetVideoUsdCamera))
         return false;
+    const bool preview_action=action==EditorAction::PreviewCameraCurveValue || action==EditorAction::PreviewCameraPositionTangents;
+    const bool clear_preview=action==EditorAction::ClearCameraCurvePreview;
     auto state = editor_snapshot();
-    if (!state.enabled)
+    if (!state.enabled && !clear_preview)
         return false;
     if ((action == EditorAction::SetVideoAeCamera || action == EditorAction::SetVideoUsdCamera) &&
         (state.busy || pose_override || (value != 0 && value != 1)))
@@ -799,13 +872,15 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
         action == EditorAction::DeleteCamera || action == EditorAction::UndoShot ||
         action == EditorAction::RedoShot || action == EditorAction::SetCameraTime ||
         action == EditorAction::SetCameraRoll || action == EditorAction::SetCameraPosition ||
-        action == EditorAction::SetCameraCurveValue ||
+        action == EditorAction::SetCameraCurveValue || action == EditorAction::SetCameraPositionTangents ||
         action == EditorAction::SetFraming ||
         (action >= EditorAction::SetAttachTarget && action <= EditorAction::AttachReset) ||
         action == EditorAction::AttachSnap || action == EditorAction::SetAttachBone ||
         action == EditorAction::SetSourceBlend;
-    if (camera_mutation && editor_recording_locks_cameras(editor_recording_status().state))
+    if ((camera_mutation || preview_action) && editor_recording_locks_cameras(editor_recording_status().state))
         return false;
+    if(clear_preview && (!pose_override || (*pose_override)[1]!=0 || (*pose_override)[2]!=0 ||
+       !visualization_native_preview_request_matches(value,*pose_override))) return false;
     if (action == EditorAction::SetPauseAfterCapture &&
         (!state.ready || state.busy || state.owner != EditorOwner::Panel || pose_override ||
          (value != 0 && value != 1)))
@@ -841,16 +916,30 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
     const bool camera_action =
         action >= EditorAction::SelectCamera && action <= EditorAction::SetCameraRoll;
     const bool curve_action = action == EditorAction::SetCameraCurveValue ||
-                              action == EditorAction::SelectCurveCamera;
+                              action == EditorAction::SelectCurveCamera ||
+                              action == EditorAction::SetCameraPositionTangents || preview_action;
     if (curve_action) {
         EditorCameraList list{};
         const auto path = visualization_snapshot();
+        CameraPose curve_request=pose_override ? *pose_override : CameraPose{};
+        const bool tangent_action=action==EditorAction::SetCameraPositionTangents || action==EditorAction::PreviewCameraPositionTangents;
+        if(preview_action) {
+            if(!pose_override || value<0 || value!=std::floor(value) || value>=NativePath::max_camera_keys*12 ||
+               (!tangent_action && (!std::isfinite(curve_request[1]) || curve_request[1]<0 || curve_request[1]>6 || curve_request[1]!=std::floor(curve_request[1])))) return false;
+            const auto channel=tangent_action ? (std::uint32_t(value)%12)/4 : unsigned(curve_request[1]);
+            if(!visualization_native_preview_request_matches(tangent_action ? std::floor(value/12) : value,*pose_override,channel)) return false;
+            curve_request[6]=0;
+        }
         if (!pose_override || !state.ready || !state.focused || !state.paused || state.busy ||
             state.playing || state.attach_preview || state.owner != EditorOwner::Panel ||
             !editor_camera_list(list) || list.total != state.camera_count || !path ||
             path->camera_count() != list.total || path->project_revision() != list.revision ||
-            !valid_visualization_curve_action(*path, value, *pose_override,
-                                             action == EditorAction::SelectCurveCamera))
+            ((tangent_action || preview_action) && (state.bone_picker || state.object_picker ||
+                path->selected_camera() != state.selected_camera)) ||
+            (tangent_action ?
+                !valid_visualization_tangent_action(*path, value, curve_request) :
+                !valid_visualization_curve_action(*path, value, curve_request,
+                                                 action == EditorAction::SelectCurveCamera)))
             return false;
     }
     if (action == EditorAction::SetCameraPosition) {
@@ -876,7 +965,7 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
     }
     // While inspecting, only recovery/ownership and picker actions may escape
     // to Python. In particular no capture, seek or recording of this view.
-    if (state.bone_picker && action != EditorAction::CancelBonePicker &&
+    if (state.bone_picker && !clear_preview && action != EditorAction::CancelBonePicker &&
         action != EditorAction::FinishBonePicker && action != EditorAction::GameUI &&
         action != EditorAction::Console && action != EditorAction::Panel &&
         action != EditorAction::Stop)
@@ -1056,7 +1145,7 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
                action != EditorAction::SetAttachBone && action != EditorAction::FinishBonePicker &&
                action != EditorAction::StartGameFollow && action != EditorAction::ObjectPlace &&
                action != EditorAction::ObjectTransform && action != EditorAction::ClearCameraPath &&
-               action != EditorAction::PrepareCinematic && action != EditorAction::SetCameraPosition && !camera_action && !curve_action)
+               action != EditorAction::PrepareCinematic && action != EditorAction::SetCameraPosition && !camera_action && !curve_action && !clear_preview)
         return false;
     if (action == EditorAction::SetSpeed) {
         if (value < 1 || value > 10000)
@@ -1556,6 +1645,29 @@ void editor_worker_tick(unsigned char* memory, bool connected) noexcept {
                 }
             }
         }
+        auto level_source = memory + kEditorLevelViewOffset;
+        auto level_sequence = reinterpret_cast<volatile LONG*>(level_source + 8);
+        const auto level_first = InterlockedCompareExchange(level_sequence, 0, 0);
+        const auto level_previous = std::atomic_load(&gLevelViewConfig);
+        if (!(level_first & 1) &&
+            (!level_previous || level_previous->sequence != std::uint32_t(level_first))) {
+            EditorLevelViewConfig level{};
+            std::memcpy(&level, level_source, sizeof(level));
+            MemoryBarrier();
+            const auto level_vk = std::uint32_t(level.reserved & 0xffffu);
+            const auto level_mods = std::uint32_t(level.reserved >> 16);
+            if (level_first == InterlockedCompareExchange(level_sequence, 0, 0) &&
+                std::memcmp(level.magic, "DLYLEVL1", 8) == 0 && level.abi == 1 &&
+                !(level.flags & ~1u) && level_vk <= 0xff && level_mods <= 7 &&
+                (!std::isfinite(level.standard_aspect) ||
+                 (level.standard_aspect >= .5 && level.standard_aspect <= 4.0))) {
+                try {
+                    std::atomic_store(&gLevelViewConfig,
+                                      std::make_shared<const EditorLevelViewConfig>(level));
+                } catch (...) {
+                }
+            }
+        }
         auto object_source = memory + kEditorObjectOffset;
         auto object_sequence = reinterpret_cast<volatile LONG*>(object_source + 8);
         const auto object_first = InterlockedCompareExchange(object_sequence, 0, 0);
@@ -1817,6 +1929,8 @@ void editor_worker_tick(unsigned char* memory, bool connected) noexcept {
         std::atomic_store(&gCitadelDofConfig, std::shared_ptr<const EditorCitadelDofConfig>{});
         std::atomic_store(&gFollowConfig, std::shared_ptr<const EditorFollowConfig>{});
         std::atomic_store(&gFramingGridConfig, std::shared_ptr<const EditorFramingGridConfig>{});
+        std::atomic_store(&gLevelViewConfig, std::shared_ptr<const EditorLevelViewConfig>{});
+        gLevelViewRequest.store(false, std::memory_order_release);
         std::atomic_store(&gObjectConfig, std::shared_ptr<const EditorObjectConfig>{});
         std::atomic_store(&gCameraList, std::shared_ptr<const EditorCameraList>{});
     std::atomic_store(&gLiteReplay, std::shared_ptr<const EditorLiteReplayInfo>{});

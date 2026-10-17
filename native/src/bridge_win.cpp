@@ -1092,6 +1092,10 @@ static void on_view(void* self, std::uintptr_t caller) noexcept {
             }
         } else if (manual_mode && !picker_active) {
             player_capture::set_hidden_handle(0, 4);
+            // A level-view request applies to this live manual pose only, in the
+            // same frame that renders it. The attach-preview branch above stays
+            // untouched so authored offset roll is preserved.
+            editor_apply_level_view(manual_pose);
             editor_integrate_flight(manual_pose, real_delta);
         }
         if (!pose_valid(manual_pose)) {

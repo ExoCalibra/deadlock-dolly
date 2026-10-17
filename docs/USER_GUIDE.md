@@ -184,6 +184,11 @@ changing its position or arrival time. Before the first camera is captured,
 scrolling changes the live framing that the next capture will save. The wheel
 scrolls menus normally while a panel or ReShade has input focus.
 
+Press **R** to level the paused camera you are composing with and return it to
+the shot's normal aspect and zoom, for example after banking the view with Q or
+E. Level view is a live reset only: no saved camera, project value or Undo step
+changes, and previewing a camera again shows that camera's own framing.
+
 The in-game **Look** tab contains the depth-of-field controls.
 
 **Toggle floating health bars** hides unit bars using the game's panel scales.

@@ -592,16 +592,17 @@ struct CurveViewerFixture {
             number(blob, 0); number(blob, 0);
         }
         VisualizationHeader header{};
-        std::memcpy(header.magic, "DLYVIS01", 8); header.sequence = 2; header.abi = 3;
+        std::memcpy(header.magic, "DLYVIS01", 8); header.sequence = 2; header.abi = 4;
         header.enabled = 1; header.selected_camera = 1; header.camera_count = 2;
         header.path_bytes = std::uint32_t(blob.size()); header.sample_budget = 2048;
         header.marker_budget = 64; header.project_revision = 7;
-        header.session_id = 0xf123456789abcdefULL; header.key_metadata_bytes = 128;
+        header.session_id = 0xf123456789abcdefULL; header.key_metadata_bytes = 2*136;header.flags=2;
         std::memcpy(memory, &header, sizeof(header));
         std::vector<unsigned char> body; number(body, 0); number(body, 1);
         for (const auto& pose : {first, last}) {
             for (double value : pose) number(body, value);
             u32(body, 0); u32(body, 0);
+            for(unsigned axis=0;axis<3;++axis) {u32(body,0);u32(body,0);number(body,0);number(body,0);}
         }
         body.insert(body.end(), blob.begin(), blob.end());
         std::memcpy(memory + 64, body.data(), body.size());
@@ -1671,6 +1672,59 @@ void editor_framing_checks() {
     editor_update_view(true, false, true, pose);
     require(!editor_request_framing_factor(.8), "Typed FOV accepted during playback");
     editor_update_view(true, true, true, pose);
+    // Live level view: R levels the paused camera and returns the live framing
+    // to the project's normal aspect without enqueueing any project edit.
+    {
+        std::vector<unsigned char> level_memory(kMappingBytes);
+        EditorLevelViewConfig level{};
+        std::memcpy(level.magic, "DLYLEVL1", 8);
+        level.sequence = 2;
+        level.abi = 1;
+        level.flags = 1;
+        level.reserved = std::uint32_t('R');
+        level.standard_aspect = 16.0 / 9;
+        std::memcpy(level_memory.data() + kEditorLevelViewOffset, &level, sizeof(level));
+        editor_worker_tick(level_memory.data(), true);
+        EditorLevelViewConfig published{};
+        require(editor_level_view_config(published) && published.reserved == std::uint32_t('R'),
+                "Level view binding did not publish");
+        close_to(published.standard_aspect, 16.0 / 9,
+                 "Level view normal framing did not publish");
+        EditorLevelViewConfig rejected{};
+        level.reserved = std::uint32_t('R') | 8u << 16;
+        std::memcpy(level_memory.data() + kEditorLevelViewOffset, &level, sizeof(level));
+        editor_worker_tick(level_memory.data(), true);
+        require(editor_level_view_config(rejected) && rejected.sequence == 2,
+                "Invalid level view modifiers replaced the published block");
+
+        CameraPose live{1, 2, 3, 4, 5, 6, 1.8};
+        editor_set_owner(EditorOwner::Panel);
+        editor_update_view(true, true, true, live);
+        dolly::gAcknowledged = dolly::gLastEvent;
+        const auto idle_serial = dolly::gLastEvent;
+        require(!editor_apply_level_view(live) && live[5] == 6 && live[6] == 1.8,
+                "Level view applied without a pending request");
+        // The key is swallowed from the game (reserved_input needs a real
+        // foreground window, so this fixture drives the same transition).
+        dolly::key_event('R', true);
+        dolly::key_event('R', false);
+        require(editor_apply_level_view(live) && live[5] == 0,
+                "Level view key did not level the live camera");
+        close_to(live[6], 16.0 / 9, "Level view did not restore the normal framing");
+        require(dolly::gLastEvent == idle_serial, "Level view enqueued a project edit");
+        require(!editor_apply_level_view(live), "A level-view request applied twice");
+        // Playback and a non-manual view never arm the reset.
+        editor_update_view(true, false, true, live);
+        dolly::key_event('R', true);
+        dolly::key_event('R', false);
+        require(!editor_apply_level_view(live), "Level view armed during replay playback");
+        editor_update_view(true, true, false, live);
+        dolly::key_event('R', true);
+        dolly::key_event('R', false);
+        require(!editor_apply_level_view(live),
+                "Level view armed without the live manual camera");
+        editor_update_view(true, true, true, live);
+    }
     config->camera_count = 2;
     auto saved_list = std::atomic_load(&dolly::gCameraList);
     auto list = std::make_shared<EditorCameraList>();
@@ -1765,6 +1819,55 @@ void editor_framing_checks() {
                 "Real enqueue changed full-shot selection payload");
         require(dolly::gLastEvent == curve_serial + 2,
                 "Rejected unified curve gestures advanced the event ring");
+        CameraPose tangent_request{7,12.125,-8.25,1,0x89abcdef,0xf1234567,0};
+        const auto tangent_serial=dolly::gLastEvent;
+        const auto saved_selection=config->selected_camera;
+        require(saved_selection==0 && !editor_enqueue(EditorAction::SetCameraPositionTangents,15,&tangent_request),
+                "XYZ tangent request ignored a mismatched editor/viewer selection");
+        config->selected_camera=1;
+        require(editor_enqueue(EditorAction::SetCameraPositionTangents,15,&tangent_request),
+                "Atomic XYZ tangent request did not enter the real event ring");
+        const auto& tangent_event=dolly::gEvents[tangent_serial%kEditorEventCount];
+        require(tangent_event.action==114 && tangent_event.value==15 &&
+                std::equal(std::begin(tangent_event.pose),std::end(tangent_event.pose),tangent_request.begin()),
+                "Real enqueue changed XYZ tangent mode/pair/identity payload");
+        for(unsigned field:{0u,3u,4u,5u,6u}) {
+            auto stale=tangent_request;stale[field]+=1;
+            require(!editor_enqueue(EditorAction::SetCameraPositionTangents,15,&stale),
+                    "Stale XYZ tangent gesture entered the real event ring");
+        }
+        require(!editor_enqueue(EditorAction::SetCameraPositionTangents,14,&tangent_request),
+                "Unequal linked tangent request entered the real event ring");
+        require(dolly::gLastEvent==tangent_serial+1,"Rejected tangent requests advanced the event ring");
+        const auto graph=visualization_snapshot();const auto preview_token=visualization_begin_native_preview(*graph,1,4);
+        auto preview_request=curve_request;preview_request[6]=preview_token;
+        const auto preview_serial=dolly::gLastEvent;
+        require(editor_enqueue(EditorAction::PreviewCameraCurveValue,1,&preview_request),
+                "Guarded render-only value draft did not enter the event ring");
+        const auto& preview_event=dolly::gEvents[preview_serial%kEditorEventCount];
+        require(preview_event.action==115 && preview_event.pose[6]==preview_token &&
+                visualization_snapshot()==graph && config->selected_camera==1,
+                "Preview event changed authoritative geometry, selection or its token");
+        auto wrong_token=preview_request;wrong_token[6]+=1;
+        require(!editor_enqueue(EditorAction::PreviewCameraCurveValue,1,&wrong_token),"Wrong preview token entered the ring");
+        auto wrong_channel=preview_request;wrong_channel[1]=3;
+        require(!editor_enqueue(EditorAction::PreviewCameraCurveValue,1,&wrong_channel),"Preview token changed its gesture channel");
+        CameraPose clear_request{7,0,0,1,0x89abcdef,0xf1234567,double(preview_token)};
+        const auto enabled=config->enabled;config->enabled=0;editor_foreground_window_stub=nullptr;
+        require(!editor_enqueue(EditorAction::PreviewCameraCurveValue,1,&preview_request) &&
+                editor_enqueue(EditorAction::ClearCameraCurvePreview,1,&clear_request),
+                "Lost focus/disabled editor blocked terminal clear or admitted another draft");
+        config->enabled=enabled;editor_foreground_window_stub=dolly::gWindow.load();
+        visualization_end_native_preview(preview_token);
+        require(!editor_enqueue(EditorAction::PreviewCameraCurveValue,1,&preview_request),"Ended preview token admitted a late draft");
+        const auto tangent_token=visualization_begin_native_preview(*graph,1,0);
+        auto tangent_preview=tangent_request;tangent_preview[6]=tangent_token;
+        require(editor_enqueue(EditorAction::PreviewCameraPositionTangents,15,&tangent_preview),
+                "Guarded atomic tangent draft did not enter the event ring");
+        clear_request[6]=tangent_token;
+        require(editor_enqueue(EditorAction::ClearCameraCurvePreview,1,&clear_request),"Tangent preview cannot terminate");
+        visualization_end_native_preview(tangent_token);
+        config->selected_camera=saved_selection;
 
     }
     {
@@ -1793,7 +1896,8 @@ void editor_framing_checks() {
             require(!editor_enqueue(action), "Paused recording accepted a capture action into the real event ring");
         for (auto action : {EditorAction::ClearCameraPath, EditorAction::DeleteCamera, EditorAction::UndoShot,
                             EditorAction::RedoShot, EditorAction::SetCameraTime, EditorAction::SetCameraRoll,
-                            EditorAction::SetCameraPosition, EditorAction::SetCameraCurveValue, EditorAction::SetFraming, EditorAction::SetAttachTarget,
+                            EditorAction::SetCameraPosition, EditorAction::SetCameraCurveValue, EditorAction::SetCameraPositionTangents,
+                            EditorAction::PreviewCameraCurveValue,EditorAction::PreviewCameraPositionTangents, EditorAction::SetFraming, EditorAction::SetAttachTarget,
                             EditorAction::SetAttachPoint, EditorAction::SetAttachOffsets, EditorAction::SetAttachSmoothing,
                             EditorAction::SetAttachHide, EditorAction::AttachCycleTarget, EditorAction::AttachCyclePoint,
                             EditorAction::AttachReset, EditorAction::AttachSnap, EditorAction::SetAttachBone,

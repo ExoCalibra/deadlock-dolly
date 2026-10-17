@@ -182,6 +182,20 @@ class NativeEvaluationTests(unittest.TestCase):
             shot.lens_interpolation = lens_mode
             self.assert_matches(shot, [0, 1, 1.01, 1.5, 2, 2.999, 3, 4])
 
+    def test_authored_xyz_arrival_departure_and_dormant_modes(self):
+        shot = Project(keyframes=[camera(0), camera(.7, 10, -5, 1), camera(2, 20, 5, -2)])
+        shot.set_camera_tangent(0, "x", "flat")
+        shot.set_camera_tangent(1, "x", "broken", incoming=0, outgoing=30)
+        shot.set_camera_tangent(1, "y", "linked", incoming=-7, outgoing=-7)
+        shot.set_camera_tangent(2, "z", "flat")
+        for interpolation in ("smooth", "linear", "spline", "smooth"):
+            shot.interpolation = interpolation
+            self.assert_matches(shot, [-1, 0, .07, .3, .7, .9, 1.4, 1.99, 2, 3])
+        two = Project(keyframes=[camera(0), camera(2, 10)])
+        two.set_camera_tangent(0, "x", "flat")
+        two.set_camera_tangent(1, "x", "flat")
+        self.assert_matches(two, [-1, 0, .5, 1, 1.5, 2, 3])
+
     def test_single_key_and_cvar_extended_hold(self):
         shot = Project(keyframes=[camera(4, 12, 34, 56, 7, 720, -390, 2.1)],
                        tracks=[CvarTrack("r_dof", [TrackKey(10, 1)])])

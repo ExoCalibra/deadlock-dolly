@@ -1,6 +1,8 @@
 #include "dolly_sound_compat_generated.hpp"
+#include "dolly_sound_capture.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <vector>
@@ -129,5 +131,15 @@ int main(int argc, char** argv) {
                 check(out.functions[i] == profile.signatures[i].reviewed_rva);
         }
     }
+    // Interface-voice silence rule: any voice started inside the armed window is
+    // declined, and nothing is declined once the window closes. The cue has no
+    // single stable asset path, so the window itself is the rule. Tested as a
+    // pure decision so the audio-thread hook needs no game process here.
+    using dolly::ui_voice_silenced;
+    check(ui_voice_silenced(100, 200));
+    check(ui_voice_silenced(199, 200));
+    check(!ui_voice_silenced(200, 200));
+    check(!ui_voice_silenced(201, 200));
+    check(!ui_voice_silenced(100, 0));
     std::puts("sound compatibility tests passed");
 }

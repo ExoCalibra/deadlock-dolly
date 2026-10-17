@@ -667,11 +667,18 @@ void OverlayPanel::replay_badge(const EditorSnapshot& state) {
         }
     }
 }
-bool OverlayPanel::guides_visible(const EditorSnapshot& state) noexcept {
-    return show_path_guides && state.enabled && state.focused && state.ready && state.paused &&
+bool OverlayPanel::guides_visible(const EditorSnapshot& state,bool) noexcept {
+    return show_path_guides && state.enabled && state.ready && state.paused &&
            state.manual_active && !state.playing && !state.busy && state.view_width > 0 &&
-           state.view_height > 0 &&
-           (state.owner == EditorOwner::Flight || state.owner == EditorOwner::Panel);
+           state.view_height > 0 && !state.attach_preview && !state.bone_picker && !state.object_picker &&
+           !editor_recording_locks_cameras(editor_recording_status().state) &&
+           (state.owner == EditorOwner::Flight || state.owner == EditorOwner::Panel || state.owner==EditorOwner::Unfocused);
+}
+bool OverlayPanel::preview_guides_visible(const EditorSnapshot& state,const VisualizationPreview& preview) noexcept {
+    return preview.path && guides_visible(state,preview.source==1) && !state.attach_preview &&
+        !state.bone_picker && !state.object_picker &&
+        !editor_recording_locks_cameras(editor_recording_status().state) &&
+        (preview.source==1 || (preview.source==2 && state.focused && state.owner==EditorOwner::Panel));
 }
 bool OverlayPanel::framing_grid_visible(const EditorSnapshot& state) noexcept {
     // Same paused-editing policy as the path guides, but independent of the
@@ -707,8 +714,8 @@ void OverlayPanel::draw_framing_grid(const EditorSnapshot& state) {
     draw->PopClipRect();
 }
 void OverlayPanel::draw_path_guides(const EditorSnapshot& state,
-                                    const std::shared_ptr<const VisualizationPath>& path) {
-    if (!path || !path->enabled() || !guides_visible(state))
+                                    const std::shared_ptr<const VisualizationPath>& path,bool desktop_preview) {
+    if (!path || !path->enabled() || !guides_visible(state,desktop_preview))
         return;
     const auto size = ImGui::GetIO().DisplaySize;
     VisualizationView view{state.pose, state.horizontal_fov, double(size.x), double(size.y), 1};

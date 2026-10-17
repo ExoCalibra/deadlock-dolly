@@ -790,9 +790,15 @@ class DollyApp:
             ticked = getattr(self, variable, None)
             setattr(self, attribute, camera_take if ticked is not None and ticked.get() else None)
         self._pending_auto_play = project is not None
-        # A layered take ends with its authored path; the queue records one
-        # isolated take per selected layer after the color take completes.
-        self._auto_finish_layered = bool(pov or bone_project is not None or options.depth or options.layers) and project is not None
+        # Every take that plays an authored project ends with that shot: the path
+        # clamps at its last camera, so nothing further can be captured for it.
+        # Finishing here writes the manifest and sidecars instead of leaving the
+        # recorder open. A plain colour take used to stay open until someone
+        # pressed Finish recording, and because a finished shot stops producing
+        # frames, the status line froze and looked complete while the video was
+        # still unfinalized -- closing either app then left an unusable file.
+        # Free-camera recordings author no project and stay manual.
+        self._auto_finish_layered = project is not None
         self._base_capture = options if options.layers else None
         # Players need a real alpha channel: their layer is recorded by the
         # native ownership capture (players plus their equipment, no NPCs).
@@ -1679,7 +1685,8 @@ class DollyApp:
     def _build_keybinds(self):
         from .ui.controls_page import ControlsActions, ControlsPage
         groups = {
-            "Camera": ("capture", "replace", "play_path", "stop", "previous_view", "next_view", "flight"),
+            "Camera": ("capture", "replace", "play_path", "stop", "previous_view", "next_view",
+                       "flight", "level_view"),
             "Replay": ("play_pause", "seek_back", "seek_forward"),
             "Interface": ("panel", "game_ui", "framing_grid", "object_picker", "reshade"),
             "Movement": ACTION_ORDER[12:],
@@ -2176,6 +2183,8 @@ class DollyApp:
         self.camera_curve_workspace = CameraCurveWorkspace(
             graph, on_change=self._change_unified_curve, on_select=self._select_curve_key,
             on_reset=self._reset_rotation_curve, view=self.timeline_view,
+            on_tangent_change=self._change_camera_tangent,
+            on_preview=self._preview_camera_curve,
             context=lambda: (self.shot_history.session_id, self.shot_history.revision))
         self.camera_curve_workspace.grid(row=1, column=0, sticky="nsew")
         self.position_curve, self.rotation_curve, self.aspect_curve = self.camera_curve_workspace.lanes
@@ -3236,6 +3245,11 @@ class DollyApp:
             self.aspect_curve.set_project(self.project, selected_index=selected_index,
                                           current_time=current_time)
 
+    def _preview_camera_curve(self, project, gesture=None):
+        """Offer a temporary path guide without committing or moving the view."""
+        from dolly import curve_preview
+        curve_preview.offer_desktop(self, project, gesture)
+
     def _select_curve_key(self, index):
         if self.busy or self.playing or not 0 <= index < len(self.project.keyframes):
             return
@@ -3283,6 +3297,45 @@ class DollyApp:
                 self._change_curve_key(index, key.time, value)
         finally:
             self._history_edit_group = previous_group
+
+    def _change_camera_tangent(self, index, channel, mode, incoming=None, outgoing=None):
+        """Commit one XYZ handle gesture through the normal shot/history path."""
+        if not self._shot_edit_ready():
+            self._refresh_curve()
+            return False
+
+        def operation():
+            if (not isinstance(index, int) or isinstance(index, bool)
+                    or not 0 <= index < len(self.project.keyframes)
+                    or channel not in POSITION_CHANNELS):
+                raise ValueError("Choose an existing camera and X, Y or Z.")
+            if self.project.interpolation != "smooth":
+                raise ValueError("Arrival and departure handles are editable in Smooth interpolation.")
+            key = self.project.keyframes[index]
+            if key.source != "free":
+                raise ValueError("Attached cameras follow their target. Edit a free camera's handles.")
+            if self._selection_index(self.camera_tree) != index:
+                raise ValueError("The selected camera changed. Select its handles again.")
+            candidate = copy.deepcopy(self.project)
+            if not candidate.set_camera_tangent(index, channel, mode,
+                                                 incoming=incoming, outgoing=outgoing):
+                return False
+            candidate.validate()
+            previous_group = getattr(self, "_history_edit_group", None)
+            self._history_edit_group = None
+            try:
+                self._commit_project(candidate, key.time)
+            finally:
+                self._history_edit_group = previous_group
+            self.status_text.set(
+                f"Camera {index + 1:02d} {channel.upper()} arrival/departure: {mode.title()}. "
+                "Preview to check the move.")
+            return True
+
+        try:
+            return self._guard("Edit arrival/departure", operation)
+        finally:
+            self._refresh_curve()
 
     def _change_position_curve(self, index, channel, value):
         """Commit one authored world-coordinate edit without retiming or seeking."""
@@ -3492,6 +3545,7 @@ class DollyApp:
             key.curve_pitch = existing.curve_pitch
             key.curve_yaw = existing.curve_yaw
             key.curve_roll = existing.curve_roll
+            key.tangents = copy.deepcopy(existing.tangents)
             keys = list(self.project.keyframes)
             if any(i != index and existing.time == key.time for i, existing in enumerate(keys)):
                 raise ValueError("Another keyframe already exists at that shot time.")

@@ -27,6 +27,10 @@ std::wstring mapping_name;
 ULONGLONG next_open = 0, next_status = 0;
 std::uint32_t accepted = 0, publication = 0, command_error = 0;
 wchar_t command_message[384]{};
+// How long voices are declined around one Dolly-issued replay pause/resume. Long
+// enough to cover the game's own cue, short enough that the first sounds of a
+// resumed replay are the only other thing inside it.
+constexpr unsigned kUiSilenceWindowMs = 250;
 bool video_active() noexcept {
     const auto state = video::status().state;
     return state == video::State::starting || state == video::State::recording ||
@@ -149,6 +153,14 @@ void consume() noexcept {
         break;
     case 8:
         sound_capture_stop();
+        break;
+    case 9:
+        // Arm the voice silence window immediately before Dolly sends its own
+        // replay pause/resume command. A build without the sound hooks rejects
+        // it, so the desktop can say the game's own cue will still play instead
+        // of reporting a silence that never happened.
+        if (!sound_silence_ui_voices(kUiSilenceWindowMs))
+            reject(L"The sound hooks are unavailable; the replay pause cue will still play.");
         break;
     default:
         reject(L"Unknown native media command.");
