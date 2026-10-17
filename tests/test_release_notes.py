@@ -1,9 +1,11 @@
 """Publisher-authored, bounded release previews from existing GitHub metadata."""
 from io import BytesIO
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+from dolly import __version__
 from dolly import updater
 from dolly.release_notes import MAX_BODY_BYTES, MAX_DETAIL, MAX_ENTRIES, MAX_TITLE, parse_release_notes
 
@@ -173,3 +175,20 @@ class ReleaseNotesMetadataTests(unittest.TestCase):
         with patch.object(updater, "parse_release_notes") as parser, self.assertRaises(ValueError):
             updater.select_release(raw, "0.6.49-alpha")
         parser.assert_not_called()
+
+
+class ShippedReleaseNotesTests(unittest.TestCase):
+    """The file the publisher pastes must parse into the in-app preview.
+
+    The desktop reads the release body for its update highlights, and it only
+    matches a bold version line. A body that opens with a plain heading, or with
+    prose above the bullets, installs normally but shows no highlights at all --
+    which is easy to publish by accident because nothing else complains.
+    """
+
+    def test_current_release_notes_parse_into_highlight_entries(self):
+        notes = Path(__file__).resolve().parents[1] / "docs" / f"RELEASE_NOTES_{__version__}.md"
+        self.assertTrue(notes.is_file(), f"no release notes file for {__version__}")
+        entries = parse_release_notes(notes.read_text(encoding="utf-8"), __version__)
+        self.assertGreaterEqual(len(entries), 2, "the publish description needs two to four bullets")
+        self.assertLessEqual(len(entries), 4, "only the first four bullets reach the desktop preview")

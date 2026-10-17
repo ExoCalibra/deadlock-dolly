@@ -54,9 +54,10 @@ folder and run **Dolly.exe**, keeping **_internal** beside it. Existing installe
 versions can use Dolly's updater after publication; **Update now** is required
 before downloading or installing.
 
-The publisher uploads the locally built Windows ZIP,
-**Deadlock_Dolly_0.6.54-alpha_Source.zip** and **SHA256SUMS.txt** from the same
-completed build. Use tag **v0.6.54-alpha** on the tested main-branch commit and
+That Windows ZIP is the release's only attached file. The
+**Deadlock_Dolly_0.6.54-alpha_Source.zip** and **SHA256SUMS.txt** are built beside
+it and kept locally as build records; source is public, so developers use the tag
+or the repository. Use tag **v0.6.54-alpha** on the tested main-branch commit and
 mark the public release **Latest**, with GitHub's pre-release box unchecked.
 Publishing remains a manual step; pushing the source does not publish a release.
 

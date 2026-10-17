@@ -100,11 +100,18 @@ separate folder. Ordinary recovery needs only Dolly.exe.
 ## For the publisher
 
 The in-app highlights use the same short publish description pasted into the
-GitHub release body. Put the exact release version on its own line, such as
-`**0.6.52-alpha**`, followed by two to four bullets in the form
+GitHub release body. Put the exact release version on its own line **in bold**,
+such as `**0.6.52-alpha**`, followed by two to four bullets in the form
 `- **Short title.** *Before:* ... *After:* ...`. Wrapped lines are supported.
 Use the version being published; the example is not an assigned next version.
 No separate summary attachment or package download is needed to read highlights.
+
+Only a bold version line starts the preview: `**0.6.52-alpha**` or a heading that
+contains it, such as `### **v0.6.52-alpha**`. A plain heading like
+`### Deadlock Dolly v0.6.52-alpha` is not a version line, and any plain heading
+ends the preview, so a release body that opens that way shows no highlights at
+all while the update still installs. Bold the version line and keep the bullets
+directly under it.
 
 1. Use a new increasing version in `dolly/__init__.py` for every public build.
 2. Build locally with `tools/build_windows.py`; do not build on GitHub Actions.
@@ -112,9 +119,12 @@ No separate summary attachment or package download is needed to read highlights.
    FFmpeg, and matching native/Python components. Both GUI and updater smoke
    checks must pass.
 3. Create a release from the intended commit on main, using a tag such as
-   `v0.6.52-alpha`. Attach the generated
-   `Deadlock_Dolly_0.6.52-alpha_Windows_x64.zip`,
-   `Deadlock_Dolly_0.6.52-alpha_Source.zip` and `SHA256SUMS.txt`.
+   `v0.6.52-alpha`. Attach only the generated
+   `Deadlock_Dolly_0.6.52-alpha_Windows_x64.zip`: it is what users install and
+   the only asset the updater reads. Leave
+   `Deadlock_Dolly_0.6.52-alpha_Source.zip` and `SHA256SUMS.txt` in `dist/` as
+   local build records. Source is public, so developers use the tag or the
+   repository; release notes may describe them as records, not attachments.
 4. Leave GitHub's pre-release box unchecked and mark the release Latest.
    "alpha" can remain in the title and version. GitHub must expose the uploaded
    Windows asset's SHA-256 digest before the updater accepts it.

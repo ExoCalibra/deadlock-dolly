@@ -8,7 +8,7 @@ of the normal release process.
 
 ## Update the source repository
 
-Use the complete versioned source ZIP or the matching Git checkout. Keep the
+Use the matching Git checkout (the release tag or `main`). Keep the
 `dolly`, `native`, `tests`, `tools`, `packaging`, vendored dependencies and license
 files together at the repository root. Review and commit the source changes,
 then push the intended branch. Do not commit portable runtime folders, personal
@@ -30,8 +30,11 @@ The official unlocker under `third_party` is a separate packaged component.
 
 Follow [UPDATING.md: For the publisher](internal/UPDATING.md#for-the-publisher) for version,
 asset and update-channel requirements. Create the release from the tested commit
-on main and upload the generated Windows ZIP, source ZIP and `SHA256SUMS.txt`
-from `dist/`. Upload the complete Windows ZIP, not just `Dolly.exe`.
+on main and attach the generated Windows ZIP from `dist/`; that is the artifact
+users install and the only one the updater reads. Upload the complete Windows
+ZIP, not just `Dolly.exe`. The Source ZIP and `SHA256SUMS.txt` stay in `dist/` as
+local build records and are not release assets: source is public, so developers
+use the tag or the repository itself.
 
 For public updates, leave GitHub's pre-release box unchecked and designate the
 release Latest; the version may still contain "alpha". Experimental builds
@@ -64,9 +67,9 @@ actual packaged-editor startup fails. Inspect `build/checks/` after a failure.
 
 Successful outputs are under `dist/`:
 
-- `Deadlock_Dolly_0.6.54-alpha_Windows_x64.zip`
-- `Deadlock_Dolly_0.6.54-alpha_Source.zip`
-- `SHA256SUMS.txt`
+- `Deadlock_Dolly_0.6.54-alpha_Windows_x64.zip` — the release asset
+- `Deadlock_Dolly_0.6.54-alpha_Source.zip` — build record, not attached
+- `SHA256SUMS.txt` — local checksum record, not attached
 
 The portable ZIP contains a `DeadlockDolly` folder with `Dolly.exe`, `_internal`,
 `Start_Here.txt`, `LICENSE.txt`, an example shot and `BUILD_INFO.json`. Users
