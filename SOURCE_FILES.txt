@@ -676,7 +676,9 @@ tests/test_player_scratch.py
 docs/RELEASE_NOTES_0.6.46-alpha.md
 native/profiles/deadlock-2026-10-14-6782-complete.json
 native/profiles/scenesystem-2026-10-14-6782.json
+native/profiles/scenesystem-2026-10-16-6793.json
 native/profiles/soundsystem-2026-10-14-6782.json
+native/profiles/soundsystem-2026-10-16-6793.json
 third_party/cvar_unlocker/unlocker-build-6782.patch
 docs/RELEASE_NOTES_0.6.47-alpha.md
 docs/RELEASE_NOTES_0.6.48-alpha.md
@@ -711,6 +713,7 @@ tools/test-lite-policy.cmd
 docs/RELEASE_NOTES_0.6.49-alpha.md
 docs/VIDEO_SCRIPT_0.6.49-alpha.md
 native/profiles/deadlock-2026-10-15-6785-complete.json
+native/profiles/deadlock-2026-10-16-6793-complete.json
 third_party/cvar_unlocker/unlocker-build-6785.patch
 docs/RELEASE_NOTES_0.6.50-alpha.md
 dolly/release_notes.py
@@ -738,6 +741,7 @@ native/ui_override/panorama/layout/citadel_prewarm_assets_status.xml
 native/ui_override/panorama/layout/hud_hideout.xml
 native/ui_override/panorama/styles/citadel_prewarm_assets_status.css
 docs/RELEASE_NOTES_0.6.52-alpha.md
+docs/RELEASE_NOTES_0.6.53-alpha.md
 tests/test_authored_tangents.py
 tests/test_tangent_ui.py
 tests/test_tangent_editor.py

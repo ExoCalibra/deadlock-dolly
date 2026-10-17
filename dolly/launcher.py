@@ -1,4 +1,4 @@
-"""Windows-only Deadlock development launcher with recoverable config mounting.
+﻿"""Windows-only Deadlock development launcher with recoverable config mounting.
 
 ``game_path`` may be the Deadlock installation root, its ``game`` or ``citadel``
 directory, or ``game/bin/win64/deadlock.exe`` (legacy ``citadel.exe`` is also
@@ -52,7 +52,7 @@ CONFETTI_PACK = NATIVE_ROOT / "assets" / "confetti" / "pak01_dir.vpk"
 CONFETTI_PACK_SHA256 = "99c0325fe333bfa12c3f23a2808767c2fd27b49fe0e5abe4531fa472519f8ae6"
 UI_OVERRIDE_PACK = NATIVE_ROOT / "assets" / "ui" / "pak02_dir.vpk"
 UI_OVERRIDE_PACK_SHA256 = "0af30912a471efc984e653ebc57a4c05f210e07f707f42d3bec997fc945b2fe1"
-UNLOCKER_SHA256 = "e20bfec1af110df35750663c5039ebeb46d86fd6c7357aaf90d74082d65195c8"
+UNLOCKER_SHA256 = "5f75ab3dafc73a817bd545a80a7d55110d37ed728f7ad5c0bae8c5a8863106e4"
 # Accepted game-module SHA-256 pins come from native/profiles/manifest.json, the
 # single source of truth shared with the native bridge and its build tests.
 try:
@@ -837,7 +837,7 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
                 f"DOLLY_NATIVE_1\n{bridge.token}\n{bridge.editor_pid}\n",
                 encoding="ascii", newline="\n")
         command = build_command(paths, overlay, port, demo, protocol, launch_options, native=native)
-        metadata = {**marker, "command": command, "selected_demo": str(demo) if demo is not None else None, "port": port, "protocol": protocol, "dolly_version": DOLLY_VERSION, "overlay_dir": str(overlay), "unlocker_version": "v0.5.2-dolly-build-6785", "unlocker_sha256": UNLOCKER_SHA256, "validation": "Windows game startup and selected console protocol require a local probe.", "backup_name": "original.gameinfo.gi", "patched_sha256": hashlib.sha256(patched_data).hexdigest(), "original_mode": stat.S_IMODE(paths.gameinfo.stat().st_mode), "config_state": "prepared"}
+        metadata = {**marker, "command": command, "selected_demo": str(demo) if demo is not None else None, "port": port, "protocol": protocol, "dolly_version": DOLLY_VERSION, "overlay_dir": str(overlay), "unlocker_version": "v0.5.2-dolly-build-6793", "unlocker_sha256": UNLOCKER_SHA256, "validation": "Windows game startup and selected console protocol require a local probe.", "backup_name": "original.gameinfo.gi", "patched_sha256": hashlib.sha256(patched_data).hexdigest(), "original_mode": stat.S_IMODE(paths.gameinfo.stat().st_mode), "config_state": "prepared"}
         metadata["editing_gameinfo_sha256"] = hashlib.sha256(editing.encode("utf-8")).hexdigest()
         metadata["carried_addon_mounts"] = [{"key": key, "path": path} for key, path in addon_mounts]
         if native:
@@ -984,3 +984,4 @@ def _main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+

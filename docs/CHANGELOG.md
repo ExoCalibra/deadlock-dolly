@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.6.53-alpha
 
 - Add saved XYZ arrival/departure handles to desktop and in-game Position curves: Auto,
   Flat, Linked and Broken, with numeric slopes and fixed-time handles.
@@ -31,6 +31,19 @@
   voices for a moment around its own pause and resume commands. Only Dolly
   sessions arm it, the window closes by itself, and no game setting or file is
   touched.
+
+- Support Deadlock build 6793. Every reviewed game module was re-derived for the new
+  build: camera anchors and curve data, the particle table, the editing baseline and the
+  console unlocker, whose server patch is rebuilt for the new build. The native bridge,
+  sound capture and preload verification accept it, and Dolly reports the new build as
+  reviewed instead of asking for an update.
+- Follow is held back on build 6793. Its camera rig needs a live check of whether the new
+  build changed the stock aim slide, so Follow reports "not reviewed for this game update"
+  and stays off until it is re-reviewed. The rest of the replay editor is unaffected; its
+  capability data was re-reviewed so hiding the game HUD, including the hero health
+  panel, keeps working.
+
+Full details: [0.6.53 release notes](RELEASE_NOTES_0.6.53-alpha.md).
 
 ## 0.6.52-alpha
 

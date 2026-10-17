@@ -11,6 +11,8 @@ constexpr char kBuild6779Tier0Hash[] =
     "784e692b1391809ba31c8fd8fddc121ad1950c36241411d198c2f1cbbb2c2eb6";
 constexpr char kBuild6782Tier0Hash[] =
     "5c9fc2b512afeb3b523c3e2093102300e28119035b32b6a12f12bdab38a3f17d";
+constexpr char kBuild6793Tier0Hash[] =
+    "ec99a83124781f051cfdc74f536a6462d92cb1fb5d3b7053fe7d1427fa01d45b";
 constexpr std::uintptr_t kCvarTable = 0x3106e8, kCvarSet = 0x20ec60;
 std::uintptr_t gTier0 = 0, gCvar = 0;
 bool gExtendedCvarSupported = false;
@@ -223,6 +225,7 @@ NativeEffectState gEffects;
 static bool init_cvar_interface() {
     auto tier0 = GetModuleHandleW(L"tier0.dll");
     const bool current_setter = module_matches(tier0, kBuild6779Tier0Hash, 0x401000) ||
+    module_matches(tier0, kBuild6793Tier0Hash, 0x401000) ||
                                 module_matches(tier0, kBuild6782Tier0Hash, 0x401000);
     const bool september = current_setter || module_matches(tier0, kSeptemberTier0Hash, 0x401000) ||
                            module_matches(tier0, kBuild6726Tier0Hash, 0x401000);

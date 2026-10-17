@@ -1,16 +1,16 @@
 {
   "format": 1,
-  "reviewed": "2026-10-15",
+  "reviewed": "2026-10-16",
   "modules": {
     "client": {
-      "profile": "deadlock-2026-10-15-6785-complete.json",
+      "profile": "deadlock-2026-10-16-6793-complete.json",
       "section": "client",
       "hash_key": "client_sha256",
       "size_key": "size_of_image",
       "path": "citadel/bin/win64/client.dll"
     },
     "tier0": {
-      "profile": "deadlock-2026-10-14-6782-complete.json",
+      "profile": "deadlock-2026-10-16-6793-complete.json",
       "section": "tier0",
       "hash_key": "sha256",
       "size_key": "size_of_image",
@@ -18,7 +18,7 @@
     },
     "resource": {
       "path": "bin/win64/resourcesystem.dll",
-      "sha256": "c2e0c0ee1715b3da657091e72ed148159bebfab8c611703d0937dd8e0db83005",
+      "sha256": "6ecbaa9d995f203878c2396e8a5849a6b04e862ec0d7579246ba29a6c469aef4",
       "image_size": 671744
     }
   },
@@ -35,17 +35,17 @@
       "MANAGER": {
         "module": "client",
         "kind": "rva",
-        "value": "0x3261950"
+        "value": "0x32f9ab0"
       },
       "MANAGER_VTABLE": {
         "module": "client",
         "kind": "rva",
-        "value": "0x26f9540"
+        "value": "0x275f488"
       },
       "RESOURCE_GLOBAL": {
         "module": "client",
         "kind": "rva",
-        "value": "0x3efb6b0"
+        "value": "0x3fd87f0"
       },
       "RESOURCE_VTABLE": {
         "module": "resource",
@@ -60,71 +60,71 @@
       "INTRO_GLOBAL": {
         "module": "client",
         "kind": "rva",
-        "value": "0x3d5a098"
+        "value": "0x3e371a8"
       },
       "INTRO_VTABLE": {
         "module": "client",
         "kind": "rva",
-        "value": "0x2badac8"
+        "value": "0x2c38da8"
       },
       "CLIENT_CODE_SPANS": {
         "module": "client",
         "kind": "spans",
         "value": [
           {
-            "rva": "0x5f6a60",
+            "rva": "0x5fee80",
             "size": 8,
-            "sha256": "5ea5c9c70240bed51cb487e3e1c8ee27f6874b07e0d6420d1781f302e200fa3c"
+            "sha256": "290568ee62869024f88ab9d858191e92d5f85a5b3ac060436c6c7831108be08f"
           },
           {
-            "rva": "0x5ffd00",
+            "rva": "0x607f30",
             "size": 126,
-            "sha256": "528a0e9f19af3a52fa223afc78dd12c2af96f6b24b63b73bf954b454a51f3d86"
+            "sha256": "eb5fc5d13e90f53e04d7d34e3bf3bbb7612a7d57433ead9b3350643b7e35ccb3"
           },
           {
-            "rva": "0x1d87630",
+            "rva": "0x1deb5e0",
             "size": 266,
-            "sha256": "f2db4e60af70c10deb1997e4e802077f0e44236173db9b83bcf0c23893590755"
+            "sha256": "1568886ee3e1c0cd6d4e06f2f3d0fa60047e48290de04893634cffacc0969394"
           },
           {
-            "rva": "0x5e7bee",
+            "rva": "0x5f025e",
             "size": 51,
-            "sha256": "44da00dc4b1e7fdc859875a8f2acca0f0e5ec8018fd292d8f1747d4205084ae6"
+            "sha256": "652d3e162d4ffb59369738632dc0543077ace1a62c45113d6608443b0157a755"
           },
           {
-            "rva": "0x603150",
+            "rva": "0x60b380",
             "size": 10,
             "sha256": "ca558903144932ecefc5d1fba8e3f77346d4229fac2e28aa94268c78652621a6"
           },
           {
-            "rva": "0x5dc2f0",
+            "rva": "0x5e49e0",
             "size": 75,
-            "sha256": "6095839ad29b7c321b3b655d208dcf7aeea4d68972fc2a50ac26a06293a0197c"
+            "sha256": "0d97fc74fee90e38796ea6018c39f67b60d77a8969eb4b8c822a1eed28e9c1bb"
           },
           {
-            "rva": "0x1b4e485",
+            "rva": "0x1bb2025",
             "size": 101,
-            "sha256": "72a726bb05ad690a6570c5adc43c402a5598ff32684542152d206ee7bf81a59d"
+            "sha256": "dea467e73645e678a8aecedd58db53b1e4ad0205f3308cf791f9f2c5486ca4b4"
           },
           {
-            "rva": "0x1b6ac50",
+            "rva": "0x1bce7f0",
             "size": 230,
-            "sha256": "f1e5ebdbe092283023621d31addf0b08b06a71e804ed687295e3b6e108a7307c"
+            "sha256": "a0951932a275d59c529cdb510f576048bce400d32ed90c0564380137c8755e67"
           },
           {
-            "rva": "0x1b90e0e",
+            "rva": "0x1bf49ce",
             "size": 465,
-            "sha256": "ae65f7f80ee6563d1019716f2c1316e314eb850612a15db54a9ec1eeacf11403"
+            "sha256": "2994ca0766f29efb8ba02bf39b00f8398b579dceae7d68aa0f7a9a34e5185802"
           },
           {
-            "rva": "0x1b79460",
+            "rva": "0x1bdd020",
             "size": 66,
-            "sha256": "c071cb447ebcda98e1f699b87e1aa3c65151672649c6e89e47dd3705065b8c2b"
+            "sha256": "b3e3ccb6f3ecc33c509f850db695b3886d837af7472afdfc29707fef65438ac8"
           },
           {
-            "rva": "0x1b566f0",
+            "rva": "0x1bba290",
             "size": 554,
-            "sha256": "0c927dac06ddb307d3a9a3080c7d6e3c278d8132ef4bb7c0729fdcdd1ab86738"
+            "sha256": "65f492bcab3d156104ddf804288beb7e1f59a91b1ed6c7751251dcb8caf30e25"
           }
         ]
       },
@@ -187,86 +187,86 @@
       "MANAGER": {
         "module": "client",
         "kind": "rva",
-        "value": "0x3726530"
+        "value": "0x37c9930"
       },
       "MANAGER_VTABLE": {
         "module": "client",
         "kind": "rva",
-        "value": "0x26f2c80"
+        "value": "0x2758950"
       },
       "GAMEPLAY_CAMERA_VTABLE": {
         "module": "client",
         "kind": "rva",
-        "value": "0x26fa6d8"
+        "value": "0x2760398"
       },
       "RULES_GLOBAL": {
         "module": "client",
         "kind": "rva",
-        "value": "0x3d3d460"
+        "value": "0x3e1a560"
       },
       "RULES_VTABLE": {
         "module": "client",
         "kind": "rva",
-        "value": "0x272ede0"
+        "value": "0x2794b10"
       },
       "CODE_SPANS": {
         "module": "client",
         "kind": "spans",
         "value": [
           {
-            "rva": "0x5d8d40",
+            "rva": "0x5e11f0",
             "size": 685,
-            "sha256": "a4ef19a03b1961d8cb6c179549c6c0b0b35815dbcc3407ef77a6dd2a7b55dfef"
+            "sha256": "79a798466910ed214f84b653fad3b81b21730c662acf63daf85c15cd032a6359"
           },
           {
-            "rva": "0x5bb970",
+            "rva": "0x5bb480",
             "size": 181,
-            "sha256": "afe0307fd934ca2e36ad7dd76e104484983799305014f4e419637c57222661ca"
+            "sha256": "d563c34aa3282cd3b566cdf520c9fbbf83ecfcab5ef8e37eee58cdfc3e6812a8"
           },
           {
-            "rva": "0x18a9e90",
+            "rva": "0x190d750",
             "size": 261,
             "sha256": "8cf35733f23987bae0ebb26f0c19ff26e8078831bfa157a58c5d5e52d515216f"
           },
           {
-            "rva": "0x18beed0",
+            "rva": "0x1922790",
             "size": 5,
             "sha256": "65040a475cbc284b30a6717ac7b2100df0a76073a263841fe754d2e27c2de90f"
           },
           {
-            "rva": "0x18c2ff0",
+            "rva": "0x19268b0",
             "size": 6,
             "sha256": "227707a7be321c721db4b8a5f987779e948f14b9d2ca4874596398e76ef852d6"
           },
           {
-            "rva": "0x1ba8b10",
+            "rva": "0x1c0c780",
             "size": 1642,
-            "sha256": "d32cef13709ff2e75c7fae8dd0c7bbc6f6d466a7fd3fe79fd232b8d898f91eac"
+            "sha256": "431b529f3eb95c9d94245ff15fe822dcc0eed5f1244997a35f3214331aea63d0"
           },
           {
-            "rva": "0x194e050",
+            "rva": "0x19b1910",
             "size": 88,
             "sha256": "ab72639d18a9838c2721bda5ce47534e953ee71d6c8096dbc7bec3f24142c0df"
           },
           {
-            "rva": "0x1b583d0",
+            "rva": "0x1bbbf70",
             "size": 17,
             "sha256": "7e5c47d0bebda21cab80ad5023e7171b10976ddd4be72a7e3b3c63c24cc0b18a"
           },
           {
-            "rva": "0x1b8aa3c",
+            "rva": "0x1bee5fc",
             "size": 112,
-            "sha256": "490406edc377cdbdb22ccef785f3195d2ee7c6cf217f96cc3491982d5936ff4e"
+            "sha256": "a5e0c8d2353eca9c9a35cb750df2c52f20d2e5b296906715abbd314910668be6"
           },
           {
-            "rva": "0x1ba2340",
+            "rva": "0x1c05fb0",
             "size": 91,
-            "sha256": "a23c8061bad6f666dfd7e4ed40c1167d430974cd7d53ef8758fe3c05e1a8f911"
+            "sha256": "ac46209cebac4f7b1bf4a56741cf82e5b7d7a94141e4d5a4663f9d3ba9da2dd3"
           },
           {
-            "rva": "0x1ba87c0",
+            "rva": "0x1c0c430",
             "size": 118,
-            "sha256": "bb9116329fcfb4a22308febf95e9e679d7b88ed37bed1fc8ca12609e096fb2dc"
+            "sha256": "b3c21865680a8d2324a89998252bc9097419a86fffcca532c561fbc56613298f"
           }
         ]
       },
@@ -298,12 +298,12 @@
       "HUD_ROOT": {
         "module": "client",
         "kind": "rva",
-        "value": "0x3d594b8"
+        "value": "0x3e36568"
       },
       "HUD_ROOT_VTABLE": {
         "module": "client",
         "kind": "rva",
-        "value": "0x2ba9cf0"
+        "value": "0x2c34fd0"
       },
       "HUD_TAKEOVER_COUNT": {
         "module": "client",
@@ -321,34 +321,34 @@
         "kind": "spans",
         "value": [
           {
-            "rva": "0x8efc0",
+            "rva": "0x8efa0",
             "size": 3430,
-            "sha256": "c3a8f836c8a69bcd90d325cfed8827332c0ae355976de2325ab0c091a6c85b8d"
+            "sha256": "a09fa8e58d3f17e288432a91b6977d0a105cdc955dc792a63f95db72bdf0f2c2"
           },
           {
-            "rva": "0x90710",
+            "rva": "0x90870",
             "size": 166,
-            "sha256": "d890885fed8f9e8e550700735d91048a4ae8dcaa99113be230a233ed52c62be5"
+            "sha256": "64f57b4c2b8978f8d0c1ea2c3bd5fbd17a807ea1d70dd82d094a72953b2a427d"
           },
           {
-            "rva": "0x238b60",
+            "rva": "0x2409a0",
             "size": 115,
-            "sha256": "8f01cd37892975d990ad8d626d6a4da76f3ec8ae4ad45cf248dc6db8ad9a9809"
+            "sha256": "7d42daa77ecfdfe9ced51ff537b8800b294abb66634007bf69c15869cfdc5b12"
           },
           {
-            "rva": "0x2473940",
+            "rva": "0x24d70d0",
             "size": 129,
-            "sha256": "0aa0379d6e4f51c9c82a62cf59b559bbf46c7615162f9f077ef9929ada695ece"
+            "sha256": "f323b1e0df7f9529e987b672b0941ec4d1dbca2f5acca1645d0066764a971f0b"
           },
           {
-            "rva": "0x256500",
+            "rva": "0x25e350",
             "size": 10,
             "sha256": "05bc3e128bef3737806443acfded9929479a2329b03ac7b2410268030aba9f7d"
           },
           {
-            "rva": "0x60ee96",
+            "rva": "0x6170c6",
             "size": 11,
-            "sha256": "57e0038d9d970500bfdda9f87d4ad0a69d489f45891020c02238882ae28b2c9b"
+            "sha256": "0c1420dddf59b9bc7d1f050fc04832c1978b21eab594adb6a46c997516ac7793"
           }
         ]
       },
@@ -367,23 +367,23 @@
         "module": "client",
         "kind": "rva_map",
         "value": {
-          "pivot_x_offset": "0x3727fa0",
-          "pivot_y_offset": "0x3727fb0",
-          "pivot_z_offset": "0x3727fc0",
-          "pivot_x_offset_crouching": "0x3727fd0",
-          "pivot_y_offset_crouching": "0x3727fe0",
-          "pivot_z_offset_crouching": "0x3727ff0",
-          "x_offset": "0x3728000",
-          "y_offset": "0x3728010",
-          "z_offset": "0x3728020",
-          "x_worst_case_offset": "0x3728030",
-          "y_worst_case_offset": "0x3728040",
-          "z_worst_case_offset": "0x3728050",
-          "ads_x_offset": "0x3728060",
-          "ads_y_offset": "0x3728070",
-          "ads_z_offset": "0x3728080",
-          "fov": "0x3728090",
-          "ads_fov": "0x37280a0"
+          "pivot_x_offset": "0x37cb3a0",
+          "pivot_y_offset": "0x37cb3b0",
+          "pivot_z_offset": "0x37cb3c0",
+          "pivot_x_offset_crouching": "0x37cb3d0",
+          "pivot_y_offset_crouching": "0x37cb3e0",
+          "pivot_z_offset_crouching": "0x37cb3f0",
+          "x_offset": "0x37cb400",
+          "y_offset": "0x37cb410",
+          "z_offset": "0x37cb420",
+          "x_worst_case_offset": "0x37cb430",
+          "y_worst_case_offset": "0x37cb440",
+          "z_worst_case_offset": "0x37cb450",
+          "ads_x_offset": "0x37cb460",
+          "ads_y_offset": "0x37cb470",
+          "ads_z_offset": "0x37cb480",
+          "fov": "0x37cb490",
+          "ads_fov": "0x37cb4a0"
         }
       },
       "OWN_HEALTH_SPANS": {
@@ -391,36 +391,36 @@
         "kind": "spans",
         "value": [
           {
-            "rva": "0x1bdc80",
+            "rva": "0x1b9590",
             "size": 174,
-            "sha256": "f7b2dceef19a4590d2bba222d3cc92ac0afe3070c99b87cd9a2b56d119eb71a3"
+            "sha256": "89f2125632c0aacf5561070e11a9f50180ebb5abe257a3a15ca66e831a0449e1"
           },
           {
-            "rva": "0x1b95310",
+            "rva": "0x1bf8f80",
             "size": 803,
-            "sha256": "529bdf367b252da921a737ddc151212d285761a2e7da81d01e0842f76b6f07d0"
+            "sha256": "1110d6815a0e3dc160b187def9a040f8c8b2c34bbea174ff549f84d66e99cfa7"
           },
           {
-            "rva": "0x1b771c0",
+            "rva": "0x1bdad80",
             "size": 47,
-            "sha256": "65cbdd36486190d2e8d6930511e9f7affd3350062845a7f4e01fa04344726bd8"
+            "sha256": "f97bf6557fd2f5bca3c456e14011b3134d1421710d8b39376f5f8d69bcf93fef"
           }
         ]
       },
       "ENABLED_REF": {
         "kind": "rva",
         "module": "client",
-        "value": "0x3727f90"
+        "value": "0x37cb390"
       },
       "FOLLOW_AIM_REF": {
         "kind": "rva",
         "module": "client",
-        "value": "0x3727cc0"
+        "value": "0x37cb0c0"
       },
       "OWN_HEALTH_REF": {
         "kind": "rva",
         "module": "client",
-        "value": "0x3d59e08"
+        "value": "0x3e36f18"
       },
       "CLIENT_IMAGE_SIZE": {
         "kind": "module_size",
@@ -735,22 +735,22 @@
       "INITIALIZER": {
         "kind": "rva",
         "module": "client",
-        "value": "0x20d24a0"
+        "value": "0x2136490"
       },
       "ENTITY_VTABLE": {
         "kind": "rva",
         "module": "client",
-        "value": "0x2b0c760"
+        "value": "0x2b97bc0"
       },
       "ENTITY_GLOBAL": {
         "kind": "rva",
         "module": "client",
-        "value": "0x3e78050"
+        "value": "0x3f55180"
       },
       "INITIALIZER_BYTES": {
         "kind": "bytes",
         "module": "client",
-        "value": "0fb64424288844242848890da05bda01e99bbfffff"
+        "value": "ffff8b42300fbae00b730f488b5c24304883c4205f"
       }
     }
   },
@@ -1057,6 +1057,11 @@
     {
       "profile": "scenesystem-2026-10-14-6782.json",
       "renderer_sha256": "595220c9af9a6f5a4f310c24c7288a6dcfe247ffdfbca32b165e02875ab67d6d",
+      "renderer_size": "0x4b7000"
+    },
+    {
+      "profile": "scenesystem-2026-10-16-6793.json",
+      "renderer_sha256": "b3fe8efbe278c8b25eda6dffe23c8fbe7b0b75b49fa5fbdec2c26fb2862496dc",
       "renderer_size": "0x4b7000"
     }
   ]
