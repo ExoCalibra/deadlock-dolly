@@ -30,17 +30,26 @@ CAMERA_FIELDS = ["frame", "video_time", "phase", "x", "y", "z", "pitch", "yaw", 
 class Frame(NamedTuple):
     """One video frame's camera."""
     frame: int
-    time: float
+    time: float  # seconds
     position: tuple[float, float, float]
     angles: tuple[float, float, float]  # pitch, yaw, roll
     fov: float  # horizontal, degrees
+    phase: float
+
+
+class Marker(NamedTuple):
+    """Where the camera was when the shot reached one keyframe."""
+    key: int  # keyframe
+    time: float  # video seconds
+    position: tuple[float, float, float]
 
 
 class Take(NamedTuple):
-    """Every sampled frame, the video length in frames and accuracy warnings."""
+    """Every sampled frame, the video length in frames, accuracy warnings and keyframe markers."""
     frames: list[Frame]
     video_frames: int
     warnings: list[str]
+    markers: tuple[Marker, ...] = ()
 
 
 def angle_vectors(pitch: float, yaw: float, roll: float):
@@ -95,11 +104,11 @@ def sample_camera(project: Project, fps: float, speed: float = 1.0,
         lens = pose["lens_scale"] if has_lens else DEFAULT_LENS
         frames.append(Frame(index, time, (pose["x"], pose["y"], pose["z"]),
                             (pose["pitch"], pose["yaw"], pose["roll"]),
-                            horizontal_fov(lens, pose["aspect_ratio"])))
+                            horizontal_fov(lens, pose["aspect_ratio"]), time * speed))
 
     warnings = []
     if any(key.source == "attach" for key in project.keyframes):
-        warnings.append("Attach keys are currently unsupported.")
+        warnings.append("Attach keys are currently unsupported; their markers are left out.")
     if not has_lens:
         warnings.append("No captured lens, assuming a standard 90-degree lens.")
 
@@ -123,12 +132,12 @@ def sample_camera_data(path: str | Path, fps: float) -> Take:
     for row in rows:
         if (not isinstance(row, list) or len(row) != len(CAMERA_FIELDS) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in row)):
             raise ValueError("The camera data has an invalid frame")
-        _, video_time, _, x, y, z, pitch, yaw, roll, fov = row
+        _, video_time, phase, x, y, z, pitch, yaw, roll, fov = row
         frame = round(video_time * fps)
         if frame <= last_frame or not 1 < fov < 179:
             raise ValueError("The camera data has an invalid frame")
         last_frame = frame
-        frames.append(Frame(frame, frame / fps, (x, y, z), (pitch, yaw, roll), fov))
+        frames.append(Frame(frame, frame / fps, (x, y, z), (pitch, yaw, roll), fov, phase))
 
     written = data.get("frames_written")
     video_frames = written if isinstance(written, int) and written > last_frame else last_frame + 1
@@ -139,8 +148,41 @@ def load_take(project: Project, fps: float, camera_data: str | Path | None = Non
               speed: float = 1.0, video_frames: int | None = None) -> Take:
     """Saved camera data when available; otherwise the shot's keyframes."""
     if camera_data is not None:
-        return sample_camera_data(camera_data, fps)
-    return sample_camera(project, fps, speed, video_frames)
+        take = sample_camera_data(camera_data, fps)
+    else:
+        take = sample_camera(project, fps, speed, video_frames)
+    return take._replace(markers=key_markers(project, take.frames, camera_data is not None))
+
+
+def key_markers(project: Project, frames: list[Frame], recorded: bool) -> tuple[Marker, ...]:
+    """A marker for every keyframe in the take."""
+    markers = []
+    for number, key in enumerate(project.keyframes, start=1):
+        if recorded:
+            arrival = arrival_at(frames, float(key.time))
+            if arrival is not None:
+                markers.append(Marker(number, *arrival))
+        elif key.source != "attach":
+            arrival = arrival_at(frames, float(key.time))
+            if arrival is not None:  # An early finish never reaches the later keys.
+                markers.append(Marker(number, arrival[0], (key.x, key.y, key.z)))
+    return tuple(markers)
+
+
+def arrival_at(frames: list[Frame], phase: float):
+    """Time and camera position when the shot reached a certain phase, or None if it never did."""
+    step = abs(frames[-1].phase - frames[-2].phase) if len(frames) > 1 else 0.0
+    if frames[0].phase - step <= phase < frames[0].phase:
+        return frames[0].time, frames[0].position
+    for before, after in zip(frames, frames[1:]):
+        if before.phase <= phase <= after.phase:
+            span = after.phase - before.phase
+            weight = (phase - before.phase) / span if span > 0 else 0.0
+            return (before.time + (after.time - before.time) * weight,
+                    tuple(a + (b - a) * weight for a, b in zip(before.position, after.position)))
+    if frames[-1].phase <= phase <= frames[-1].phase + step:
+        return frames[-1].time, frames[-1].position
+    return None
 
 
 # After Effects (.jsx)
@@ -217,13 +259,13 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
     def offset(position):
         return tuple(value - base for value, base in zip(ae_vector(*position), origin))
 
-    keys = [(float(key.time), offset((key.x, key.y, key.z))) for key in project.keyframes]
+    keys = [(marker.key, marker.time, offset(marker.position)) for marker in take.markers]
     data = {
         "frame_numbers": array(str(f.frame) for f in frames),
         "positions": array(array(map(number, offset(f.position))) for f in frames),
         "rotations": array(array(map(number, r)) for r in ae_rotations(frames)),
         "fovs": array(number(f.fov) for f in frames),
-        "keys": array(array([number(t), *map(number, p)]) for t, p in keys),
+        "keys": array(array([str(n), number(t), *map(number, p)]) for n, t, p in keys),
         "origin": array(map(number, origin)),
     }
     name = json.dumps(project.name, ensure_ascii=True)
@@ -252,13 +294,13 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
         // Markers first so the camera sits above them in the layer stack.
         if (ADD_KEY_MARKERS) {{
             for (var k = 0; k < dollyKeys.length; k++) {{
-                var key = dollyKeys[k];
+                var key = dollyKeys[k]; // [key number, video seconds, x, y, z]
                 var marker = comp.layers.addNull();
-                marker.name = "Dolly key " + (k + 1) + " @ " + key[0].toFixed(3) + "s";
+                marker.name = "Dolly key " + key[0] + " @ " + key[1].toFixed(3) + "s";
                 marker.threeDLayer = true;
                 marker.guideLayer = true;
                 marker.property("ADBE Transform Group").property("ADBE Position")
-                    .setValue([key[1] * SCALE, key[2] * SCALE, key[3] * SCALE]);
+                    .setValue([key[2] * SCALE, key[3] * SCALE, key[4] * SCALE]);
             }}
         }}
         var camera = comp.layers.addCamera("Dolly camera", [COMP_WIDTH / 2, COMP_HEIGHT / 2]);
@@ -363,14 +405,14 @@ def build_usda(project: Project, fps: float, *, camera_data: str | Path | None =
     rotations = (usd_tuple(r) for r in usd_rotations(frames))
     focals = (number(USD_APERTURE / 2 / math.tan(math.radians(f.fov) / 2)) for f in frames)
     keys = "".join(f'''
-        def Xform "Key_{index:02d}" (
-            doc = "Dolly key {index} @ {key.time:.3f}s"
+        def Xform "Key_{marker.key:02d}" (
+            doc = "Dolly key {marker.key} @ {marker.time:.3f}s"
         )
         {{
-            double3 xformOp:translate = {usd_tuple(offset((key.x, key.y, key.z)))}
+            double3 xformOp:translate = {usd_tuple(offset(marker.position))}
             uniform token[] xformOpOrder = ["xformOp:translate"]
         }}
-''' for index, key in enumerate(project.keyframes, start=1))
+''' for marker in take.markers)
     layer = f"""#usda 1.0
 (
     defaultPrim = "Dolly"

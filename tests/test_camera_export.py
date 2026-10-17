@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from dolly.camera_export import (angle_vectors, ae_rotation, ae_rotations, build_jsx, build_usda,
-                                 comp_size, export_jsx, export_usda, horizontal_fov,
+                                 comp_size, export_jsx, export_usda, horizontal_fov, load_take,
                                  sample_camera, sample_camera_data, ae_vector, usd_rotation,
                                  usd_rotations)
 from dolly.path import AttachKey, Keyframe, Project
@@ -168,7 +168,7 @@ class ScriptTests(unittest.TestCase):
         positions = values("positions")
         self.assertEqual(positions[0], [0, 0, 0])
         self.assertEqual(positions[-1], [100, -50, 0])
-        self.assertEqual(values("dollyKeys"), [[0, 0, 0, 0], [1, 100, -50, 0]])
+        self.assertEqual(values("dollyKeys"), [[1, 0, 0, 0, 0], [2, 1, 100, -50, 0]])
 
     @staticmethod
     def write_camera_data(folder, rows, frames_written=10, **overrides):
@@ -201,6 +201,44 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual([p[0] for p in values("positions")], [0, 10, 20, 30, 40])
         self.assertEqual(values("fovs"), [80] * 5)
         self.assertEqual(values("rotations")[0], [0, 0, 0])
+
+    def test_markers_come_from_the_recorded_camera_at_each_arrival(self):
+        attached = camera(1, x=99999)  # Stored pose: where the free camera was at capture.
+        attached.source, attached.attach = "attach", AttachKey(handle=5)
+        shot = Project(keyframes=[camera(0, x=5000), camera(.5 + 1 / 120, x=-1), attached])
+        # Three frames of pre-roll: frame 3 is the shot's first frame.
+        rows = [[frame, frame / 60, (frame - 3) / 60, 5000 + 10 * frame, 200, 64, 0, 90, 0, 80]
+                for frame in range(3, 64)]
+        with tempfile.TemporaryDirectory() as folder:
+            camera_data = self.write_camera_data(folder, rows, frames_written=64)
+            script, _ = build_jsx(shot, 60, camera_data=camera_data)
+            layer, _ = build_usda(shot, 60, camera_data=camera_data)
+        keys = json.loads(re.search(r"var dollyKeys = (\[.*?\]);\n", script).group(1))
+        self.assertEqual([key[0] for key in keys], [1, 2, 3])
+        for key, (time, x) in zip(keys, ((.05, 0), (33.5 / 60, 305), (63 / 60, 600))):
+            self.assertAlmostEqual(key[1], time, places=6)  # Video time, after the pre-roll.
+            self.assertAlmostEqual(key[2], x, places=4)  # Real camera, not the stored pose.
+        self.assertIn('doc = "Dolly key 3 @ 1.050s"', layer)
+        self.assertIn("double3 xformOp:translate = (600, 0, 0)", layer)
+        self.assertNotIn("99999", script + layer)
+
+    def test_markers_skip_keys_the_recording_never_reached(self):
+        shot = Project(keyframes=[camera(0), camera(1), camera(2)])
+        rows = [[frame, frame / 60, frame / 60, frame, 0, 0, 0, 0, 0, 90] for frame in range(70)]
+        with tempfile.TemporaryDirectory() as folder:
+            take = load_take(shot, 60, self.write_camera_data(folder, rows, frames_written=70))
+        self.assertEqual([marker.key for marker in take.markers], [1, 2])
+
+    def test_markers_without_camera_data_leave_out_attached_and_unreached_keys(self):
+        attached = camera(1, x=99999)
+        attached.source, attached.attach = "attach", AttachKey(handle=5)
+        shot = Project(keyframes=[camera(0), attached, camera(2, x=50), camera(3, x=80)],
+                       interpolation="linear")
+        take = load_take(shot, 30, speed=.5, video_frames=150)  # Finished at 5 s of 6.
+        self.assertEqual([marker.key for marker in take.markers], [1, 3])
+        self.assertAlmostEqual(take.markers[1].time, 4)  # Shot 2 s at half speed.
+        self.assertEqual(take.markers[1].position, (50, 0, 0))
+        self.assertIn("markers are left out", take.warnings[0])
 
     def test_camera_data_frames_follow_video_time_not_row_order(self):
         rows = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90], [1, 0.5, .5, 1, 0, 0, 0, 0, 0, 90]]
