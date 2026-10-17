@@ -195,6 +195,15 @@ NATIVE_PAUSE_TIMEOUT = 8.0
 # the preload gate, so waiting the full timeout only delays the manual path.
 # After this window the controller stops early and offers that manual load.
 PRELOAD_INTRO_STALL_SECONDS = 45.0
+# A verified preload is not a stopwatch. Deadlock compiles shaders in batches and
+# reports the counters only when a batch finishes, so one batch can look like no
+# activity at all for well over a minute on a slower machine; a game update
+# discards the compiled cache and makes the whole hideout load compile again.
+# Elapsed time therefore cannot separate "working" from "wedged". The wait is
+# extended while the reviewed preload still holds a live job or reports new work,
+# stops after this much silence, and never runs past the absolute ceiling.
+PRELOAD_STALL_SECONDS = 120.0
+PRELOAD_MAX_SECONDS = 900.0
 # A replay's recorded match intro (client game state MatchIntro -> GameInProgress)
 # plays before the stock gameplay camera takes over, at normal 1x. That segment
 # is part of the demo timeline, so ordinary packet-ordered playback at a higher
@@ -215,11 +224,22 @@ class CameraPositionError(RuntimeError):
     """A measured position response failed, eligible for one paused refresh."""
 
 
+class StartupTimeout(RuntimeError):
+    """A bounded startup wait reached its deadline.
+
+    Callers that own a longer policy (the verified preload, for example) catch
+    this to tell a slow machine apart from a wedged one. Every other failure
+    inside ``_startup_wait`` keeps its own message and is never extended.
+    """
+
+
 class PreloadUnavailableError(RuntimeError):
-    """Deadlock never started its hideout intro/preload.
+    """Deadlock's hideout intro/preload could not be verified.
 
     Verified automatic startup fails closed in that state; the game session
-    stays open so the replay can be loaded through the explicit manual path.
+    stays open so the replay can be loaded through the explicit manual path,
+    including that path's unverified load for a machine that is simply slower
+    than the reviewed preload window.
     """
 
 
@@ -742,7 +762,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             if result is not None and result is not False:
                 return result
             if time.perf_counter() >= deadline:
-                raise RuntimeError(
+                raise StartupTimeout(
                     f"Timed out after {timeout:g}s " + label
                     + ". The replay was not marked ready. Use the manual startup controls, or export "
                       "diagnostics to inspect the last recorded startup stage.")
@@ -851,6 +871,12 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         automatic startup stops after ``PRELOAD_INTRO_STALL_SECONDS`` instead of
         waiting for a state that cannot change; the game stays open and the
         GUI offers the explicit manual replay load.
+
+        A preload that is genuinely running is not timed out on a stopwatch: the
+        reviewed job handle and lifecycle flags (and any new batch) extend the
+        wait up to ``PRELOAD_MAX_SECONDS``, because one shader batch can take
+        longer than the whole stall window on a slower machine, and a game
+        update rebuilds the entire cache. Silence, not elapsed time, ends it.
         """
         monitor = PreloadMonitor(self._session)
         restore_hud = None
@@ -946,7 +972,66 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._startup_evidence["post_preload_hideout"] = settled
                 return final
 
-            self._startup_wait(ready, "waiting for verified map and shader preload completion", cancel_event)
+            def last_sample():
+                return trace["changes"][-1]["sample"] if trace["changes"] else {}
+
+            def progress_token():
+                """Everything that means the reviewed preload moved on."""
+                sample = last_sample()
+                if not sample:
+                    return None
+                return (len(trace["changes"]), trace["dropped_changes"], sample.get("coherent"),
+                        sample.get("started"), sample.get("completed"), sample.get("total"),
+                        sample.get("intro_phase"), sample.get("scheduled"),
+                        sample.get("job_active"), sample.get("resource_complete"))
+
+            def still_working():
+                """True while Deadlock still holds a live, reviewed preload job.
+
+                The counters only move when a batch completes, so a long batch is
+                indistinguishable from a wedged preload by counters alone. The job
+                handle and its scheduled flag are what separate the two.
+                """
+                sample = last_sample()
+                if not sample.get("coherent") or sample.get("ready"):
+                    return False
+                return bool(sample.get("job_active") or sample.get("scheduled"))
+
+            label = "waiting for verified map and shader preload completion"
+            # No sample exists before the first window, so a first-window
+            # comparison is never counted as movement; only a live reviewed job
+            # can extend it.
+            ceiling = time.monotonic() + PRELOAD_MAX_SECONDS
+            extensions = 0
+            while True:
+                window = progress_token()
+                try:
+                    self._startup_wait(ready, label, cancel_event, timeout=PRELOAD_STALL_SECONDS)
+                    break
+                except StartupTimeout:
+                    sample = last_sample()
+                    elapsed = time.monotonic() - observed_at
+                    moved = window is not None and progress_token() != window
+                    if not (moved or still_working()):
+                        raise self._preload_unavailable(sample, elapsed, "no_progress")
+                    if time.monotonic() >= ceiling:
+                        raise self._preload_unavailable(sample, elapsed, "ceiling")
+                    extensions += 1
+                    self._startup_evidence["preload_extensions"] = {
+                        "count": extensions, "elapsed_seconds": round(elapsed, 3),
+                        "last_sample": deepcopy(sample)}
+                    LOG.info("Verified preload still running after %.0fs (extension %d: %s of %s "
+                             "in the current batch, job active=%s).",
+                             elapsed, extensions, sample.get("completed"), sample.get("total"),
+                             sample.get("job_active"))
+                    self._message(
+                        "Deadlock is still preloading its map and shaders after "
+                        f"{self._elapsed_text(elapsed)}"
+                        + (f" (last batch {sample['completed']} of {sample['total']})"
+                           if sample.get("total") is not None else "")
+                        + ". Dolly keeps verifying instead of giving up; your replay will open "
+                          "automatically when it finishes.",
+                        startup_stage="preloading")
         finally:
             try:
                 if restore_hud is not None:
@@ -957,6 +1042,40 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 monitor.close()
         self._message("Map and shader preload complete. Opening your selected replay…",
                       startup_stage="preload_ready")
+
+    @staticmethod
+    def _elapsed_text(seconds):
+        """Short human duration for startup messages."""
+        if seconds < 120:
+            return f"{seconds:.0f}s"
+        return f"{seconds / 60:.0f} min"
+
+    def _preload_unavailable(self, sample, elapsed, reason):
+        """Stop automatic startup without claiming the preload was verified.
+
+        The game session stays open. The desktop's existing manual controls load
+        the replay without the preload check, which is the documented escape for
+        a machine slower than the reviewed window: Deadlock rebuilds its shader
+        cache after a game update, so the first hideout load can take minutes.
+        """
+        blob = (f" (last batch {sample['completed']} of {sample['total']})"
+                if sample.get("total") is not None else "")
+        if reason == "ceiling":
+            head = ("Dolly waited " + self._elapsed_text(elapsed)
+                    + " while Deadlock's map and shader preload kept running" + blob)
+        else:
+            stalled = self._elapsed_text(max(float(elapsed), PRELOAD_STALL_SECONDS))
+            head = ("Timed out after " + stalled + " waiting for verified map and shader preload "
+                    "completion: Deadlock's preload stopped reporting progress" + blob)
+        message = (head + ". A game update rebuilds Deadlock's shader cache, which can take "
+                          "several minutes on a slower machine. The game session is still open: load "
+                          "the selected replay from Startup controls to continue without preload "
+                          "verification.")
+        self._startup_evidence["preload_unavailable"] = {
+            "reason": "preload_stalled" if reason == "no_progress" else "preload_ceiling",
+            "waited_seconds": round(elapsed, 3), "last_sample": deepcopy(sample)}
+        self._message(message, startup_stage="failed")
+        return PreloadUnavailableError(message)
 
     def _replay_camera(self):
         """Reused replay-camera monitor for the current owned session.

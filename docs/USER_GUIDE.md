@@ -46,6 +46,12 @@ installation and current limits. Windows/Deadlock validation is recorded in
    while waiting for this sequence.
    If your HUD is hidden, Dolly temporarily shows it so the intro can advance,
    then restores your HUD setting before loading the replay.
+   A Deadlock update rebuilds the game's shader cache, so the first hideout load
+   afterwards can spend minutes preloading. Dolly keeps verifying for as long as
+   Deadlock reports real progress, and only stops on a preload that has gone
+   quiet. If it does stop, it offers to load the replay anyway, and the manual
+   **Connect → Initialize unlocker → Load replay** order skips that check
+   entirely.
 8. Frame a view with WASD and mouse look, then capture it. Fly to the next
    camera position and capture again. **F8** opens the in-game Dolly panel.
 

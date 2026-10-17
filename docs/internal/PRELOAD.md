@@ -81,8 +81,21 @@ as ready while preserving the observer's read-only behavior.
 Counts reset across batches and may be equal while a job/resource is unfinished.
 The observer rejects changing manager snapshots and implausible fields. Startup
 requires three consecutive complete observations, a fresh hideout check, and one
-final complete sample before dispatch. The deadline is a failure, never evidence
-of readiness; cancellation and failures always close the observer handle.
+final complete sample before dispatch. A deadline is never evidence of readiness,
+and cancellation and failures always close the observer handle.
+
+The verified wait stops on silence, not on a stopwatch. Counters move only when a
+batch finishes, so one batch can look like no activity for well over a minute on a
+slower machine, and a game update discards the compiled cache and rebuilds all of
+it. While the reviewed job handle or its scheduled flag is still live, or a new
+observation arrives, the wait is extended (``PRELOAD_STALL_SECONDS`` per window,
+``PRELOAD_MAX_SECONDS`` in total) and every extension is reported in the status and
+recorded under ``preload_extensions``. An unreadable preload object is never
+extended: with no evidence of work, the existing bounded window applies unchanged.
+A wait that ends raises ``PreloadUnavailableError`` for the stalled and the ceiling
+case exactly as it already does for the never-started intro, so the desktop offers
+the explicit unverified manual load instead of a dead end. The message carries the
+last observed batch, and no readiness claim is ever made from elapsed time.
 
 Diagnostics include a bounded `preload_trace`: the first observation, the latest
 64 state changes with elapsed times, a dropped-change count, and whether a
