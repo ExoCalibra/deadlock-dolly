@@ -119,6 +119,22 @@ cancelled or failed take never keeps one; a frame without the full layout is
 recorded as `projection-only`, which marks the bundle partial instead of
 claiming completeness.
 
+### Depth normals (offline foundation)
+
+`dolly/depth_normals.py` reconstructs per-pixel normals from a depth frame and
+its camera bundle record: view-space points follow the stored projection,
+central differences use a distance-compatibility window so foreground edges
+are never smeared, one-sided fallbacks are flagged, invalid samples (NaN,
+zero/negative, +infinity sky) are masked, and optional smoothing only averages
+distance-compatible neighbors. View-space normals are documented first
+(x right, y up, z toward the viewer; visible surface normals point toward the
+viewer); world-space conversion uses the record's validated view axes. The
+SourceMVM roadmap's synthetic fixtures (plane, slanted plane, sphere, crease,
+silhouette, far/invalid depth, known camera rotation) live in
+`tests/test_depth_normals.py`. File plumbing and any native capture pass are
+deliberately not part of this foundation; the depth master already carries the
+required per-pixel distances.
+
 The paired depth master is captured at the verified scene target's own size.
 Upscaling or resolution scaling renders the scene below the window size, so the
 scene target can be smaller than the color recording; the depth data then keeps

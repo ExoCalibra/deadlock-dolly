@@ -751,3 +751,5 @@ tests/test_curve_preview.py
 docs/CAMERA_BUNDLE.md
 dolly/camera_bundle.py
 tests/test_camera_bundle.py
+dolly/depth_normals.py
+tests/test_depth_normals.py
