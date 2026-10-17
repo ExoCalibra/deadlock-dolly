@@ -783,6 +783,7 @@ class VideoGuiTests(unittest.TestCase):
         text = script.read_text("ascii")
         self.assertIn("var FPS = 60;", text)
         self.assertIn("var FRAMES = 61;", text)
+        self.assertIn('var VIDEO_FILE = "shot.mp4";', text)
         self.app._log.assert_any_call("After Effects camera saved to " + str(script))
         self.assertIsNone(self.app._ae_camera_take)
 

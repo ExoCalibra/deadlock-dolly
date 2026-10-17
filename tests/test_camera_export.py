@@ -157,6 +157,18 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(len(fovs), 61)
         self.assertEqual(script.count("{"), script.count("}"))
 
+    def test_script_imports_the_recorded_video_beside_it(self):
+        shot = Project(keyframes=[camera(0), camera(1)])
+        script, _ = build_jsx(shot, 60, video='Dolly_Shot "ü".mp4')
+        script.encode("ascii")
+        self.assertIn('var VIDEO_FILE = "Dolly_Shot \\"\\u00fc\\".mp4";', script)
+        self.assertIn("$.fileName", script)
+        self.assertIn("item.mainSource.conformFrameRate = FPS;", script)
+        self.assertIn("COMP_WIDTH = footage.width;", script)
+        self.assertLess(script.index("comp.layers.add(footage)"), script.index("comp.layers.addNull()"))
+        self.assertLess(script.index("COMP_WIDTH = footage.width;"), script.index("Math.tan(fovs[i]"))
+        self.assertIn("var VIDEO_FILE = null;", build_jsx(shot, 60)[0])
+
     def test_positions_are_offsets_from_the_first_frame(self):
         shot = Project(keyframes=[camera(0, x=12000, y=-8000, z=300), camera(1, x=12100, y=-8000, z=350)],
                        interpolation="linear")

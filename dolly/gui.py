@@ -625,9 +625,9 @@ class DollyApp:
         width, height = ((status or {}).get(name) for name in ("width", "height"))
         size = ({"width": width, "height": height}
                 if all(type(value) is int and value > 0 for value in (width, height)) else {})
-        for attribute, export, suffix, label in (
-                ("_ae_camera_take", "export_jsx", "_camera.jsx", "After Effects camera"),
-                ("_usd_camera_take", "export_usda", "_camera.usda", "USD camera")):
+        for attribute, export, suffix, label, extra in (
+                ("_ae_camera_take", "export_jsx", "_camera.jsx", "After Effects camera", {"video": video.name}),
+                ("_usd_camera_take", "export_usda", "_camera.usda", "USD camera", {})):
             take = getattr(self, attribute, None)
             setattr(self, attribute, None)
             if take is None:
@@ -636,7 +636,8 @@ class DollyApp:
             path = video.with_name(video.stem + suffix)
             try:
                 warnings = getattr(camera_export, export)(project, path, fps, camera_data=camera_data,
-                                                          speed=speed, video_frames=video_frames, **size)
+                                                          speed=speed, video_frames=video_frames,
+                                                          **size, **extra)
             except (OSError, ValueError) as exc:
                 # The video is already saved; a camera sidecar failure must not fail the take.
                 self._log(f"{label} was not saved: {exc}")

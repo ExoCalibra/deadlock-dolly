@@ -243,11 +243,13 @@ def ae_rotations(frames: list[Frame]) -> list[tuple[float, float, float]]:
 
 def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = None,
               width: int | None = None, height: int | None = None,
-              speed: float = 1.0, video_frames: int | None = None) -> tuple[str, list[str]]:
+              speed: float = 1.0, video_frames: int | None = None,
+              video: str | None = None) -> tuple[str, list[str]]:
     """Return the JSX source and accuracy warnings for a shot.
 
     With the native camera available, every frame is sampled; otherwise the
-    path is sampled from its keyframes.
+    path is sampled from its keyframes. Video is the recorded file's name,
+    which the script imports from its own folder.
     """
     take = load_take(project, fps, camera_data, speed, video_frames)
     frames = take.frames
@@ -269,6 +271,7 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
         "origin": array(map(number, origin)),
     }
     name = json.dumps(project.name, ensure_ascii=True)
+    video_name = json.dumps(video, ensure_ascii=True) if video else "null"
     script = f"""// Dolly camera for After Effects.
 // Run with File > Scripts > Run Script File...
 (function () {{
@@ -276,8 +279,10 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
     var COMP_HEIGHT = {int(height)};
     var SCALE = 1.0;
     var ADD_KEY_MARKERS = true;
+    var IMPORT_VIDEO = true;
 
     var SHOT_NAME = {name};
+    var VIDEO_FILE = {video_name};
     var FPS = {number(float(fps))};
     var FRAMES = {take.video_frames};
     var ORIGIN = {data["origin"]};
@@ -287,11 +292,35 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
     var fovs = {data["fovs"]};
     var dollyKeys = {data["keys"]};
 
+    function importVideo() {{
+        var file = $.fileName ? new File(new File($.fileName).parent.fsName + "/" + VIDEO_FILE) : null;
+        if (!file || !file.exists) {{
+            file = File.openDialog("Locate " + VIDEO_FILE + " for " + SHOT_NAME);
+            if (!file) return null;
+        }}
+        var item = null;
+        for (var n = 1; n <= app.project.numItems && !item; n++) {{
+            var candidate = app.project.item(n);
+            if (candidate instanceof FootageItem && candidate.file && candidate.file.fsName === file.fsName)
+                item = candidate;
+        }}
+        item = item || app.project.importFile(new ImportOptions(file));
+        // One video frame per comp frame, so each frame meets its camera key.
+        item.mainSource.conformFrameRate = FPS;
+        return item;
+    }}
+
     app.beginUndoGroup("Import Dolly camera");
     try {{
+        var footage = IMPORT_VIDEO && VIDEO_FILE ? importVideo() : null;
+        if (footage) {{
+            COMP_WIDTH = footage.width;
+            COMP_HEIGHT = footage.height;
+        }}
         var comp = app.project.items.addComp(SHOT_NAME + " (Dolly Camera)", COMP_WIDTH, COMP_HEIGHT,
                                              1, FRAMES / FPS, FPS);
-        // Markers first so the camera sits above them in the layer stack.
+        // Camera, markers, and video layers
+        if (footage) comp.layers.add(footage);
         if (ADD_KEY_MARKERS) {{
             for (var k = 0; k < dollyKeys.length; k++) {{
                 var key = dollyKeys[k]; // [key number, video seconds, x, y, z]
