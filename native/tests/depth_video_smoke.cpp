@@ -359,7 +359,7 @@ int wmain(int argc, wchar_t** argv) {
                 "Collision cleanup changed foreign output");
         std::wprintf(
             L"Paired depth/video recordings, cancellation, missing-source failure, transition-frame skipping and reset passed.\n%ls\n",
-            root.c_str());
+            root.wstring().c_str());
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());

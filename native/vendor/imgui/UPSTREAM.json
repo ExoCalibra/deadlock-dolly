@@ -23,6 +23,11 @@
       "description": "Honor ImDrawData.FramebufferScale for the DX11 viewport and scissor rectangles. Dolly supplies the actual swapchain-to-client size ratio; input/layout remain in client coordinates. Covered by real WARP rendering and pixel readback at mismatched client/buffer sizes.",
       "upstream_sha256": "7a8f7294b86065d514a9e19f1bed3bc84d4587f0142b2c551a584b4067cb2902",
       "patched_sha256": "5f7427b117e188a931be95797f48320c3a01e4dce35311129222ca955b92b3a7"
+    },
+    "imgui_draw.cpp": {
+      "description": "Promote font atlas width and height to size_t before multiplying for the Alpha8 allocation and clearing. Avoid signed-int intermediate overflow without changing normal atlas dimensions.",
+      "upstream_sha256": "9d2d9ee6745d9b98d7f39a16da8ffcf783f90bb8c9e931038fc8e9a15cbe3d84",
+      "patched_sha256": "6c52c9fce6f488b2f41461b52ff8fd97e6cde2ffbfefcf59070e0b4a0a2c2287"
     }
   }
 }
