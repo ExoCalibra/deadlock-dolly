@@ -10,6 +10,8 @@ MAX_DETAIL = 600
 
 _VERSION = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)(?:[.-]?[0-9]+)?)?")
 _HEADING = re.compile(r"\s*(?:#{1,6}\s+)?\*\*([^*]+)\*\*\s*")
+_PLAIN_HEADING = re.compile(r"\s*#{1,6}\s+(.*?)\s*")
+_VERSION_TOKEN = re.compile(r"(?<![0-9A-Za-z])" + _VERSION.pattern + r"(?![0-9A-Za-z])")
 _BULLET = re.compile(r" {0,3}[-+*]\s+(.+)")
 _ENTRY = re.compile(r"\*\*(?P<title>.+?)\*\*\s+\*Before:\*\s*(?P<before>.+?)\s+\*After:\*\s*(?P<after>.+)")
 _FENCE = re.compile(r"\s*(`{3,}|~{3,})(.*)")
@@ -82,6 +84,17 @@ def parse_release_notes(body, version):
             heading_version = heading[1].strip()
             active = bool(_VERSION.fullmatch(heading_version) and
                           heading_version.removeprefix("v") == version)
+            continue
+        plain = _PLAIN_HEADING.fullmatch(line)
+        if plain:
+            finish()
+            # The publisher's long-standing body style opens with a plain
+            # heading that names the release ("### Deadlock Dolly
+            # v0.6.54-alpha"); it starts the preview exactly like a bold
+            # version line. A heading without the version still ends the
+            # preview, so ordinary section headings stay out of the notes.
+            active = any(token.group(0).removeprefix("v") == version
+                         for token in _VERSION_TOKEN.finditer(plain[1]))
             continue
         if re.match(r"\s*#{1,6}(?:\s|$)", line):
             finish()

@@ -1,5 +1,5 @@
 // Included after checked memory, replay and editor helpers, inside bridge scope.
-// Exact reviewed version6722 and6723 profiles. Correct a private blend input, never persistent game state.
+// Exact reviewed profiles. Correct a private blend input, never persistent game state.
 #include "dolly_follow_anchor_generated.hpp"
 
 const FollowAnchorProfile* gFollowAnchorProfile = &kFollowAnchorProfiles[0];
@@ -42,7 +42,7 @@ static bool follow_anchor_enabled() noexcept {
 }
 
 // Bind the exact current ThirdPerson camera, observer serial and tracked pawn.
-// These offsets/types are independently reviewed in the version6722 monitor.
+// The local player-pawn alternative is explicitly opted into by each profile.
 static bool follow_anchor_target(std::uintptr_t camera, std::uintptr_t pawn,
                                  std::uint32_t& target) noexcept {
     std::uintptr_t current = 0, table = 0, controller = 0, system = 0, observer = 0, services = 0;
@@ -70,8 +70,12 @@ static bool follow_anchor_target(std::uintptr_t camera, std::uintptr_t pawn,
         return read_value(identity, instance) && instance && read_value(identity + 0x10, actual) &&
                actual == handle && read_value(instance + 0x10, back) && back == identity;
     };
-    if (!resolve(observer_handle, observer) || !read_value(observer, table) ||
-        table != gClient + gFollowAnchorProfile->observer_table ||
+    if (!resolve(observer_handle, observer) || !read_value(observer, table))
+        return false;
+    const auto observer_type = table;
+    if ((table != gClient + gFollowAnchorProfile->observer_table &&
+         (!gFollowAnchorProfile->local_player_table ||
+          table != gClient + gFollowAnchorProfile->local_player_table)) ||
         !read_value(observer + gFollowAnchorProfile->observer_services_offset, services) ||
         !services || !read_value(services, table) ||
         (table != gClient + gFollowAnchorProfile->services_table &&
@@ -100,7 +104,7 @@ static bool follow_anchor_target(std::uintptr_t camera, std::uintptr_t pawn,
            handle_again == observer_handle && read_value(controller, again) &&
            again == gClient + gFollowAnchorProfile->controller_table &&
            resolve(observer_handle, again) && again == observer && read_value(observer, again) &&
-           again == gClient + gFollowAnchorProfile->observer_table &&
+           again == observer_type &&
            read_value(observer + gFollowAnchorProfile->observer_services_offset, again) &&
            again == services && read_value(services, again) && again == service_type &&
            read_value(services + 0x48, mode_again) && mode_again == mode &&

@@ -40,6 +40,20 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual(parse_release_notes(RELEASE_0650.replace("**0.6.50-alpha**", "## **v0.6.50-alpha**"),
                                              "0.6.50-alpha"), expected)
 
+    def test_publisher_heading_that_names_the_version_starts_the_preview(self):
+        # Andrew's published body style since 0.6.47: a plain heading with the
+        # version, blank lines, then the bullets (exact 0.6.54 shape).
+        body = ("### Deadlock Dolly v0.6.54-alpha\n\n\n"
+                + bullet("Startup that waits out a slow shader rebuild.") + "\n"
+                + bullet("Per-frame camera data for paired depth takes."))
+        self.assertEqual([entry["title"] for entry in parse_release_notes(body, "0.6.54-alpha")],
+                         ["Startup that waits out a slow shader rebuild.",
+                          "Per-frame camera data for paired depth takes."])
+
+    def test_publisher_heading_with_another_version_does_not_start_the_preview(self):
+        body = "### Deadlock Dolly v0.6.53-alpha\n\n" + bullet()
+        self.assertEqual(parse_release_notes(body, "0.6.54-alpha"), [])
+
     def test_wrapped_title_and_before_after_continuations_are_plain_text(self):
         body = """**0.6.50-alpha**
 - **Clearer
@@ -75,7 +89,7 @@ class ReleaseNotesTests(unittest.TestCase):
 
     def test_unknown_prose_html_and_headingless_bullets_have_no_fallback(self):
         for body in ("A faster editor with better controls.", "<h1>0.6.50-alpha</h1><p>New features.</p>",
-                     bullet(), "# Deadlock Dolly 0.6.50-alpha\n" + bullet(),
+                     bullet(), "# Release notes\n" + bullet(),
                      "**0.6.50-alpha**\n- A general release note without Before and After."):
             with self.subTest(body=body):
                 self.assertEqual(parse_release_notes(body, "0.6.50-alpha"), [])
@@ -180,10 +194,13 @@ class ReleaseNotesMetadataTests(unittest.TestCase):
 class ShippedReleaseNotesTests(unittest.TestCase):
     """The file the publisher pastes must parse into the in-app preview.
 
-    The desktop reads the release body for its update highlights, and it only
-    matches a bold version line. A body that opens with a plain heading, or with
-    prose above the bullets, installs normally but shows no highlights at all --
-    which is easy to publish by accident because nothing else complains.
+    The desktop reads the release body for its update highlights. The preview
+    starts at a heading that names the version -- the publisher's style
+    ("### Deadlock Dolly v0.6.54-alpha") or a bold version line -- and a
+    heading without the version ends it. A body with prose above the bullets,
+    or with no version heading at all, installs normally but shows no
+    highlights, which is easy to publish by accident because nothing else
+    complains.
     """
 
     def test_current_release_notes_parse_into_highlight_entries(self):

@@ -1,4 +1,4 @@
-**0.6.54-alpha**
+### Deadlock Dolly v0.6.54-alpha
 
 - **Startup that waits out a slow shader rebuild.** *Before:* the first hideout load after a Deadlock update could stop at exactly 120 seconds with "Timed out after 120s waiting for verified map and shader preload completion", leaving the game open and Dolly looking stuck. *After:* Dolly keeps verifying for as long as the game reports real preload progress, says how long it has waited and which shader batch it last saw, and only gives up after the preload goes quiet or runs past fifteen minutes.
 - **Per-frame camera data for paired depth takes.** *Before:* matching CG or effects to a depth take meant eyeballing the camera. *After:* every paired depth take also writes a camera file with the exact per-frame camera the shot was rendered with — view and projection, depth range and frame identity — ready for a compositor or a 3D scene.

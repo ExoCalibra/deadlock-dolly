@@ -1,6 +1,8 @@
+import json
+from pathlib import Path
 import struct
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from dolly.follow_target import FollowTargetMonitor, HEALTH_CONTEXT_SPANS
 from dolly._runtime_generated import FollowTarget as G
@@ -256,3 +258,106 @@ class FollowTargetTests(unittest.TestCase):
         with self.assertRaises(PreloadError):
             m.sample_target()
         m.memory.read.assert_not_called()
+
+
+class FollowTargetBuildGateTests(unittest.TestCase):
+    """Admit reviewed target code, and close before using an unreviewed build."""
+
+    def setUp(self):
+        root = Path(__file__).resolve().parents[1]
+        profiles = root / 'native' / 'profiles'
+        contract = json.loads((profiles / 'runtime-contracts.json').read_text(encoding='utf-8'))
+        client = contract['modules']['client']
+        profile = json.loads((profiles / client['profile']).read_text(encoding='utf-8'))
+        self.current_digest = profile[client['section']][client['hash_key']]
+        self.target_spans = tuple(
+            (int(span['rva'], 16), span['size'])
+            for span in contract['groups']['FollowTarget']['TARGET_SPANS']['value'])
+        manifest = json.loads((profiles / 'manifest.json').read_text(encoding='utf-8'))
+        self.stale_digest = next(
+            digest for digest in manifest['modules'][client['path']]['accepted']
+            if digest != self.current_digest)
+        self.base = 0x180000000
+        self.client_data = b'reviewed client image fixture'
+        self.code = {(rva, size): bytes((rva + offset) % 256 for offset in range(size))
+                     for rva, size in self.target_spans}
+        self.memory = Mock()
+        self.memory.read.side_effect = lambda address, size: self.code[address - self.base, size]
+
+        def initialize(monitor, session):
+            self.monitor = monitor
+            monitor.command = [str(root / 'fixture-game' / 'game' / 'bin' / 'win64' / 'deadlock.exe')]
+            monitor.base = self.base
+            monitor.memory = self.memory
+            self.addCleanup(monitor.close)
+
+        superclass = patch('dolly.follow_target.FollowCapabilityMonitor.__init__',
+                           autospec=True, side_effect=initialize)
+        superclass.start()
+        self.addCleanup(superclass.stop)
+        game_file = patch('dolly.follow_target.game_file',
+                          return_value=(self.client_data, self.current_digest))
+        self.game_file = game_file.start()
+        self.addCleanup(game_file.stop)
+        image_bytes = patch('dolly.preload._image_bytes',
+                            side_effect=lambda data, rva, size: self.code[rva, size])
+        self.image_bytes = image_bytes.start()
+        self.addCleanup(image_bytes.stop)
+
+    def test_pin_matches_the_profile_the_anchors_were_reviewed_for(self):
+        from dolly.follow_target import REVIEWED_CLIENT_SHA256
+        self.assertEqual(self.current_digest, REVIEWED_CLIENT_SHA256)
+
+    def test_current_reviewed_profile_admits_only_exact_target_spans(self):
+        monitor = FollowTargetMonitor(Mock())
+        self.assertIs(monitor.memory, self.memory)
+        self.memory.close.assert_not_called()
+        self.assertEqual(self.memory.read.call_args_list, [
+            call(self.base + rva, size) for rva, size in self.target_spans])
+        self.assertEqual(self.image_bytes.call_args_list, [
+            call(self.client_data, rva, size) for rva, size in self.target_spans])
+
+    def test_stale_or_unknown_client_refuses_before_target_reads_and_closes(self):
+        for digest in (self.stale_digest, '0' * 64):
+            with self.subTest(digest=digest):
+                self.memory.reset_mock()
+                self.game_file.return_value = self.client_data, digest
+                with self.assertRaisesRegex(PreloadError, 'not reviewed for this game update'):
+                    FollowTargetMonitor(Mock())
+                self.memory.read.assert_not_called()
+                self.image_bytes.assert_not_called()
+                self.memory.close.assert_called_once_with()
+                self.assertIsNone(self.monitor.memory)
+
+    def test_patched_target_code_refuses_and_closes(self):
+        for rva, size in self.target_spans:
+            with self.subTest(rva=hex(rva)):
+                self.memory.reset_mock()
+                self.memory.read.side_effect = lambda address, count: (
+                    b'\xff' * count if address == self.base + rva
+                    else self.code[address - self.base, count])
+                with self.assertRaisesRegex(PreloadError, 'observer code differs'):
+                    FollowTargetMonitor(Mock())
+                self.memory.close.assert_called_once_with()
+                self.assertIsNone(self.monitor.memory)
+
+    def test_future_camera_review_does_not_advance_target_pin(self):
+        import importlib.util
+        import dolly.follow_target as follow_target
+
+        future_digest = '1' * 64
+        self.assertNotEqual(future_digest, self.current_digest)
+        source = Path(follow_target.__file__)
+        spec = importlib.util.spec_from_file_location('dolly._follow_target_review_probe', source)
+        probe = importlib.util.module_from_spec(spec)
+        with patch('dolly.replay_camera.CLIENT_SHA256', future_digest), patch(
+                'dolly._runtime_generated.ReplayCamera.CLIENT_SHA256', future_digest):
+            spec.loader.exec_module(probe)
+            self.assertEqual(probe.REVIEWED_CLIENT_SHA256, self.current_digest)
+            with patch.object(probe, 'game_file', return_value=(self.client_data, future_digest)):
+                with self.assertRaisesRegex(PreloadError, 'not reviewed for this game update'):
+                    probe.FollowTargetMonitor(Mock())
+        self.memory.read.assert_not_called()
+        self.image_bytes.assert_not_called()
+        self.memory.close.assert_called_once_with()
+        self.assertIsNone(self.monitor.memory)

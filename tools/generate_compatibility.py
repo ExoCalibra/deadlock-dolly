@@ -26,6 +26,7 @@ CONTRACT = 'native/profiles/runtime-contracts.json'
 ANCHOR_FIELDS = ('controller', 'observer_base', 'composition', 'blend', 'blend_caller',
     'image_size', 'rig', 'manager', 'manager_table', 'camera_table', 'controller_table',
     'entity_list', 'observer_table', 'services_table', 'pawn_table', 'observer_services_offset')
+ANCHOR_OPTIONAL_FIELDS = ('local_player_table',)
 IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9]*\Z')
 HASH = re.compile(r'[0-9a-f]{64}\Z')
 SCENE_FIELDS = ('object', 'vtable', 'frame', 'stack', 'records', 'capacity', 'ids',
@@ -175,22 +176,38 @@ def load_contract(root=ROOT):
         require(digest not in seen and digest in manifest['modules'][modules['client']['path']]['accepted'],
                 'Duplicate or unreviewed Follow anchor profile')
         seen.add(digest)
-        require(set(anchor['values']) == set(ANCHOR_FIELDS), 'Follow anchor layout is incomplete or has unknown members')
+        require(set(ANCHOR_FIELDS) <= set(anchor['values']) <= set(ANCHOR_FIELDS + ANCHOR_OPTIONAL_FIELDS),
+                'Follow anchor layout is incomplete or has unknown members')
         require(integer(anchor['values']['image_size']) == size, 'Follow image size differs from its reviewed profile')
         for key, value in anchor['values'].items():
             if key != 'image_size':
                 bounded(value, 0x8000 if key.endswith('_offset') else size)
         require(anchor['schema_field'] == 'C_BasePlayerPawn.m_pObserverServices' and anchor.get('evidence'),
                 'Follow observer field needs explicit named review')
+        if digest == modules['client']['sha256']:
+            require(integer(anchor['values']['observer_services_offset']) ==
+                    integer(data['schema'][anchor['schema_field']]['offset']),
+                    'Current Follow anchor observer field differs from the reviewed schema')
+            if 'local_player_table' in anchor['values']:
+                require(integer(anchor['values']['local_player_table']) == values['FollowTarget']['PLAYER_PAWN_VTABLE'],
+                        'Current Follow local player type differs from the reviewed target profile')
         require(anchor['spans'], 'Follow anchor needs exact code evidence')
         covered = set()
+        caller = integer(anchor['values']['blend_caller'])
+        blend = integer(anchor['values']['blend'])
+        caller_verified = False
         for span in anchor['spans']:
             raw = bytes.fromhex(span['bytes'])
             rva = bounded(span['rva'], size, size=len(raw))
             require(rva not in covered, 'Duplicate Follow code span')
             covered.add(rva)
+            offset = caller - rva
+            if 5 <= offset <= len(raw) and raw[offset - 5] == 0xe8:
+                destination = caller + int.from_bytes(raw[offset - 4:offset], 'little', signed=True)
+                caller_verified |= destination == blend
         require(all(integer(anchor['values'][name]) in covered for name in ('composition','blend')),
                 'Follow hook entry is absent from exact code evidence')
+        require(caller_verified, 'Follow blend caller lacks an exact reviewed call to the blend hook')
         anchor['_sha256'] = digest
     return data, modules, values
 
@@ -253,13 +270,14 @@ def render_follow(data):
             lines.append('    {' + span['rva'] + f', {name}, sizeof({name})' + '},')
         lines.append('};')
     lines += ['struct FollowAnchorProfile {', '    const char* hash;']
-    lines += [f'    std::uintptr_t {name};' for name in ANCHOR_FIELDS]
+    lines += [f'    std::uintptr_t {name};' for name in ANCHOR_FIELDS + ANCHOR_OPTIONAL_FIELDS]
     lines += ['    const FollowCodeSpan* spans;', '    std::size_t count;', '};',
               'constexpr FollowAnchorProfile kFollowAnchorProfiles[] = {']
     for anchor in data['follow_anchors']:
         name = 'kFollowCode' + anchor['build'] + 'Spans'
         lines.append('    {' + json.dumps(anchor['_sha256']) + ', ' + ', '.join(
-            anchor['values'][key] for key in ANCHOR_FIELDS) + f', {name}, sizeof({name}) / sizeof(*{name})' + '},')
+            anchor['values'].get(key, '0x0') for key in ANCHOR_FIELDS + ANCHOR_OPTIONAL_FIELDS) +
+            f', {name}, sizeof({name}) / sizeof(*{name})' + '},')
     lines += ['};', '']
     return '\n'.join(lines)
 
@@ -405,6 +423,9 @@ def verify_game(root, game_dir):
                     report['modules'][entry['module']]['code_spans'] += 1
         for name, field in data['schema'].items():
             report['schema'][name] = verify_named_field(images[field['module']], name, field)
+        for anchor in data['follow_anchors']:
+            if anchor['_sha256'] == modules['client']['sha256']:
+                report['follow_anchor'] = verify_follow_anchor(images['client'], anchor)
         scene = images['player_scene'] = camera.Image(game / 'bin/win64/scenesystem.dll')
         renderer = images['player_renderer'] = camera.Image(game / 'bin/win64/rendersystemdx11.dll')
         matches = [row for row in player_scenes(Path(root), data)
@@ -423,6 +444,18 @@ def verify_game(root, game_dir):
     finally:
         for image in images.values():
             image.close()
+
+
+def verify_follow_anchor(image, anchor):
+    """Check the matching correction profile against installed bytes, read-only."""
+    require(image.sha256 == anchor['_sha256'] and
+            image.image_size == integer(anchor['values']['image_size']),
+            'Follow anchor module differs from the reviewed profile')
+    for span in anchor['spans']:
+        expected = bytes.fromhex(span['bytes'])
+        require(image.read(integer(span['rva']), len(expected)) == expected,
+                'Follow anchor code differs from saved evidence')
+    return dict(build=anchor['build'], code_spans=len(anchor['spans']), live_verified=False)
 
 
 def verify_named_field(image, name, field):

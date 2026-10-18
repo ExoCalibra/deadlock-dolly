@@ -1,5 +1,22 @@
 # Changes
 
+## 0.6.55-alpha
+
+- Restore player selection through Dolly's replay timeline on Deadlock builds
+  6793/6794 using reviewed target and observer-service contracts.
+- Restore the guarded Follow slide correction for the current game build so
+  slide start/stop no longer pulls the camera toward the map origin. Keep older
+  reviewed profiles and active-session ownership checks intact.
+- Read update highlights from the published version heading as well as a bold
+  version line; retain the existing update approval and asset checks.
+- Record live-capture validation of the paired depth camera mapping and sampled
+  reconstructed normals. Existing depth/EXR exports and offline normals
+  groundwork remain the scope; no Normals capture option is added.
+- Release graphics-panel test objects on their creating thread, preventing a
+  later worker from collecting Tk state during the source regression suite.
+
+Full details: [0.6.55 release notes](RELEASE_NOTES_0.6.55-alpha.md).
+
 ## 0.6.54-alpha
 
 - Keep verifying a running map/shader preload instead of ending it on a fixed

@@ -100,18 +100,19 @@ separate folder. Ordinary recovery needs only Dolly.exe.
 ## For the publisher
 
 The in-app highlights use the same short publish description pasted into the
-GitHub release body. Put the exact release version on its own line **in bold**,
-such as `**0.6.52-alpha**`, followed by two to four bullets in the form
+GitHub release body. Open with the published heading that names the release —
+`### Deadlock Dolly v0.6.52-alpha` — or the equivalent bold version line
+`**0.6.52-alpha**`, then two to four bullets in the form
 `- **Short title.** *Before:* ... *After:* ...`. Wrapped lines are supported.
 Use the version being published; the example is not an assigned next version.
 No separate summary attachment or package download is needed to read highlights.
 
-Only a bold version line starts the preview: `**0.6.52-alpha**` or a heading that
-contains it, such as `### **v0.6.52-alpha**`. A plain heading like
-`### Deadlock Dolly v0.6.52-alpha` is not a version line, and any plain heading
-ends the preview, so a release body that opens that way shows no highlights at
-all while the update still installs. Bold the version line and keep the bullets
-directly under it.
+The preview starts at a heading that names the version being published, plain or
+bold; a heading without the version ends the preview, so ordinary section
+headings stay out of the notes. Keep the bullets directly under that heading.
+Older Dolly builds parse only a bold version line, so while users still run
+them a body may keep `**0.6.52-alpha**` under the heading to light their
+previews as well.
 
 1. Use a new increasing version in `dolly/__init__.py` for every public build.
 2. Build locally with `tools/build_windows.py`; do not build on GitHub Actions.
