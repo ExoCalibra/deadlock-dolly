@@ -137,6 +137,66 @@ captured frame. They fail closed (stop the take with an error) instead of
 recording unpaired data; see [LAYER_EXPORT.md](internal/LAYER_EXPORT.md) for renderer
 requirements.
 
+## Export the camera
+
+When recording, Dolly can save Camera data so that 3D layers, text and
+effects line up with the footage in After Effects, Blender, DaVinci Resolve's
+Fusion or any other app that reads USD.
+
+### Turn it on
+
+Tick **Export After Effects camera (.jsx)**, **Export USD camera (.usda)** or
+both. They're in the **Camera source** card on the desktop **Export** tab and on
+game overlay's Export page. Camera exports work for camera paths, single bone
+cameras and Player POV. The files are written when the recording finishes.
+
+### Files
+
+| File | What it is |
+| --- | --- |
+| `<video>.mp4.camera-track.json` | The camera Dolly rendered on every frame |
+| `<video>_camera.jsx` | After Effects script that builds a composition with the camera and video. |
+| `<video>_camera.usda` | USD layer with the camera, for Blender and other apps. |
+
+### After Effects
+
+1. In After Effects, choose **File → Scripts → Run Script File…** and pick the
+   `_camera.jsx`.
+2. The script imports the video from the script's own folder (or asks you to
+   locate it), conforms it to the take's frame rate and builds a comp at the
+   video's size with a **Dolly camera** and the video as its bottom layer.
+   Running it again reuses the imported video.
+
+### Blender / other USD apps
+
+1. In Blender, choose **File → Import → Universal Scene Description** and pick
+   the `_camera.usda`. Keep **Apply Unit Conversion Scale** on and **Scale** at
+   1, the defaults: the layer is in inches (`metersPerUnit` 0.0254, Z up), and
+   depth of field relies on that conversion.
+2. Set the render resolution to the video's size and the frame rate to the
+   take's FPS.
+3. Add the video as the camera's background (a Movie Clip) and set the clip's
+   **Start Frame** to 0: the USD camera starts at frame 0, Blender's clips at 1.
+
+The camera's frames match the video's frames one for one, so scrub frame by
+frame to check alignment. If the background seems to jump during playback,
+use **Playback → Sync → Play Every Frame**, or a timecode proxy or image
+sequence for frame-exact video.
+
+### Key markers
+
+Each keyframe gets a marker (a guide null in After Effects, an Xform under
+`/Dolly/Keys` in USD) at the camera's actual position when the shot reached
+that key, labelled with its time in the video. Keys the take never reached are
+left out. Player POV takes have no markers.
+
+### Depth of field
+
+Dolly has support for exporting camera lens effects for **Citadel DOF** and
+**Native DOF**. Citadel DOF will create an accurate lens based on the settings
+used in the recording. Native DOF will make an approximate lens, you may need
+to tweak the settings in your app of choice after importing.
+
 ## Set up ReShade
 
 1. Download **ReShade 6.8.0 or a compatible newer full add-on support** build from the [official ReShade

@@ -17,7 +17,8 @@ exports retain their documented alpha limitations. See the current
 a matching Dolly update.
 
 [Video and ReShade setup](VIDEO_AND_RESHADE.md) covers output settings, F11,
-installation and current limits. Windows/Deadlock validation is recorded in
+installation and current limits. [Export the camera](VIDEO_AND_RESHADE.md#export-the-camera)
+covers After Effects and USD camera exports. Windows/Deadlock validation is recorded in
 [VALIDATION.md](internal/VALIDATION.md).
 
 ## Start here
