@@ -312,6 +312,24 @@ class NativeFlightControllerTests(unittest.TestCase):
             self.controller._seek_tick(101)
         self.assertEqual(settled, [101])
 
+    def test_new_replay_seek_after_stop_clears_only_the_previous_stop_flag(self):
+        for relative in (False, True):
+            with self.subTest(relative=relative):
+                controller, console, bridge = configured_controller()
+                controller._stop_event.set()  # Stop leaves this flag latched.
+                original = list(bridge.original)
+                if relative:
+                    target = console.tick - 64
+                    controller.seek_relative(-1, tick_rate=64)
+                    self.assertEqual(bridge.owner, 'flight')
+                else:
+                    target = 3470
+                    controller.seek_replay_tick(target)
+                    self.assertEqual(bridge.owner, 'panel')
+                self.assertEqual(console.tick, target)
+                self.assertEqual(bridge.pose, original)
+                self.assertFalse(controller._stop_event.is_set())
+
     def test_seek_status_uses_remaining_reconstruction_budget(self):
         request = self.controller._request
         budgets = []

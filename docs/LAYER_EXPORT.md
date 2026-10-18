@@ -77,6 +77,13 @@ isolated render of every shadow, reflection, glow or transparent effect. The
 Players MOV uses a display conversion; it is not a raw linear-HDR render pass.
 Missing, transparent or dark regions need inspection in the actual take.
 
+When the scene uses a smaller viewport inside its render-target allocation,
+Players maps that active region across the exported canvas instead of retaining
+the unused padding. The original draw and scenery depth test remain unchanged.
+This corrects framing; it does not reproduce the game's temporal upscaler or
+guarantee identical antialiasing at every edge. Unsupported or changing viewports
+stop the capture rather than silently changing its framing.
+
 ## Depth and camera data
 
 Color and depth are copied from the same admitted render sample. Missing or

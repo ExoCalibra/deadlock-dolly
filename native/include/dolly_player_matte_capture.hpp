@@ -4,18 +4,49 @@
 #include <wrl/client.h>
 #include <vector>
 #include <cstring>
+#include <cmath>
 #include "dolly_player_matte_pass.hpp"
 namespace dolly::player_capture {
 class MatteCapture {
     template<class T> using Com=Microsoft::WRL::ComPtr<T>;
     Com<ID3D11Texture2D> target,staging;Com<ID3D11RenderTargetView> view;
     Com<ID3D11PixelShader> white;Com<ID3D11Query> query;Com<ID3D11DeviceContext> context;
+    bool normalizeViewport=false;
+    D3D11_VIEWPORT captureViewport{};
+    std::vector<unsigned> sourceColumns;
+    static bool read_viewport(ID3D11DeviceContext* c,unsigned w,unsigned h,D3D11_VIEWPORT& result) noexcept {
+        D3D11_VIEWPORT views[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+        UINT count=D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+        c->RSGetViewports(&count,views);
+        if(count!=1)return false;
+        const auto& v=views[0];
+        for(float value:{v.TopLeftX,v.TopLeftY,v.Width,v.Height})
+            if(!std::isfinite(value) || value<0 || std::abs(value-std::round(value))>.001f)return false;
+        if(v.Width<1 || v.Height<1 || double(v.TopLeftX)+v.Width>w || double(v.TopLeftY)+v.Height>h)return false;
+        result=v;return true;
+    }
+    bool matches_viewport(ID3D11DeviceContext* c) const noexcept {
+        D3D11_VIEWPORT current{};
+        return !normalizeViewport || (read_viewport(c,width,height,current) &&
+            std::memcmp(&current,&captureViewport,sizeof(current))==0);
+    }
 public:
     unsigned width=0,height=0,bytesPerPixel=4;bool pending=false,complete=false;HRESULT failure=S_OK;
     std::vector<unsigned char> pixels;
     bool prepare(ID3D11DeviceContext* c,unsigned w,unsigned h,ID3D11PixelShader* material=nullptr,bool hdr=false,bool preserveMaterial=false) {
         if(context || !c || c->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE || !w || !h || w>8192 || h>8192)return false;
+        // Preserve the original rasterization and depth coordinates. Normalize
+        // only the readback: upscalers can use a smaller viewport inside a
+        // full-resolution scene allocation, whose unused pixels are padding.
+        normalizeViewport=preserveMaterial;
+        if(normalizeViewport && !read_viewport(c,w,h,captureViewport)) {failure=E_INVALIDARG;return false;}
         Com<ID3D11Device> device;c->GetDevice(&device);width=w;height=h;bytesPerPixel=hdr?8:4;
+        if(normalizeViewport) {
+            sourceColumns.resize(w);
+            for(unsigned x=0;x<w;++x)
+                sourceColumns[x]=static_cast<unsigned>(captureViewport.TopLeftX+
+                    (double(x)+.5)*captureViewport.Width/w)*bytesPerPixel;
+        }
         if(material)white=material;
         else if(!preserveMaterial) {
             Com<ID3DBlob> code,error;
@@ -35,7 +66,7 @@ public:
         context=c;return true;
     }
     template<class Draw> bool append(ID3D11DeviceContext* c,Draw original,bool preserveDepth=false,bool preserveMaterial=false,bool coverageAlpha=false) {
-        return context.Get()==c && !pending && !complete && redirect_matte(c,view.Get(),white.Get(),original,preserveDepth,preserveMaterial,coverageAlpha);
+        return context.Get()==c && !pending && !complete && matches_viewport(c) && redirect_matte(c,view.Get(),white.Get(),original,preserveDepth,preserveMaterial,coverageAlpha);
     }
     bool finish(ID3D11DeviceContext* c) {
         if(!context || context.Get()!=c || pending || complete)return false;
@@ -81,7 +112,7 @@ public:
     }
     // A recycled slot keeps its target; callers must not prepare it again.
     bool reusable_for(ID3D11DeviceContext* c,unsigned w,unsigned h) const noexcept {
-        return context.Get()==c && width==w && height==h && !pending && !complete;
+        return context.Get()==c && width==w && height==h && !pending && !complete && matches_viewport(c);
     }
     int poll(ID3D11DeviceContext* c) noexcept {
         if(!pending || c!=context.Get())return 0;
@@ -91,7 +122,25 @@ public:
         D3D11_MAPPED_SUBRESOURCE m{};failure=c->Map(staging.Get(),0,D3D11_MAP_READ,D3D11_MAP_FLAG_DO_NOT_WAIT,&m);
         if(failure==DXGI_ERROR_WAS_STILL_DRAWING)return 0;
         if(FAILED(failure)){pending=false;return -1;}
-        for(unsigned y=0;y<height;++y)std::memcpy(pixels.data()+std::size_t(y)*width*bytesPerPixel,static_cast<const unsigned char*>(m.pData)+std::size_t(y)*m.RowPitch,width*bytesPerPixel);
+        const bool scaled=normalizeViewport && (captureViewport.Width!=width || captureViewport.Height!=height);
+        unsigned previousRow=~0u;
+        for(unsigned y=0;y<height;++y) {
+            auto* output=pixels.data()+std::size_t(y)*width*bytesPerPixel;
+            if(!scaled) {
+                std::memcpy(output,static_cast<const unsigned char*>(m.pData)+std::size_t(y)*m.RowPitch,width*bytesPerPixel);
+                continue;
+            }
+            const unsigned sourceY=static_cast<unsigned>(captureViewport.TopLeftY+
+                (double(y)+.5)*captureViewport.Height/height);
+            if(sourceY==previousRow) {
+                std::memcpy(output,output-std::size_t(width)*bytesPerPixel,width*bytesPerPixel);
+            } else {
+                const auto* source=static_cast<const unsigned char*>(m.pData)+std::size_t(sourceY)*m.RowPitch;
+                for(unsigned x=0;x<width;++x)
+                    std::memcpy(output+std::size_t(x)*bytesPerPixel,source+sourceColumns[x],bytesPerPixel);
+            }
+            previousRow=sourceY;
+        }
         c->Unmap(staging.Get(),0);pending=false;complete=true;return 1;
     }
 };

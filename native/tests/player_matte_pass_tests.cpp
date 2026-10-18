@@ -424,6 +424,69 @@ int main() {
     CHECK(reuse.pixels == expectedGreen);
     CHECK(reuse.recycle(c.Get()));
     reuse.release_gpu();
+    // Upscalers may keep a full-sized scene allocation but rasterize into a
+    // smaller viewport. The Players image must fill the same output canvas,
+    // without changing the original draw/depth/viewport or copying its padding.
+    for (const auto scaledViewport : {D3D11_VIEWPORT{0, 0, 32, 16, 0, 1},
+                                      D3D11_VIEWPORT{0, 0, 40, 20, 0, 1},
+                                      D3D11_VIEWPORT{8, 4, 40, 20, 0, 1}}) {
+        c->RSSetViewports(1, &scaledViewport);
+        c->OMSetRenderTargets(1, &rt, depthView.Get());
+        c->OMSetDepthStencilState(depthState.Get(), 0);
+        c->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+        c->PSSetShader(red.Get(), nullptr, 0);
+        c->ClearRenderTargetView(colorView.Get(), black);
+        const auto beforeScaled = pixels(color.Get());
+        for (bool hidden : {false, true}) {
+            c->ClearDepthStencilView(depthView.Get(), D3D11_CLEAR_DEPTH, hidden ? .25f : 1.f, 0);
+            dolly::player_capture::MatteCapture scaled;
+            CHECK(scaled.prepare(c.Get(), 64, 32, nullptr, true, true));
+            unsigned draws = 0;
+            CHECK(scaled.append(c.Get(), [&] { ++draws; c->Draw(3, 0); }, true, true, true));
+            CHECK(draws == 1 && scaled.finish(c.Get()));
+            c->Flush();
+            int result = 0;
+            const auto limit = GetTickCount64() + 2000;
+            while (!result && GetTickCount64() < limit) {
+                result = scaled.poll(c.Get());
+                if (!result) Sleep(1);
+            }
+            CHECK(result == 1 && scaled.width == 64 && scaled.height == 32);
+            const auto alphaAt = [&](unsigned x, unsigned y) {
+                std::uint16_t alpha = 0;
+                std::memcpy(&alpha, scaled.pixels.data() + (y * 64 + x) * 8 + 6, 2);
+                return alpha;
+            };
+            CHECK(alphaAt(32, 8) == (hidden ? 0 : 0x3c00));
+            CHECK(alphaAt(20, 24) == (hidden ? 0 : 0x3c00));
+            CHECK(alphaAt(0, 0) == 0);
+            CHECK(pixels(color.Get()) == beforeScaled);
+            D3D11_VIEWPORT after{};
+            UINT viewportCount = 1;
+            c->RSGetViewports(&viewportCount, &after);
+            CHECK(viewportCount == 1 && std::memcmp(&after, &scaledViewport, sizeof(after)) == 0);
+            ComPtr<ID3D11DepthStencilView> originalDepth;
+            c->OMGetRenderTargets(0, nullptr, &originalDepth);
+            CHECK(originalDepth.Get() == depthView.Get());
+            CHECK(scaled.recycle(c.Get()));
+            auto changed = scaledViewport;
+            changed.Width -= 1;
+            c->RSSetViewports(1, &changed);
+            CHECK(!scaled.append(c.Get(), [&] { ++draws; }, true, true, true));
+            CHECK(draws == 1);
+            c->RSSetViewports(1, &scaledViewport);
+        }
+    }
+    // An unsupported viewport must not be guessed into a plausible frame.
+    const D3D11_VIEWPORT outside{0, 0, 65, 32, 0, 1};
+    c->RSSetViewports(1, &outside);
+    dolly::player_capture::MatteCapture invalidViewport;
+    CHECK(!invalidViewport.prepare(c.Get(), 64, 32, nullptr, true, true));
+    const D3D11_VIEWPORT multiple[]{viewport, viewport};
+    c->RSSetViewports(2, multiple);
+    dolly::player_capture::MatteCapture multipleViewports;
+    CHECK(!multipleViewports.prepare(c.Get(), 64, 32, nullptr, true, true));
+    c->RSSetViewports(1, &viewport);
     for (UINT64 i = 0; i < info->GetNumStoredMessages(); ++i) {
         SIZE_T n = 0;
         info->GetMessage(i, nullptr, &n);

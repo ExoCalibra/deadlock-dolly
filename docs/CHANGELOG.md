@@ -4,6 +4,21 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.59-alpha
+
+- Use the completed replay's verified packet boundaries for absolute and relative
+  replay seeks, choosing a recorded tick in the requested direction and reporting
+  any adjustment. Preserve exact targets when available and existing fallback,
+  replay-identity, cancellation and paused-state checks.
+- Let a new replay seek retire the previous Stop flag while still honoring
+  cancellation during the new operation.
+- Map the Players capture's active viewport across its exported canvas when the
+  scene allocation is larger than the rendered region. Preserve the original
+  draw, depth-based scenery occlusion and material data; reject unsupported or
+  changing viewports instead of silently exporting a misframed image.
+
+Full details: [0.6.59 release notes](RELEASE_NOTES_0.6.59-alpha.md).
+
 ## 0.6.58-alpha
 
 - Accept bounded temporal projection jitter for paired depth while preserving

@@ -3636,6 +3636,23 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._message(f"Replay tick {target}: moved {moved:+d} ticks{detail}. " + camera)
             return {"tick": target, "requested_tick": requested, "moved_ticks": moved}
 
+    def _recorded_replay_target(self, target, info):
+        """Use a verified packet in the requested direction for replay controls."""
+        self._check_position_cancelled()
+        index = packet_index(self._demo, check_cancelled=self._check_position_cancelled)
+        if index is None:
+            return target
+        if info.get("total_ticks") not in (None, index.total_ticks):
+            raise RuntimeError("The replay file differs from the loaded replay. Reopen it through Dolly.")
+        current = int(info["tick"])
+        if target == current:
+            return target
+        recorded = index.following(target) if target > current else index.preceding(target)
+        self._check_position_cancelled()
+        # Unknown formats and the signon/first-packet boundary retain their
+        # existing exact verification. Never invent a tick from a time estimate.
+        return target if recorded is None else recorded
+
     def seek_replay_tick(self, target):
         """Seek an absolute replay tick, retaining the live camera and panel."""
         if isinstance(target, bool) or not isinstance(target, (int, float)) or not math.isfinite(target) or target != int(target) or not 0 <= target <= 2147483647:
@@ -3643,6 +3660,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         with self._op_lock:
             if self.status().get("playing"):
                 raise RuntimeError("Stop shot playback before seeking the replay.")
+            self._stop_event.clear()
             info = self._require_demo()
             if info.get("total_ticks") is not None and target >= int(info["total_ticks"]):
                 raise ValueError("The requested tick is beyond the replay.")
@@ -3652,10 +3670,16 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             view = bridge.status()
             self._require_native_demo(view, allow_idle=True)
             pose = self._native_pose(view, "applied_pose" if self._native_active else "original_pose")
-            settled, following, _frame = self._seek_replay_camera(int(target), pose, allow_start_boundary=True)
+            requested = int(target)
+            target = self._recorded_replay_target(requested, info)
+            settled, following, _frame = self._seek_replay_camera(target, pose, allow_start_boundary=True)
+            detail = ""
+            if target != requested:
+                self._last_seek_details.update(requested_tick=requested, commanded_tick=target)
+                detail = f" (requested {requested}; nearest recorded tick)"
             bridge.configure_editor(owner="panel")
             if following is not False:
-                self._message(f"Replay tick {settled['tick']}. " +
+                self._message(f"Replay tick {settled['tick']}{detail}. " +
                               ('Following the selected player.' if following else 'Camera held fixed.'))
             return settled
 
@@ -3665,6 +3689,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             seconds = float(seconds)
             if not math.isfinite(seconds) or abs(seconds) > 3600:
                 raise ValueError("Replay seek must be a finite number of seconds within one hour.")
+            self._stop_event.clear()
             info = self._require_demo()
             bridge = self._native_bridge()
             if bridge is None:
@@ -3682,12 +3707,18 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             target = max(0, int(round(int(info["tick"]) + seconds * tick_rate)))
             if info.get("total_ticks") is not None:
                 target = min(target, max(0, int(info["total_ticks"]) - 1))
+            requested = target
+            target = self._recorded_replay_target(target, info)
             # A held native view must release before a seek, including replay
             # rewind. Preserve its visual pose explicitly for the return trip.
             _settled, _following, frame = self._seek_replay_camera(target, pose, owner='flight')
+            if target != requested:
+                self._last_seek_details.update(requested_tick=requested, commanded_tick=target)
             result = frame if frame is not None else self.status()
             if self._participant_follow_current() is None:
-                self._message("Replay paused at the new time; camera position retained.")
+                detail = (f" at tick {_settled['tick']} (requested {requested}; nearest recorded tick)"
+                          if target != requested else " at the new time")
+                self._message("Replay paused" + detail + "; camera position retained.")
             return result
 
     def apply(self, project, shot_time):

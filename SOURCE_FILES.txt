@@ -769,3 +769,4 @@ docs/UPDATING.md
 docs/LAYER_EXPORT.md
 docs/internal/README.md
 docs/RELEASE_NOTES_0.6.58-alpha.md
+docs/RELEASE_NOTES_0.6.59-alpha.md

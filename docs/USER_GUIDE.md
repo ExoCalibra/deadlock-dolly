@@ -271,7 +271,9 @@ replay time. For longer lists, the arrows beneath the table browse its pages.
 To visit a saved camera at its recorded replay time, select its row and press
 **Seek camera** on the bottom **Replay** timeline. Dolly pauses at that part of
 the replay and applies the saved view. The replay slider and tick field continue
-to seek while retaining the current camera.
+to seek while retaining the current camera. If the completed replay omits the
+requested tick, these controls and relative replay seeks choose a recorded tick
+in the requested direction and report the actual position.
 
 **Delete** removes the selected camera immediately. **Undo** restores
 it, including its player/bone attachment and framing; **Redo** repeats the
