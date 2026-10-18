@@ -1,5 +1,6 @@
 """Graphics panel behavior with isolated files, dialogs and process inventory."""
 from dolly import game_processes
+import gc
 from pathlib import Path
 import tempfile
 import tkinter as tk
@@ -20,16 +21,24 @@ class GraphicsPanelTests(unittest.TestCase):
         except tk.TclError as error:
             self.skipTest(str(error))
         self.root.withdraw()
-        self.addCleanup(self.root.destroy)
+        self.errors = []
+        self.addCleanup(self.close_panel)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.folder = Path(temporary.name)
         self.video = self.folder / 'video.txt'
         self.video.write_bytes(VIDEO)
         self.library = self.folder / 'profiles.json'
-        self.errors = []
         self.patch(profiles, 'library_path', return_value=self.library)
         self.panel = GraphicsProfiles(ttk.Frame(self.root), root=self.root, on_error=lambda *args: self.errors.append(args))
+
+    def close_panel(self):
+        # Registered first so patched methods release their callbacks before Tk.
+        self.root.destroy()
+        self.panel = None
+        self.root = None
+        self.errors.clear()  # Exceptions can retain panel frames through tracebacks.
+        gc.collect()  # Finalize the unreachable Tk graph on its creating thread.
 
     def patch(self, obj, name, **kwargs):
         mock = patch.object(obj, name, **kwargs)

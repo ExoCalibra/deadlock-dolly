@@ -3,11 +3,16 @@ import struct
 
 from .follow_capabilities import FollowCapabilityMonitor
 from .preload import PreloadError
-from .replay_camera import CLIENT_SHA256
 from .preload import _image_bytes, game_file
 from .replay_camera import ReplayCameraMonitor
 
 from ._runtime_generated import FollowTarget as _profile
+
+# Keep this pin independent of the shared replay-camera identity. A camera-only
+# review must not enable stale player-target data. The FollowTarget group and
+# observer schema were reviewed together for the byte-identical 6793/6794 client;
+# update this pin only with a reviewed target profile and its stock consumers.
+REVIEWED_CLIENT_SHA256 = 'd61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460'
 
 TARGET_SPANS = _profile.TARGET_SPANS
 # Exact stock HUD getter chain and its entity predicates. Camera mode alone
@@ -40,8 +45,9 @@ class FollowTargetMonitor(FollowCapabilityMonitor):
         try:
             path = Path(self.command[0]).resolve().parents[2] / 'citadel/bin/win64/client.dll'
             data, digest = game_file(path)
-            if digest != CLIENT_SHA256:
-                raise PreloadError('Game Follow observer build is unsupported.')
+            if digest != REVIEWED_CLIENT_SHA256:
+                raise PreloadError('Game Follow is not reviewed for this game update. '
+                                   'Its camera profile still belongs to the previous review.')
             for rva, size in TARGET_SPANS:
                 if self.memory.read(self.base + rva, size) != _image_bytes(data, rva, size):
                     raise PreloadError('Game Follow observer code differs from the reviewed build.')

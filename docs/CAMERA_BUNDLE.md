@@ -86,7 +86,9 @@ per-view constants do. Do not assume one convention for both.
   not assume it.
 - **Pixel**: `x = (ndc_x + 1)/2 · width`, `y = (1 − ndc_y)/2 · height`
   (origin at the top-left of the depth master). This mapping is documented for
-  reconstruction; live verification against a known object is still pending.
+  reconstruction and has passed cross-frame depth reprojection checks on live
+  paired-depth captures. An independent surveyed world-point check remains
+  outside that validation.
 
 `state` is `complete` when `view`/`position`/`up`/`forward` were captured from
 the same validated per-view constants as the projection, or `projection-only`
@@ -104,8 +106,9 @@ point through a record (`load_bundle`, `validate_bundle`, `project_point`).
 
 Values come from the engine's per-view constants sampled at the scene draw of
 the captured frame (the reviewed `PerViewConstantBuffer_t` layout). The
-projection's horizontal/vertical scale is part of that same reviewed layout; the
-pixel mapping above is documented but not yet validated in-game. Effects that
+projection's horizontal/vertical scale is part of that same reviewed layout;
+live captures have passed cross-frame projection/depth consistency checks.
+Effects that
 change the camera after the scene pass (DOF, post) and attachment motion are
 covered insofar as the sampled constants are the ones the scene was rendered
 with — the record describes the captured render, not the authoring timeline.

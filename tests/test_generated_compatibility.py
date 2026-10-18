@@ -9,7 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -115,7 +115,7 @@ class GeneratedCompatibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(generate.ContractError,'required/optional'):
             generate.generated_outputs(self.root)
 
-    def test_retained_anchor_bytes_round_trip_without_new_profiles(self):
+    def test_retained_anchor_bytes_round_trip_with_current_review(self):
         outputs=generate.generated_outputs(self.root)
         header=outputs['native/src/dolly_follow_anchor_generated.hpp']
         arrays=re.findall(r'constexpr unsigned char kFollowCode(\d+)_([0-9a-f]+)\[\] = \{(.*?)\};',header,re.S)
@@ -124,8 +124,99 @@ class GeneratedCompatibilityTests(unittest.TestCase):
         expected={(a['build'],int(span['rva'],16)):bytes.fromhex(span['bytes'])
                   for a in self.data['follow_anchors'] for span in a['spans']}
         self.assertEqual(actual,expected)
-        self.assertEqual({a['build'] for a in self.data['follow_anchors']},{'6722','6723','6726'})
-        self.assertTrue(all(a['values']['observer_services_offset']=='0xe40' for a in self.data['follow_anchors']))
+        anchors={a['build']:a for a in self.data['follow_anchors']}
+        self.assertEqual(set(anchors),{'6722','6723','6726','6793'})
+        for build in ('6722','6723','6726'):
+            self.assertEqual(anchors[build]['values']['observer_services_offset'],'0xe40')
+            self.assertNotIn('local_player_table',anchors[build]['values'])
+        self.assertEqual(anchors['6793']['values']['observer_services_offset'],'0xe98')
+        player_table=0x2748d20  # Dedicated 6793 review; camera-only updates may retain it.
+        self.assertEqual(int(anchors['6793']['values']['local_player_table'],16),player_table)
+        loaded,_,_=generate.load_contract(self.root)
+        current=next(a for a in loaded['follow_anchors'] if a['build']=='6793')
+        self.assertEqual(current['_sha256'],'d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460')
+        layout=re.search(r'struct FollowAnchorProfile \{(.*?)\};',header,re.S).group(1)
+        fields=re.findall(r'std::uintptr_t (\w+);',layout)
+        rows=re.findall(r'^\s*\{"[0-9a-f]{64}", (.*?), kFollowCode(\d+)Spans,',header,re.M)
+        emitted={build:dict(zip(fields,(int(value.strip(),0) for value in row.split(','))))
+                 for row,build in rows}
+        self.assertEqual(set(emitted),set(anchors))
+        for build in ('6722','6723','6726'):
+            self.assertEqual(emitted[build]['local_player_table'],0)
+        self.assertEqual(emitted['6793']['local_player_table'],player_table)
+
+    def test_follow_anchor_caller_must_end_a_saved_direct_call_to_blend(self):
+        original=deepcopy(self.data)
+        for invalid in ('outside_saved_spans','wrong_return_address','wrong_destination'):
+            self.data=deepcopy(original)
+            anchor=self.data['follow_anchors'][0]
+            caller=int(anchor['values']['blend_caller'],16)
+            if invalid=='outside_saved_spans':
+                anchor['values']['blend_caller']='0x10'
+            elif invalid=='wrong_return_address':
+                anchor['values']['blend_caller']=hex(caller+1)
+            else:
+                span=next(span for span in anchor['spans']
+                          if int(span['rva'],16)<=caller-5
+                          and caller<=int(span['rva'],16)+len(bytes.fromhex(span['bytes'])))
+                raw=bytearray.fromhex(span['bytes'])
+                offset=caller-5-int(span['rva'],16)
+                self.assertEqual(raw[offset],0xe8)
+                raw[offset+1:offset+5]=struct.pack('<i',int(anchor['values']['blend'],16)+1-caller)
+                span['bytes']=raw.hex()
+            self.save()
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(generate.ContractError,'Follow blend caller'):
+                generate.generated_outputs(self.root)
+
+    def reviewed_anchor(self):
+        return next(anchor for anchor in self.data['follow_anchors'] if anchor['build']=='6793')
+
+    def test_current_follow_anchor_must_match_named_observer_services_field(self):
+        original=deepcopy(self.data)
+        for invalid in ('observer_field','local_player_type'):
+            self.data=deepcopy(original)
+            anchor=self.reviewed_anchor()
+            module=self.data['modules']['client']
+            profile=generate.read_json(self.root/'native/profiles'/module['profile'])[module['section']]
+            anchor['profile']=module['profile']
+            anchor['values']['image_size']=hex(profile[module['size_key']])
+            anchor['values']['observer_services_offset']=self.data['schema'][anchor['schema_field']]['offset']
+            anchor['values']['local_player_table']=self.data['groups']['FollowTarget']['PLAYER_PAWN_VTABLE']['value']
+            if invalid=='observer_field':
+                anchor['values']['observer_services_offset']='0xe40'
+                error='Current Follow anchor observer field'
+            else:
+                anchor['values']['local_player_table']=self.data['groups']['FollowTarget']['OBSERVER_PAWN_VTABLE']['value']
+                error='Current Follow local player type'
+            self.save()
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(generate.ContractError,error):
+                generate.generated_outputs(self.root)
+
+    def test_follow_anchor_verification_requires_identity_before_code_reads(self):
+        data,_,_=generate.load_contract(self.root)
+        anchor=next(a for a in data['follow_anchors'] if a['build']=='6793')
+        for invalid in ('fingerprint','image_size'):
+            image=SimpleNamespace(
+                sha256='0'*64 if invalid=='fingerprint' else anchor['_sha256'],
+                image_size=int(anchor['values']['image_size'],16)+(0x1000 if invalid=='image_size' else 0),
+                read=Mock(side_effect=AssertionError('Unreviewed module must not be read')))
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(generate.ContractError,'Follow anchor module differs'):
+                generate.verify_follow_anchor(image,anchor)
+            image.read.assert_not_called()
+
+    def test_follow_anchor_verification_reads_every_exact_span_and_refuses_changes(self):
+        data,_,_=generate.load_contract(self.root)
+        anchor=next(a for a in data['follow_anchors'] if a['build']=='6793')
+        spans={int(span['rva'],16):bytes.fromhex(span['bytes']) for span in anchor['spans']}
+        image=SimpleNamespace(sha256=anchor['_sha256'],image_size=int(anchor['values']['image_size'],16),
+                              read=Mock(side_effect=lambda rva,size:spans[rva][:size]))
+        self.assertEqual(generate.verify_follow_anchor(image,anchor),{
+            'build':'6793','code_spans':len(spans),'live_verified':False})
+        self.assertEqual(image.read.call_args_list,[call(rva,len(raw)) for rva,raw in spans.items()])
+        for changed_rva in spans:
+            image.read.side_effect=lambda rva,size: bytes(size) if rva==changed_rva else spans[rva][:size]
+            with self.subTest(rva=hex(changed_rva)), self.assertRaisesRegex(generate.ContractError,'Follow anchor code differs'):
+                generate.verify_follow_anchor(image,anchor)
 
     def test_incomplete_or_duplicate_anchor_profiles_cannot_emit_hooks(self):
         original=deepcopy(self.data)
