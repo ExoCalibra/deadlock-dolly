@@ -17,6 +17,27 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def wine_version() -> str:
+    """The running Wine/Proton version, or "" on real Windows.
+
+    Wine answers most Windows APIs Dolly uses, but not all of them with the
+    same results. The preload verification needs another process's module list
+    and memory, which Wine does not expose, so callers use this to offer the
+    documented manual path instead of failing.
+    """
+    if os.name != "nt":
+        return ""
+    try:
+        function = ctypes.WinDLL("ntdll").wine_get_version
+    except (OSError, AttributeError):
+        return ""
+    function.restype = ctypes.c_char_p
+    try:
+        return (function() or b"").decode("ascii", "replace")
+    except OSError:
+        return ""
+
+
 def application_root(source_root: Path | None = None) -> Path:
     """Persistent portable data stays beside Dolly.exe, never inside _internal."""
     if is_frozen():
