@@ -1,5 +1,10 @@
 # Native DOF curves — 0.4.5 alpha
 
+Historical implementation reference for the version named below. Its UI,
+build instructions and validation status describe that revision. For current
+operation use the [user guide](../USER_GUIDE.md), [in-game editor](../UI_REWORK.md)
+and [building guide](../BUILDING.md).
+
 Native mode now publishes DOF curves with the camera path. The game evaluates
 both at the same main-view shot phase. It uses the verified native typed cvar
 setter and reads each result back, instead of streaming animated values through

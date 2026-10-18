@@ -1,5 +1,9 @@
 # Camera integration evidence
 
+Historical record: controls, plans and validation status below describe the
+original revision. Use the [current documentation](../README.md) for today's
+workflow and [development checks](TESTING.md) for current verification.
+
 Research snapshot: 8 September 2026. This is a command-driven prototype. Console
 framing and path calculations can be tested without the game; visible camera
 behavior, game launching, and unlocker ABI compatibility require a Windows

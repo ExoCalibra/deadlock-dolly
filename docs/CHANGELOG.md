@@ -1,5 +1,9 @@
 # Changes
 
+Release history. Each section describes its own version; controls and limits
+may have changed since then. Use the [current documentation](README.md) for
+setup and operation.
+
 ## 0.6.57-alpha
 
 - Build and tooling release; no app behaviour changes on Windows.
@@ -134,7 +138,7 @@ Full details: [0.6.53 release notes](RELEASE_NOTES_0.6.53-alpha.md).
 - **Check replay continuity when pausing.** *Before:* the playback monitor rejected every backward native tick, including a settling paused view. *After:* a suspicious tick at the pause transition is checked against the independent replay clock; actual seeks, invalid views and replay changes still stop playback.
 - **Matte panels and quieter controls.** *Before:* the replay could show through panel backgrounds. *After:* opaque graphite surfaces, softer text and mint selections keep the editor readable, using the approved preview colours in both editors.
 
-Built on the in-game UI rework contributed by Marcel,
+Built on the in-game UI rework contributed by
 [@tbhtho](https://github.com/tbhtho) in [PR #20](https://github.com/cravvnn/deadlock-dolly/pull/20).
 
 Full details: [0.6.52 release notes](RELEASE_NOTES_0.6.52-alpha.md).

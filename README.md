@@ -4,8 +4,6 @@
 
 # Deadlock Dolly
 
-[In-game UI controls and saved layouts](docs/UI_REWORK.md).
-
 **A camera-path editor for local Deadlock replays.**
 
 [![Download](https://img.shields.io/badge/Download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/cravvnn/deadlock-dolly/releases)
@@ -21,347 +19,150 @@
 
 </div>
 
-Capture the free camera, shape a shot and play it back with animated framing and
-camera variables.
+Capture views from a local replay, shape a camera path and play it back with
+animated framing and effects. Edit through the desktop or directly in the game.
 
-**Current source: 0.6.57-alpha.** The portable Windows build opens through
-`Dolly.exe`. Python and Tcl/Tk are bundled; no separate installation is needed.
+**Current source: 0.6.57-alpha · Windows x64 · DirectX 11.** The portable app
+includes Python and Tcl/Tk; no separate installation is needed.
 
-**THIS MOD INJECTS CODE INTO DEADLOCK — USE AT YOUR OWN RISK.**
+> **Local replays only — use at your own risk.** Dolly injects a native DLL
+> into Deadlock. Keep `-insecure` in Deadlock's launch options while using Dolly.
+> Close your Dolly editing session before launching Deadlock normally.
 
-The Native driver loads a DLL into the game to apply camera movement during
-each main rendered view. It runs in the game's user-mode process; there is no
-kernel driver.
-
-**KEEP `-insecure` IN DEADLOCK'S LAUNCH OPTIONS WHILE USING DOLLY.**
-
-Dolly refuses to launch or connect unless it started the game process itself,
-and it always adds `-dev -insecure -console` to that process. The launch-option
-setting is a safety belt for the brief window before Dolly restores
-`gameinfo.gi`: if Deadlock is started outside Dolly while a session is open,
-exit that game before continuing. Close the editing session before launching
-Deadlock normally.
-
-## Contents
-
-- [Features](#features)
-- [Quick start](#quick-start)
-- [Using the Windows app](#using-the-windows-app)
-- [Application updates](#application-updates)
-- [Video and ReShade](#video-and-reshade)
-- [Recorded demos](#recorded-demos)
-- [Compatibility](#compatibility)
-- [Session files](#session-files)
-- [Development](#development)
-- [Support](#support)
-- [License](#license)
-- [Releases](#releases)
+[Quick start](#quick-start) · [Features](#features) · [Guides](#guides) ·
+[Compatibility](#compatibility) · [Support](#support) · [Contributors](#contributors)
 
 ## Quick start
 
-1. Download the **Windows x64** ZIP from [Releases](https://github.com/cravvnn/deadlock-dolly/releases) and extract it completely — keep `_internal` beside `Dolly.exe`.
-2. Keep `-insecure` in Deadlock's launch options, open Steam and close any running Deadlock.
-3. Run **Dolly.exe**, choose your game executable and a local `.dem` replay, then click **Open replay in Dolly**.
-4. Move to a view and press **Ctrl+Alt+K** to capture it; **F8** opens the in-game panel.
+1. Download the **Windows x64 ZIP** from [Releases](https://github.com/cravvnn/deadlock-dolly/releases) and extract it completely. Keep `_internal` beside `Dolly.exe`.
+2. Open Steam, close any running Deadlock and keep `-insecure` in the game's launch options.
+3. Run **Dolly.exe**, select the game executable and a local `.dem` replay, then click **Open replay in Dolly**.
+4. Frame a view and press **Ctrl+Alt+K** to capture a camera. Advance the replay before framing and capturing the next view, then use **F8** to open the in-game editor and play your path.
 
-See [Using the Windows app](#using-the-windows-app) for the full walkthrough.
+Start the editing game through Dolly. It launches its own process with
+`-dev -insecure -console` and refuses an already running game.
+
+| Default shortcut | Action |
+| --- | --- |
+| **Ctrl+Alt+K** | Capture a camera |
+| **F8** | Show or hide Dolly's in-game panels |
+| **F9** | Switch to Deadlock's replay controls |
+| **F5** | Play the camera shot |
+| **Backspace** | Stop and restore |
+
+Bindings can be changed under **Controls**; existing saved bindings may differ.
+See the
+[in-game editor guide](docs/UI_REWORK.md) for the full workflow.
 
 ## Features
 
-### Editing and cameras
+- **Camera paths and curves.** Shared desktop/in-game editing for position,
+  rotation and aspect ratio, position tangent handles, Undo/Redo and live path guides.
+- **Follow and Bone Picker.** Follow a replay participant with the game's camera,
+  adjust framing, or attach a camera to a selected bone.
+- **Framing and depth of field.** Animate aspect ratio and supported DOF controls
+  alongside the camera path.
+- **Video and audio.** Real-time or fixed-step exports, 30–600 FPS output settings,
+  hardware/software H.264 or HEVC, lossless FFV1, and optional game-only audio
+  for real-time recording. Reconstructed clip audio is a separate advanced workflow.
+- **Depth and layers.** Paired depth masters, optional float EXRs and per-frame
+  camera metadata, plus World, Players and Effects takes with documented alpha limits.
+- **High-resolution stills.** Plate, players-only matte and cut-out hero presets
+  up to 8K, with optional depth within the documented readback limits.
+- **ReShade integration.** Optional color effects and verified scene depth for
+  compatible depth-based effects, with a bundled crosire/prod80 shader library.
 
-- In-game camera list: click to select, double-click to view, and delete the selected camera.
-- Shared shot Undo/Redo in the desktop and in-game editors.
-- Position, Rotation and Aspect Ratio curves in a shared desktop or in-game workspace,
-  with stacked graphs and an optional fixed original snapshot.
-- In-game curve value alignment with Alt, right-click cancellation and **Fit all**
-  to recover the complete path view.
-- Dedicated desktop **Controls** page with shortcut recording, conflict checks,
-  and per-action Clear/Reset.
-- Capture cameras from the game with configurable keyboard or mouse bindings.
-- Smooth position paths, rotation and camera bank.
-- Captured lens metadata preserved through replay reloads, playback, save/reopen and history.
-- Numbered in-game camera guides and spline preview during paused editing.
-- Replay playback with HUD handling, settings restoration and diagnostics.
-- In-game playback speed and monitoring rate shared with desktop controls.
-- Console fallback with Off, Light, Balanced and Strong smoothing choices.
+## Guides
 
-### Native camera, Follow and Bone Picker
+Start with the [documentation index](docs/README.md) for all current guides.
 
-- Native camera playback evaluated for each main rendered view.
-- Native paused-camera movement with WASD and mouse look.
-- Game Follow with hero selection, adjustable distance/shoulder/height, slider resets and optional game HUD.
-- Follow-camera (Player POV) export without the replay HUD: pick a hero with Game Follow and record or export while the HUD stays hidden.
-- Bone-camera preview and attachment, including direct transfer from paused Follow.
-- In-game panel for capture, saved views, replay controls and movement speed.
-- Replay browser and automatic startup, with the unlocker initialized before the demo loads.
-
-### Framing and depth of field
-
-- Animated `r_aspectratio` framing with an editable desktop curve.
-- Fourteen supported DOF controls synchronized with the native camera, including four-value range tracks.
-
-### Recording and export
-
-- Video recording at the game resolution: real-time or fixed-step, 30 to 600 FPS, hardware or software H.264/HEVC encoders, or lossless FFV1.
-- Paired depth master as a 10-bit ProRes `.mov`, with an optional float EXR sequence and a normalized preview video.
-- Isolated world, players and effects layer takes; players and effects get a real alpha channel from black and white matte passes.
-- Optional game-only audio for real-time video, plus a separate advanced reconstructed-audio workflow.
-
-### Stills and layers
-
-- High-resolution screenshots: plate, 16-bit players-only matte, cut-out hero and depth from one paused view, up to 8192 × 8192 (see [High-resolution screenshots](docs/SCREENSHOTS.md)).
-
-### ReShade and updates
-
-- Optional ReShade color effects, its in-game menu on a configurable F11 key, and the verified scene depth published to ReShade for depth-based effects.
-- Automatic update checks inside Dolly, with **Update now** approval and manual checks in Settings.
-
-## Using the Windows app
-
-Download the **Windows x64** ZIP from [Releases](https://github.com/cravvnn/deadlock-dolly/releases).
-Extract it completely and double-click **Dolly.exe**. Keep `_internal` beside
-the EXE; a desktop shortcut can point to it.
-
-Open Steam and close any running Deadlock. Dolly selects **DirectX 11** for
-Native sessions without changing your saved graphics settings. In Dolly,
-choose the game executable and a local `.dem` replay, or select a file from
-**Library**. Click **Open replay in Dolly** to open the game, initialize the unlocker
-in the hideout, load the replay and pause it for editing.
-
-Move to a view and press **Ctrl+Alt+K** to capture it. **Replay timing** is the
-default: advance the replay, frame the next view and capture again.
-**F8** shows or hides all Dolly panels, **F7** opens the console, and
-**F9** switches to Deadlock's replay UI for hero selection. Bindings, movement
-speed and mouse sensitivity are saved from **Controls**. Capture also works
-while the replay is playing. **Pause after capture**, beside Resume in the timeline,
-chooses whether capture pauses playback; it is off by default and remembered.
-Drag the main panel or Campaths header to reposition it. Both show the same
-four-arrow move cursor; Arrange panels is only needed for resizing or moving
-the timeline. Outside Arrange, the timeline fits its active controls and stays
-near the bottom of the screen, retaining its custom width and horizontal position.
-
-Selecting a player in the bottom timeline follows that participant through
-replay seeks and tick steps without changing time just to select them. Dolly
-resolves their current hero after each seek. **Fly camera** returns to a fixed
-view; an unavailable or settling hero produces a status notice instead of a
-guessed camera target.
-
-Returning from hero selection to Dolly's native camera keeps the chosen view
-and switches the underlying game camera to Free Cam. The native camera also
-filters death desaturation and hides the game's player screen-particle layer
-(including damage borders and low-health pulses) while it owns the view.
-F9 restores the previous spectator mode and its effects; the separate
-Player POV export keeps the game's selected-player view and effects.
-
-In the F8 panel, use **Playback speed**, **Updates / s** and **Show path guides**.
-Guides appear in paused flight and hide during playback. Native camera and
-supported effects follow each rendered frame; Updates / s controls monitoring.
-
-The desktop keeps **Camera**, **Look** and the shot timeline available alongside
-Replay, Export, Controls and Settings; no editor-mode switch is needed.
-In-game, the tabs are **CAMERA, FOLLOW, BONE PICKER, LOOK and EXPORT**.
-
-On **CAMERA**, one click selects a saved camera without moving the view;
-double-click jumps to it. Delete removes only that camera. Undo/Redo restore
-shot edits through the desktop or in-game controls. With the Dolly panel open,
-use **Ctrl+Z** to undo and **Ctrl+Y / Ctrl+Shift+Z** to redo. These controls do
-not rewind the replay or undo external game settings, and are guarded during
-playback, recording and active pickers.
-
-On **FOLLOW**, choose a hero to follow their aim with the game's camera.
-Adjust distance, shoulder and height; right-click a slider to reset its normal
-value. The HUD option lets you retain or hide the game UI. Follow is separate
-from a bone attachment. You can open **BONE PICKER** directly from paused Follow.
-
-Regular camera paths hold their final view when playback finishes. Explicit
-**F9** or **F6 / Stop–restore** returns control through the spectator handoff.
-
-On the desktop Effects tab, **+ Range DOF** creates a four-value range track.
-Its value order is near blurry, near crisp, far crisp, far blurry. See the
-[supported camera cvars](docs/SUPPORTED_CAMERA_CVARS.md) for values and examples.
-
-In the in-game **LOOK** tab, right-click a DOF value to restore Dolly's default.
-Enabling Citadel DOF switches off Native range DOF and supplies a usable aperture
-when none is authored. Switching back retains your range settings and animation.
-
-See `Start_Here.txt` and the [user guide](docs/USER_GUIDE.md) for the full controls.
-The GitHub **Source code** download and source ZIP contain the source and build
-files. Windows EXE build instructions are in [BUILDING.md](docs/BUILDING.md).
-
-## Application updates
-
-Open Dolly.exe and the desktop editor opens immediately. Packaged Windows builds
-check GitHub's published Latest release in the background when automatic checking
-is enabled. A notice inside the app shows your current and available versions,
-with **What's changed**, **Update now**, and **Later**.
-**What's changed** expands the short Before/After highlights inside the notice;
-the panel also offers a link to the full release notes.
-
-Every update requires **Update now**; nothing downloads or installs before that
-click. **Later** collapses it to a header reminder for this session, with another reminder on the
-next launch when automatic checking is enabled. **Settings > Updates** keeps the
-update available and offers manual checks and **Automatically check for updates**.
-That preference controls checks only. If Dolly asks you to save work or close the
-game before updating, do that first and click **Update now** again; the request is
-not queued. Settings, shots and external tool paths are preserved. Interrupted
-update recovery remains automatic. See [Updating Dolly](docs/internal/UPDATING.md)
-for release publishing and recovery details.
-
-## Video and ReShade
-
-Choose an output path, FPS and encoder on **Export**, then use **F8 → Export → Record video**
-and **Finish recording** in the game. Video capture excludes Dolly controls
-and path guides. Real-time capture follows the game; fixed-step export advances
-the simulation one frame at a time so the output stays deterministic. There is
-optional game-only audio for real-time capture, and output resolution follows
-the game. Fixed-step bundled audio is rejected; export silent layers separately.
-Reconstructed audio is an advanced workflow with additional tools.
-Recording continues through
-camera handoffs and desktop controls; use Finish recording to save.
-
-Camera-path shots let the replay run for two seconds before the chosen start to
-settle effects created during seeking, then pause at the original start tick.
-This preparation finishes before recording begins and preserves the saved path,
-export speed and FPS. **Stop / restore** cancels preparation. Settling requires
-enough earlier replay data and supported replay clock/pause controls; very early
-shots retain their existing start behavior. Frozen and manual captures keep the
-current scene.
-
-The **Depth master** option writes a paired depth `.mov` (and optional EXR
-sequence) beside the color video. **World**, **Players** and **Effects** record
-isolated layer takes; players and effects also get an alpha master built from
-black and white matte passes. Depth and layer takes need a verified scene
-sample for every frame and stop with an error instead of writing unpaired
-data. Depth exports temporarily use 100% render scale for the color/depth take
-and its selected extra passes, then restore the previous scale. This avoids
-unverified depth from the game's spatial upscaling pass and can make exports
-slower on GPUs that normally use reduced render scale. See [Layer export](docs/internal/LAYER_EXPORT.md) for details.
-
-Select a compatible ReShade64.dll in **Settings → ReShade** to enable ReShade color effects.
-**F11** opens its own menu; **Controls** changes that shortcut. ReShade is an
-optional separate download. Dolly bundles the crosire/prod80 shader library and
-publishes its verified scene depth to ReShade, so depth-based effects such as
-MXAO can use it. See [Video and ReShade](docs/VIDEO_AND_RESHADE.md) for setup
-and limits.
-
-## Recorded demos
-
-Local tv_record .dem files can be selected like other replays. If a native shot
-starts between recorded packets, Dolly starts at the next verified packet and
-reports the skipped fraction. Camera/effect key times stay unchanged. Frozen
-native preview holds the current scene without seeking. The scripted intro
-remains visible during shot preparation until a true skip is verified. Some console position-
-calibration recoveries still require exact ticks and can fail on sparse recordings.
-
-Console camera preparation first checks the current view without seeking. It
-uses a bounded refresh only when the measured camera response fails. If
-**Stop / restore** leaves the health panel pending, the restore guide opens:
-choose **Open replay controls**, select a hero and wait for its camera, then
-return to Dolly and choose **Restore after selection**. The panel stays hidden
-until that handoff is verified.
+| What you need | Guide |
+| --- | --- |
+| Setup, controls, replay preparation and recovery | [User guide](docs/USER_GUIDE.md) |
+| Camera, Follow, Bone Picker, curves and saved layouts | [In-game editor](docs/UI_REWORK.md) |
+| Recording, encoders, audio and ReShade | [Video and ReShade](docs/VIDEO_AND_RESHADE.md) |
+| High-resolution screenshots and mattes | [Screenshots](docs/SCREENSHOTS.md) |
+| Depth, isolated layers and capture limits | [Layer export](docs/LAYER_EXPORT.md) |
+| Camera metadata for compositing | [Camera bundle](docs/CAMERA_BUNDLE.md) |
+| Updates and interrupted-update recovery | [Updating and recovery](docs/UPDATING.md) |
 
 ## Compatibility
 
-Native mode supports reviewed builds of `client.dll`, `engine2.dll` and
-`tier0.dll`. Every Dolly launch hashes the installed modules against the
-bundled compatibility manifest (`native/profiles/manifest.json`) and reports an
-unrecognized build instead of injecting. **Settings → Troubleshooting & recovery → Startup controls** has a
-**Check game build** action, and **Console (legacy)** remains available when
-Native is unavailable. See [game updates](docs/internal/GAME_UPDATES.md) for the
-manifest, signature scanning and profile-generation workflow.
-Console avoids the native camera/capture bridge, but its unlocker and automatic
-startup-readiness checks still need support for the installed game build.
+Native mode requires reviewed builds of Deadlock's `client.dll`, `engine2.dll`
+and `tier0.dll`. Dolly checks the installed modules before loading its native
+helper. A Deadlock update can require a matching Dolly update.
 
-Native camera startup checks its essential view and gameplay-effect hooks
-separately from the optional Follow correction. A rejected Follow correction
-disables Game Follow while keeping a verified camera usable. Diagnostics record
-which prerequisite failed; malformed optional diagnostic blocks no longer hide
-the main camera status. Core protocol and process-identity checks remain strict.
-This separation reduces the scope of some update failures; it does not approve
-unknown game builds or establish support for Depth or Players output.
+Use **Settings → Troubleshooting & recovery → Startup controls → Check game build**
+to check your installation. **Console (legacy)** is available when Native is
+unavailable, but its unlocker and startup checks also need game-build support.
+Camera compatibility does not by itself establish support for Depth or Players
+output. See the [user guide](docs/USER_GUIDE.md) for build checks and recovery;
+the [maintainer reference](docs/internal/GAME_UPDATES.md) explains compatibility review.
 
-Current startup, Follow and attachment definitions share reviewed inputs across
-Python and native code. One offline generator reproduces these definitions and
-the camera/sound compatibility tables; native builds reject stale generated
-data. The [maintainer workflow](docs/internal/GAME_UPDATES.md#shared-reviewed-contracts-unreleased-hardening)
-records how to review and regenerate them after a game update.
+Dolly is in alpha. High FPS and high-resolution output depend on the game,
+encoder and GPU; the available settings do not guarantee every workload.
+Fixed-step exports are silent; bundled game-only audio is for real-time
+recording. Depth, matte and replay-seeking limits are covered in the guides above.
 
-0.6.0-alpha was checked against build 6726. Current-build checks covered camera
-paths and mode transitions, camera-list/history controls, health/HUD restoration,
-DOF with Confetti, short layer exports, and a three-second 180-frame Color/audio
-take with zero missed slots and user-confirmed smooth, aligned playback.
-These bounded checks do not certify every GPU, long take or 4K workload.
+## Application updates
 
-Floating health bars and the selected hero's health/ability HUD use separate
-controls. Glow remains subject to the game's eligibility rules: enabling it
-does not force every hero to glow, and its visual effect was not conclusively
-verified. A reported particle checkerboard was not reproduced locally across
-the tested presets and quality settings; do not assume every installation is fixed.
+Packaged Windows builds check the published Latest release in the background
+when automatic checking is enabled. The notice shows **What's changed**,
+**Update now** and **Later**; manual checks are under **Settings → Updates**.
 
-Real-time recording now retains rendered frames when replay time briefly repeats.
-Genuine missed capture slots are still reported; high export FPS is not a promise
-that the game or encoder can sustain that rate. See [validation notes](docs/internal/VALIDATION.md)
-and [Video and ReShade](docs/VIDEO_AND_RESHADE.md) for workflow limits.
+Every update requires **Update now**. Nothing downloads or installs before that
+click, and **Later** leaves the update available. If Dolly asks you to save work
+or close the game, do that and click **Update now** again. Settings, shots and
+external tool paths are preserved. See [updating and recovery](docs/UPDATING.md).
 
 ## Session files
 
-Each editing launch creates a temporary `game/citadel_dolly_…` folder for its
-plugins. The original `gameinfo.gi` is restored after unlocker initialization.
-A read-only `gameinfo.gi` is supported and keeps its attribute. Uncompiled
-Panorama files left in `game/citadel/panorama` are listed and refused before
-launch, because development mode would load them before the packaged UI.
-Deadlock's development build can show its own assertion dialogs; Dolly chooses
-the ignore action for the game process it launched and records it in the
-session, so a game-side failure cannot freeze editing.
-The temporary folder is removed when the game exits. If Dolly closes first,
-a background helper waits for that game process and then removes its files.
-It exits afterward and does not start another game.
+Dolly temporarily mounts its plugins for each editing session, restores the
+original `gameinfo.gi` after unlocker initialization and removes its generated
+plugin folder when the game exits. If Dolly closes first, its cleanup helper
+waits for that game process. Keep logs and recovery backups after an interrupted
+session.
 
-Older marked folders are checked on the next Dolly launch or through
-**File → Recover game configuration** with Deadlock closed. Referenced mounts,
-configuration conflicts and unrecognized files are left intact. Logs and
-original configuration backups remain beside Dolly for diagnostics/recovery.
+With Deadlock closed, use **File → Recover game configuration** to check an
+interrupted session. Configuration conflicts and unrecognized files are left
+intact. The [user guide](docs/USER_GUIDE.md) covers recovery and conflicting HUD mods.
 
 ## Development
 
-Run from source with Python 3.10+ and Tcl/Tk:
+Run the source editor with Python 3.10+ and Tcl/Tk:
 
 ```console
 python -m dolly
-python -m unittest discover -s tests -q
 ```
 
-The source editor needs no pip dependencies. Native features also require the
-compiled Windows helper. EXE builds use the pinned dependencies in
-`requirements-build.txt`, Python 3.12 x64, Visual Studio 2022 C++ tools and CMake.
+The basic source editor needs no pip dependencies; native features require the
+compiled Windows helper. Full regression checks and optional audio workflows
+need their documented dependencies. See [Building](docs/BUILDING.md) for setup
+and the pinned Windows toolchain, and [Contributing](CONTRIBUTING.md) for development guidance.
 
-| Location | Contents |
-| --- | --- |
-| `dolly/` | Desktop editor, settings and replay controller |
-| `native/` | Native camera, input, DX11 panel, tests and dependencies |
-| `assets/` | Logo and Windows icon |
-| `tests/` | Regression tests |
-| `packaging/`, `tools/` | Executable build and packaging |
-| `examples/` | Example shot |
-| `third_party/` | Bundled unlocker and component notices |
-| `docs/` | User guide and build instructions (`docs/internal/` keeps maintainer research notes) |
-
-Logs, replays, personal shots and build outputs are excluded from Git.
-`SOURCE_FILES.txt` lists the source archive contents.
+`SOURCE_FILES.txt` defines the clean source export. Logs, personal replays,
+settings and build outputs stay out of Git.
 
 ## Support
 
-Contact **@Cravvnn on Discord** or [submit a GitHub issue](https://github.com/cravvnn/deadlock-dolly/issues)
-if something is not working as intended. Include the Dolly version and the
-ZIP from **Export diagnostics**. If the app does not open, include
+Contact **@Cravvnn on Discord**, join the [Dolly Discord](https://discord.gg/PGVPEp4bT),
+or [report an issue](https://github.com/cravvnn/deadlock-dolly/issues).
+Include the Dolly version, the action that failed and the ZIP from
+**Export diagnostics**. If the app does not open, include
 `logs/Dolly_startup.log` and `logs/Dolly.log` when available.
+
+Review diagnostics before posting publicly; they can contain local paths and
+replay names.
 
 ## Contributors
 
+- [@paralin](https://github.com/paralin) — Linux/Proton Steam discovery, Wine mount-point handling and interrupted plugin-cleanup recovery.
 - [@tbhtho](https://github.com/tbhtho) — in-game UI rework and saved panel layouts.
-- [@s34532](https://github.com/s34532) — custom particle effects system, beginning with native confetti rain.
+- [@s34532](https://github.com/s34532) — custom particle effects, native confetti rain, game-only audio capture and reconstructed clip audio.
 - [@Hesykhia](https://github.com/Hesykhia) — high-resolution screenshot export with players-only mattes; update-control feedback.
+
+See [Credits](CREDITS.md) for the project's creator, each contributor's work,
+HLAE and other references, libraries and development tools from Dolly's history.
 
 ## License
 
@@ -371,20 +172,6 @@ separate terms in [assets/README.md](assets/README.md).
 
 ## Releases
 
-Recent releases and the complete history live in the [changelog](docs/CHANGELOG.md)
-and the per-version [release notes](docs/).
-
-- **[0.6.57-alpha](docs/RELEASE_NOTES_0.6.57-alpha.md)** - build and tooling release: the bundled FFmpeg pin was refreshed after the upstream archive was pruned, and the hosted Windows workflow works again. No app behaviour changes.
-- **[0.6.56-alpha](docs/RELEASE_NOTES_0.6.56-alpha.md)** - seek to the selected saved camera from the Replay timeline, with explicit seek controls and guarded camera requests.
-- **[0.6.55-alpha](docs/RELEASE_NOTES_0.6.55-alpha.md)** — restored timeline player selection on the current Deadlock build, smooth Follow slide transitions, and update highlights that accept the published release heading.
-- **[0.6.54-alpha](docs/RELEASE_NOTES_0.6.54-alpha.md)** — startup that waits out a slow shader rebuild, per-frame camera files for paired depth takes, and a float EXR choice that can't be silently dropped.
-- **[0.6.53-alpha](docs/RELEASE_NOTES_0.6.53-alpha.md)** — Deadlock build 6793 support, authored arrival/departure handles with live drag previews, and quieter replay pauses, with Follow held back on that build until its live re-check.
-- **[0.6.52-alpha](docs/RELEASE_NOTES_0.6.52-alpha.md)** — matte UI polish, shared curve editing, a dedicated Controls page, fitted bottom timeline and Dolly-branded loading screen, building on @tbhtho's UI rework.
-- **0.6.51-alpha** — explicit update approval and published release highlights inside the desktop app.
-- **0.6.50-alpha** — visible Finish recording controls and safe camera editing while a take is open.
-- **0.6.49-alpha** — refreshed in-game UI by @tbhtho, saved layouts, a pause-after-capture choice and complete F8 panel hiding.
-- **0.6.48-alpha** — replay-effect settling before camera-path playback and exports.
-- **0.6.35-alpha** — every FFmpeg output step (stills, Players layer, alpha combine, clip audio, depth preview) runs hidden in a clean environment.
-- **0.6.34-alpha** — Native Depth of Field works on installs that previously showed the black checkerboard.
-- **0.6.33-alpha** — October 8 hotfix (6766) support, and a Players layer export that no longer leaves a stuck command window.
-- **0.6.32-alpha** — the health/ability panel restores after editing.
+- [Downloads and published release notes](https://github.com/cravvnn/deadlock-dolly/releases)
+- [Current source release notes: 0.6.57-alpha](docs/RELEASE_NOTES_0.6.57-alpha.md)
+- [Complete changelog](docs/CHANGELOG.md)

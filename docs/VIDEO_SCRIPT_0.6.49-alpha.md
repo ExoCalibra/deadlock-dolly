@@ -1,5 +1,9 @@
 # 0.6.49-alpha walkthrough
 
+Historical walkthrough for 0.6.49-alpha. Use the
+[current in-game editor guide](UI_REWORK.md) for today's controls and
+[documentation index](README.md) for the complete workflow.
+
 About three minutes. Bracketed lines are screen directions, not narration.
 
 [Open the in-game editor and move through the five tabs.]

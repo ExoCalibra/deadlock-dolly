@@ -1,5 +1,9 @@
 # Renderer stability, ReShade and Stage 3 export
 
+Historical record: controls, plans and validation status below describe the
+original revision. Use the [current documentation](../README.md) for today's
+workflow and [development checks](TESTING.md) for current verification.
+
 Research date: September 10, 2026.
 
 ## Implementation status — 0.5.0

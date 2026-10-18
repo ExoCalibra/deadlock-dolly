@@ -1,228 +1,151 @@
-# Layer export
+# Layer export: renderer and research notes
 
-0.5.4 records the normal scene at 30/60/120/300/600 FPS and can write a paired
-float depth master (default off) with a normalized grayscale preview video in
-the same folder. Depth is the only numerical/data master. The world and effects
-layers are **encoded video** outputs, not raw data: alpha-capable or
-lossless/mezzanine codecs (for example ProRes or FFV1) are used where a matte
-needs precision. The world and effects layers isolate scene classes with
-`sc_setclassflags` and derive alpha from a black/white matte pair.
+For current controls, output files and limitations, use the
+[Layer export guide](../LAYER_EXPORT.md). This page is technical background,
+followed by explicitly historical frame-capture observations. Older prototype
+names and open questions below are not current UI instructions.
 
-The **players layer** is recorded by the native ownership capture instead of a
-scene-class filter. Every captured draw must be produced by a scene object
-whose owner pawn classifies as a player pawn (scene object -> scene node ->
-owner entity), so the layer contains real players and their equipment
-(weapons, attachments, carried objects) while NPCs and creeps stay out. The
-capture keeps the world in the scene, so scenery occlusion is preserved, and it
-records real coverage alpha in one fixed-step pass instead of a matte pair. Its
-output is the alpha-capable ProRes 4444 layer master; the take that drives it
-is kept beside it. Per-player selection (one chosen pawn instead of all
-players) is not part of this release.
+## Current backend
 
-## Required render passes
+The capture path observes reviewed DirectX 11 scene draws and retains the
+scene depth target with its per-view constants. The depth-stencil target bound
+at final Present is not assumed to contain scene depth: late interface passes
+can clear or replace it.
 
-| Output | Implementation requirement | Intended master |
-| --- | --- | --- |
-| Depth | Capture the main camera's depth before it is cleared or reused; verify projection, reverse Z, resolution scaling and sample count. | Float OpenEXR sequence plus a normalized grayscale preview video in `<video>.depth`. |
-| Players | Identify player-owned draw objects and their equipment; render foreground color and coverage while retaining world occlusion. | Implemented by the native ownership capture: ProRes 4444 layer master with real alpha. |
-| World without players | Render the same scene time with identified players omitted, including the background they previously covered. | Encoded color recording (scene-class filter). |
+The selector checks the reviewed texture name, the target's own viewport and
+reversed depth-writing state. It tracks immediate and deferred draws and
+associates recorded metadata with command lists. Incompatible writes, clears,
+multiple unresolved targets and missing or conflicting camera calibration
+reject the sample. Size or shader-slot identity alone is insufficient proof
+that a constant buffer describes the captured scene.
 
-A generic animated-object filter can also remove creeps, other NPCs and moving
-props. It must not be presented as a hero-only filter. Weapons, ragdolls, shadows,
-reflections and attached effects need explicit inclusion rules. Transparent
-particles and glow are separate compositing problems.
+The projection reader checks the viewport, inverse-Z block, view basis,
+position and structural matrix entries. The current reader requires the X/Y
+projection-offset entries to be near zero, which can reject temporally jittered
+projections. A successful Color recording does not establish compatibility for
+every TAA/upscaling configuration.
 
-Multiple passes need one shared scene sample. Replaying a shot several times
-at real-time speed does not establish frame correspondence for particles,
-animation or temporal effects. Depth should bypass ReShade color grading;
-lossy H.264 is not a suitable master for numerical depth or a precise matte.
-World/hero/effect layers are encoded video outputs; when a matte needs
-precision, use an alpha-capable or lossless/mezzanine codec instead of the
-ordinary delivery MP4.
+Relevant implementation:
 
-## Renderer evidence needed
+- `native/src/dolly_depth_scene_win.cpp` and `dolly_depth_hooks_win.cpp`:
+  scene observation, command-list tracking and sample selection.
+- `native/src/dolly_depth.cpp`: calibration, D24/D32 conversion, normalized
+  previews and single-channel float-Z OpenEXR writing.
+- `native/src/dolly_depth_readback_win.cpp`: three bounded staging slots for
+  depth and calibration copies, mapped row handling and sample identity.
+- `native/src/dolly_video_win.cpp`: paired Color/depth admission, readback,
+  frame ordering and FFmpeg encoding.
+- `native/src/dolly_depth_sequence_win.cpp`: owned output directory,
+  manifests, EXRs and final camera bundle.
 
-### Native depth backend foundation
+## Pairing and files
 
-The native `dolly_depth` and `dolly_depth_readback` libraries now implement
-calibrated D24/D32 conversion, a float `Z`-channel OpenEXR writer, and a bounded
-three-slot GPU readback queue. Depth and candidate per-view buffers are copied
-at the same command boundary. Calibration is validated from buffer contents,
-including the viewport, projection inverse and camera basis; it does not rely
-on a fixed shader slot. Missing or conflicting calibrations reject the frame.
+Color and depth copies are submitted at the same capture boundary. A CPU frame
+is published only after the matching readbacks are ready; their sample IDs
+must agree. Missing calibration, conflicting per-view bindings or a mismatch
+stops the take. The current paired depth export requires the FFmpeg backend;
+the built-in Windows Media Foundation encoder is not a paired-depth route.
 
-The queue preserves sample IDs while the scene projection changes between
-queued frames, handles padded mapped rows, and rejects deferred-context reads
-and unannounced resolution changes. Synthetic DX11 tests pass on WARP and a
-local hardware device. The OpenEXR reference reader preserves all test float
-bits, including infinity and values beyond the half-float range.
+The depth sequence lives in the Color file's parent under `depth/`, inside
+the take folder created by the desktop exporter. It writes a 10-bit ProRes
+`depth.mov`, `manifest.json`, optional `exr/00000000.exr` frames and, on
+successful finalization, `camera.json`. The reduced grayscale preview is
+encoded afterward by the desktop; a preview-encoding failure does not invalidate
+the completed depth master.
 
-The separate `dolly_depth_scene` library observes actual DX11 draw calls and
-retains GPU copies of their camera constants. Its selector requires the reviewed
-scene texture debug name, a full-size viewport and reversed depth writes.
-Immediate and deferred draws are tracked, with command-list metadata owned by
-the command list itself. Late depth clears, incompatible viewport writes,
-duplicate scene targets and command lists from an untracked session reject the
-frame. A supported scene draw without per-view constants keeps the frame's
-verified calibration, because that projection still describes the camera for the
-frame; only a genuinely incompatible alteration rejects it. The rejection
-diagnostic names the current frame's reason and the number of scene targets
-observed. Tests exercise the hooks and resulting pixel/projection readback on
-both WARP and a local hardware device, including repeated command-list
-execution.
+Depth retains the scene target's own dimensions. Manifest version 3 records
+those separately from the Color dimensions. EXR names use encoded Color-frame
+indices, and the metadata retains source sample, replay time and capture PTS.
+Capture time is not necessarily the encoded video's timing.
 
-The selector's texture name and per-view layout are supported by the two supplied
-captures; they still need live verification in the gated replay session. The
-tracker does not classify heroes or intercept arbitrary resource-copy mutations.
+The readback queue permits up to 128 MiB across its three four-byte depth
+staging images. This is a separate limit from the Color recorder's
+8192-per-axis bound. Full-resolution 5K and 8K scene depth exceed that queue
+budget. Current depth capture also temporarily sets render scale to 100%;
+that setting does not alter the chosen antialiasing/upscaling mode.
 
-The video recorder now accepts an optional calibrated scene sample alongside
-each color capture. It submits both GPU copies together and publishes one CPU
-packet only when both readbacks are ready. The existing FFmpeg and Windows
-Media Foundation workers write the paired EXR before releasing that packet.
-EXR filenames use the zero-based encoded color-frame index; embedded metadata
-retains the source sample, replay time, projection and capture timestamp.
-Alongside the EXRs the worker appends one normalized half-resolution 8-bit
-min-depth sample per frame to `preview_<w>x<h>.raw` (8192 camera-axis units map
-to white). After a completed take the desktop encodes that stream into
-`preview.mp4` (or `.mkv` for FFV1) with the chosen encoder and bitrate; the raw
-stream is removed on success and kept only if encoding fails.
-Capture timestamps may differ from the encoded video's timing, especially in
-real-time FFmpeg recording, so file order defines the color/depth pairing.
+Existing output directories are refused. Failed/cancelled native paired output
+is removed; a resize/resource reset can finalize a completed matching prefix,
+excluding pending GPU copies. Fixed-step depth fails on backpressure timeout.
+Separate Players scratch folders and failed matte intermediates have their
+own preservation rules; see the user guide before deleting capture data.
 
-The encoder worker exclusively creates `<video path>.depth`, publishes each
-finished EXR by rename, and writes a final manifest only when its frame count
-matches the encoded color count. Existing directories/files are refused.
-Cancellation and failures discard only outputs created by that recording;
-unrelated files are preserved. Resource reset can finish a matching prefix,
-with pending GPU pairs counted as dropped. Paired fixed-step export fails on
-backpressure timeout instead of continuing with an unreported missing sample.
+## Camera bundle and offline reconstruction
 
-### Camera bundle (camera.json)
+[Camera bundle](../CAMERA_BUNDLE.md) documents `camera.json`, its matrix
+conventions and frame identities. The same reader that calibrates depth retains
+the view, projection, position and camera axes. Two buffers with the same
+inverse-Z coefficients but different view/projection matrices are conflicting
+calibrations, not candidates to resolve by binding order.
 
-Finalized depth sequences also write `camera.json` beside the manifest: for
-every admitted output frame, the per-view camera calibration the renderer
-actually used (world->view matrix, camera position/up/forward, projection
-matrix, inverse-Z coefficients, viewport and linearized clip range) and the
-frame identity (`frame`, `sample`, `replay_time`, `capture_pts_100ns`). The
-format, conventions and reprojection rules are documented for creators in
-`docs/CAMERA_BUNDLE.md`; `dolly/camera_bundle.py` loads, validates and
-reprojects through it, and `dolly/export_audit.py` cross-checks it against the
-manifest without requiring one from earlier takes.
+A finalized bundle may be marked partial if complete view records are
+unavailable or metadata was truncated. Failed or cancelled native sequences
+do not keep a final bundle. `dolly/camera_bundle.py` reads, validates and
+reprojects records; `dolly/export_audit.py` cross-checks available bundle and
+manifest data without requiring camera bundles from older takes.
 
-The values are retained by the same reviewed reader that calibrates the depth
-(`read_per_view_projection`); the reader also verifies the projection's
-structural zeros and horizontal/vertical scale before a frame counts as fully
-calibrated, and conflicting per-view bindings are still rejected as a whole
-(two buffers that agree on the projection but disagree on the view are never
-resolved by binding order). The bundle is written only at finalization, so a
-cancelled or failed take never keeps one; a frame without the full layout is
-recorded as `projection-only`, which marks the bundle partial instead of
-claiming completeness.
+`dolly/depth_exr.py` reads Dolly's single-channel float-Z EXRs directly.
+The numerical distances, including positive infinity for the far plane, must
+not be replaced with decoded 10-bit MOV luma for reconstruction.
 
-### Depth normals (offline foundation)
+`dolly/depth_normals.py` is an offline reconstruction foundation. It computes
+view/world normals from depth and matching calibration, masks invalid samples
+and limits gradients/smoothing across depth discontinuities. Synthetic
+geometry checks do not establish matching game shading normals. There is no
+Normals capture option in the current Export UI.
 
-`dolly/depth_normals.py` reconstructs per-pixel normals from a depth frame and
-its camera bundle record: view-space points follow the stored projection,
-central differences use a distance-compatibility window so foreground edges
-are never smeared, one-sided fallbacks are flagged, invalid samples (NaN,
-zero/negative, +infinity sky) are masked, and optional smoothing only averages
-distance-compatible neighbors. View-space normals are documented first
-(x right, y up, z toward the viewer; visible surface normals point toward the
-viewer); world-space conversion uses the record's validated view axes. The
-SourceMVM roadmap's synthetic fixtures (plane, slanted plane, sphere, crease,
-silhouette, far/invalid depth, known camera rotation) live in
-`tests/test_depth_normals.py`. File plumbing and any native capture pass are
-deliberately not part of this foundation; the depth master already carries the
-required per-pixel distances. `dolly/depth_exr.py` reads the sequence's
-single-channel float EXR frames directly — FFmpeg cannot decode that shape —
-and is checked against a fixture written by the native producer.
+## Players, World and Effects
 
-The paired depth master is captured at the verified scene target's own size.
-Upscaling or resolution scaling renders the scene below the window size, so the
-scene target can be smaller than the color recording; the depth data then keeps
-that resolution and the manifest (format 3) records both sizes (`width` and
-`height` for the depth master, `color_width` and `color_height` for the paired
-color video). A reviewed target is matched against the resolution in its own
-name, and within one frame the largest reviewed target wins, so a
-half-resolution effects buffer cannot replace the scene.
+Players uses native scene-object ownership: scene object to scene node to
+owner entity. Supported player-owned draws and equipment are retained while
+the world remains available for occlusion. A generic `SkinnedObject` filter
+would also include NPCs and miss player-owned objects in other scene classes,
+so it is not the Players capture implementation.
 
-Native tests create actual paired recordings through both encoders and check
-cancellation, missing depth, output collisions and resource reset. Independent
-FFmpeg/OpenEXR decoding checks frame counts and every fixture pixel against its
-depth sample, including real-time skipped capture opportunities. The manual
-`depth_video_smoke` executable takes an absolute FFmpeg executable path and an
-existing output-parent directory; it leaves a unique test folder for inspection.
+World and Effects use reviewed scene-class keep-lists in
+`dolly/layer_modes.py`. World is a scene-class isolation, not a reconstruction
+of an arbitrary clean plate. Effects records black and white MP4 takes and
+derives alpha during post-processing. Bloom settings are changed temporarily
+for that matte pair and restored afterward. Separate reruns cannot prove
+identical particles or temporal history, even with fixed simulation timing.
 
-The renderer now installs the scene hooks when a recording requests a depth
-master, owns exactly one tracker per device generation (resize/device loss
-drops it), consumes the verified scene sample at the recording Present and
-passes it with the exact replay time into the paired writer. The desktop
-Export tab gained a default-off **Depth master (EXR)** option. Live validation
-in the gated replay session, a normalized video preview and the hero/world
-passes remain to be completed. These tests establish recorder pairing with
-supplied GPU fixtures, not a live game depth export or a hero/world
-classifier.
+Players has real captured coverage alpha from one ownership pass, but this
+does not establish full coverage of shadows, reflections, translucent effects
+or all renderer techniques. Inspect the actual result. Per-player isolation
+and general translucent-effect reconstruction remain separate work.
 
-### Captured-frame investigation (September 12, 2026)
+## Historical capture observations: September 12, 2026
 
-Two supplied DX11 captures were replayed locally with RenderDoc 1.46. Both
-contain a 2560 x 1440, single-sample D24S8 scene depth target separate from the
-depth target bound at Present. The latter is cleared during late UI passes;
-reading only the currently bound depth target at Present would return the
-wrong image. The scene target's depth follows the visible world and actor
-silhouettes in the inspected frame.
+Two supplied DX11 captures were inspected with RenderDoc 1.46. Both contained
+a 2560 x 1440, single-sample D24S8 scene depth target separate from the target
+bound at Present. The latter was cleared during late interface passes. These
+captures motivated the scene-draw observer; their resource IDs are not runtime
+identifiers.
 
-The reflected `PerViewConstantBuffer_t` contains
-`g_vInvProjLowerRight2x2 = (0, -1, 1/7, 0)` and viewport depth range `[0, 1]`
-in both captures. With coefficients `(a, b, c, d)` and normalized device
-depth `z`, positive camera-axis distance is `-(a*z+b)/(c*z+d)`, approximately
-`7/z` for these captures. These are captured projection values, not defaults
-to hard-code for every camera, game build or viewport.
+The captured `PerViewConstantBuffer_t` values included
+`g_vInvProjLowerRight2x2 = (0, -1, 1/7, 0)` and viewport depth range `[0, 1]`.
+For that projection, positive camera-axis distance was approximately `7/z`.
+These values describe those captures, not defaults for other cameras or builds.
 
-A local single-frame float OpenEXR proof was generated from the scene's D24
-samples. Decoding the EXR reproduced the input float buffer byte-for-byte.
-Its distances are game world units along the camera axis, not metres or
-radial distance. The normalized image is a viewing preview only.
+A local single-frame float OpenEXR proof decoded byte-for-byte to its source
+float buffer. The observation established numerical conversion for that
+sample. It did not, by itself, establish live recording, moving-camera
+alignment, hero classification or general renderer compatibility. Subsequent
+backend and capture work must be assessed against its own source and evidence,
+rather than treating an early open question as a current feature gap.
 
-This advances resource identification and depth conversion; it does not
-implement live Dolly depth recording. Next, capture the verified scene depth
-and projection with the same rendered color sample, then test resize,
-resolution scaling, cancellation and resource reuse. Resource IDs in a
-RenderDoc file are not runtime identifiers. Stencil values observed on actors
-are not yet a verified hero-only mask, and removing their visible pixels
-cannot reconstruct the world behind them.
-
-The previous client, engine, tier0, DX11 renderer and material-system modules
-are available for investigation. Further useful inputs are:
-
-- `game/bin/win64/scenesystem.dll` from the same Deadlock build, for scene-object
-  classification and render submission analysis.
-- Further single-frame RenderDoc captures (`.rdc`) of DX11 local replays, with a hero
-  visible against nearby and distant world geometry. Include the game build,
-  resolution, antialiasing and upscaling settings. A video or ordinary Dolly
-  diagnostic ZIP does not contain the GPU textures and draw commands.
-
-Use the existing dev/-insecure replay workflow for inspection. Keep ReShade
-disabled for the initial capture so its textures and UI do not obscure the
-game's resources. Capture while the game is rendering normally, then save the
-frame as `.rdc`. If the capture tool cannot attach or produces a blank capture,
-send its error rather than changing Dolly's working render hooks.
-
-These inputs support inspection; they do not establish that all requested
-passes are already compatible. A first depth implementation must verify that
-depth edges follow hero/world geometry as the camera moves, and that color and
-depth come from the same frame. It must reject unsupported resources cleanly.
-Hero/world filtering also needs tests for NPCs, attached weapons, occlusion,
-resize, replay seeking and restoration after export stops.
+The inspected stencil values on actors were not a verified hero-only mask.
+Deleting visible hero pixels also cannot recover the world behind them.
+Transparent particles, glow and complete class-specific rendering require
+separate evidence beyond an opaque-depth image or an ordinary diagnostic ZIP.
 
 ## References
 
 - [HLAE Source 2 streams](https://github.com/advancedfx/advancedfx/wiki/Source2:mirv_streams)
-  documents separate depth streams, float depth output and a depth-matte
-  example using an additional render with `SkinnedObject` hidden. Its documented
-  Source 2 support is CS2; that example does not verify Deadlock hero filtering.
+  describes depth streams and an additional-render depth-matte example. Its
+  documented CS2 behavior does not verify Deadlock player filtering.
 - [DX11 OMGetRenderTargets](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-omgetrendertargets)
-  exposes currently bound render targets and depth-stencil state. It does not
-  identify which depth resource represents the main scene at final Present.
+  reports currently bound targets; it does not identify the correct earlier
+  scene resource.
 - [RenderDoc](https://github.com/baldurk/renderdoc) provides frame inspection
-  for checking resources and draw calls.
+  of GPU resources and draw calls.

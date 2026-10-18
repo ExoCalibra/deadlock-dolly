@@ -1,5 +1,7 @@
 # Bone Picker (experimental, Native replay editor)
 
+[Documentation](README.md) · [User guide](USER_GUIDE.md)
+
 Bone Picker frames the selected player in the actual paused replay scene. Common
 body joints appear as clickable dots, with a compact searchable list on the
 right. The panel header uses the hero's small player icon from the installed game.
@@ -10,9 +12,10 @@ the portrait slot empty; the player name and bone controls remain available.
 1. Open the in-game **Bone Picker** tab and choose a player. With an empty
    shot, Dolly creates the starting view at the current replay tick and opens
    the picker automatically; you do not need to capture a camera first.
-   On the desktop, choose a player and click **Bone Picker**. For an existing
-   camera, choose its attached player, then **Bone Picker…** from the point menu
-   or **Change bone…**.
+   On desktop with an empty shot, choose a player and click **Bone Picker...**.
+   For an existing camera, enable **Attach to player**, choose the hero and
+   **Apply to camera**, then open **Bone Picker...**. In-game, use the point
+   menu's **Bone Picker...** or **Change bone...** for an existing attachment.
 2. In **Hero overview**, hold the middle mouse button over the scene and drag
    to orbit around the character. Horizontal dragging turns through 360 degrees;
    vertical dragging changes elevation (limited near the poles to avoid flipping).
@@ -28,7 +31,7 @@ the portrait slot empty; the player name and bone controls remain available.
 5. **Use this bone** saves the point and leaves attached preview active.
    **Cancel** discards the choice and restores the previous camera/preview.
 
-The attached camera's **Forward / Sideways / Up** offsets are in the selected
+The attached camera's **Forward / Sideways (L/R) / Up** offsets are in the selected
 point's local frame. For a face-facing shot, move Forward away from the head and
 turn Yaw about 180 degrees. **Exact offset** keeps those authored values. The
 opt-in **Automatic clearance** mode keeps a close head POV at least four units
@@ -39,11 +42,18 @@ arms, clothing, and abilities can still obscure a shot.
 The exact mode warns when the hero remains visible. Preview the motion before
 recording.
 
-The replay stays paused while the picker is open. If it was playing when opened,
-normal completion resumes it. Finish or cancel before seeking, recording, or
-performing another editor operation. Existing saved cameras and offsets are unchanged until Done. Starting from an
-empty shot saves the initial attached view first; Cancel keeps that starting
-view but discards the bone choice. The ordinary exact-name controls remain available for Console users.
+The picker requires a connected Native replay with validated attachment data.
+Finish recording before opening it. The replay stays paused while the picker
+is open; normal completion resumes it if it was playing when opened. Finish or
+cancel before seeking, recording or performing another editor operation.
+Existing saved cameras and offsets are unchanged until **Use this bone**.
+Starting from an empty shot saves the initial attached view first; Cancel keeps
+that starting view but discards the bone choice.
+
+Opening Bone Picker from paused **Game Follow** transfers camera control
+automatically; you do not need **Restore rig** first. **Attach here** also
+supports that transfer. **Snap** is different: enter **Fly camera** first so
+Dolly can calculate offsets from your free-camera view.
 
 Overview dots and attached previews hold one validated pose at each paused tick.
 Stepping or resuming refreshes the pose; character/model identity is still
@@ -69,7 +79,7 @@ provide a complete validated name table, the picker reports that limitation and
 does not guess indices or silently switch players. Cancel remains available.
 
 
-Bone and Weapon attachment now sample the completed animation at the reviewed
+Bone and Weapon attachment sample the completed animation at the reviewed
 mesh-submission hook. The next view follows that local pose with bounded
 one-view prediction (maximum 50 ms of age and 2 units of extrapolation), rebased
 onto the current scene position. Aim remains unchanged. Missing or stale
@@ -81,23 +91,33 @@ Residual weapon animation and mesh intrusion are still possible.
 ## Recording a bone camera
 
 After **Use this bone**, open the in-game **Export** tab. Keep **Camera path /
-Bone camera** selected (Player POV is the separate F9 spectator workflow).
-For a single attached view, choose **Replay duration**, then **Record video**.
-Dolly saves a matching end view automatically, preserving the bone, offsets,
-clearance, visibility and smoothing. The native camera follows that attachment
-for the chosen replay seconds and recording finishes at the end. The endpoint
-remains in the saved shot, so you can adjust its time or add camera transitions.
+Bone camera** selected (**Camera path** on desktop). **Player POV** is the
+separate spectator workflow, selected through Game Follow or F9.
+For a single attached view, choose **Replay duration** in-game or **Replay
+seconds** on desktop, then **Record video**. Dolly builds a timed take from that
+view, preserving its bone, offsets, clearance, visibility and smoothing. The
+native camera follows the attachment for those replay seconds and recording
+finishes at the end. The temporary endpoint belongs only to the take: your
+single saved camera stays intact, ready for another duration or later edits.
 For existing multi-view shots, export uses the authored timeline as before.
-Output folder and encoder setup remain in the desktop Export tab. Finish or
-cancel the picker before recording; the inspection overview is not exported.
+Choose the output file on desktop Export; encoder and capture settings are also
+available in-game. Finish or cancel the picker before recording; the inspection
+overview is not exported. Camera edits stay locked until the recorder finishes
+finalizing. **Finish recording** saves an early end; **Stop / restore** controls
+camera playback and restoration instead. See [video settings](VIDEO_AND_RESHADE.md)
+and [layer export](LAYER_EXPORT.md) for output and audio restrictions.
 
-These entry and duration controls have offline regression coverage. A new
-in-game recording with this shortcut has not yet been validated.
+## Limits and troubleshooting
 
-## Orbit verification
+Heroes, cosmetics and replay poses can have animation or visibility differences;
+neither a held pose nor smoothing guarantees zero jitter. If the model, target
+or named skeleton changes, cancel and reopen the picker rather than copying
+indices from another model. **Hide this hero** does not suppress every rendering
+pass, and automatic clearance is not mesh collision. The
+[changelog](CHANGELOG.md) records past attachment changes; those releases do
+not certify every hero or current game update.
 
-The fixed-distance orbit, marker selection after rotation, and installed hero icon
-were verified in one paused Warden replay. Automated checks also cover full-circle
-radius preservation, held pose stability, middle-button input, focus loss, and
-portrait loading for 35 installed heroes. Other heroes and replay poses can still
-have animation or visibility differences; this is not an all-hero zero-jitter guarantee.
+## Credits
+
+See [Dolly credits and contributors](https://github.com/cravvnn/deadlock-dolly/blob/main/CREDITS.md)
+for the people, projects and tools behind Dolly.

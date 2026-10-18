@@ -1,5 +1,9 @@
 # Previous packaging and camera validation
 
+Historical record: controls, plans and validation status below describe the
+original revision. Use the [current documentation](../README.md) for today's
+workflow and [development checks](TESTING.md) for current verification.
+
 This file preserves validation from earlier deliveries; see VALIDATION.md for the current release.
 
 > Note: the sections below are dated history. Since 2026-09-12 the bundled

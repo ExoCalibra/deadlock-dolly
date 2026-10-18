@@ -1,5 +1,9 @@
 # UI cleanup and control inventory
 
+Historical record: controls, plans and validation status below describe the
+original revision. Use the [current documentation](../README.md) for today's
+workflow and [development checks](TESTING.md) for current verification.
+
 Implemented 2026-09-13 on top of e98c829. The approved desktop navigation and
 in-game Camera/Lens/Export layout now ship in Dolly, including the three layer
 switches. The interactive wireframe remains a design reference with simulated

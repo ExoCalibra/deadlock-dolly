@@ -8,6 +8,7 @@ from unittest.mock import patch
 from dolly import __version__
 from dolly import updater
 from dolly.release_notes import MAX_BODY_BYTES, MAX_DETAIL, MAX_ENTRIES, MAX_TITLE, parse_release_notes
+from tools.check_release_notes import validate_publish_body
 
 
 # Exact local publisher description from the 0.6.50-alpha release preparation.
@@ -49,6 +50,32 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertEqual([entry["title"] for entry in parse_release_notes(body, "0.6.54-alpha")],
                          ["Startup that waits out a slow shader rebuild.",
                           "Per-frame camera data for paired depth takes."])
+
+    def test_publish_body_requires_both_opening_version_markers(self):
+        version = "0.6.57-alpha"
+        heading, legacy = f"### Deadlock Dolly v{version}", f"**{version}**"
+        first, second = bullet("First."), bullet("Second.")
+        plain = heading + "\n\n" + first + "\n" + second
+        expected = [{"title": title, "before": "The old behavior.", "after": "The new behavior."}
+                    for title in ("First.", "Second.")]
+        # Current apps can read this body, while older installed apps need the
+        # bold marker. Publishing must enforce both independently of parsing.
+        self.assertEqual(parse_release_notes(plain, version), expected)
+        invalid = {
+            "missing legacy marker": plain,
+            "wrong heading": "### Deadlock Dolly v0.6.56-alpha\n" + legacy + "\n" + first + second,
+            "late heading": "Release summary\n" + heading + "\n" + legacy + "\n" + first + second,
+            "wrong legacy version": heading + "\n**0.6.56-alpha**\n" + first + second,
+            "late legacy marker": heading + "\n" + first + legacy + "\n" + second,
+            "prefixed legacy marker": heading + f"\n**v{version}**\n" + first + second,
+            "versioned section stops older previews":
+                heading + "\n" + legacy + f"\n### Changes in {version}\n" + first + second,
+        }
+        for name, body in invalid.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                validate_publish_body(body, version)
+        valid = "\n" + heading + "\n\n" + legacy + "\n\n" + first + "\n" + second
+        self.assertEqual(validate_publish_body(valid.replace("\n", "\r\n"), version), expected)
 
     def test_publisher_heading_with_another_version_does_not_start_the_preview(self):
         body = "### Deadlock Dolly v0.6.53-alpha\n\n" + bullet()
@@ -192,20 +219,11 @@ class ReleaseNotesMetadataTests(unittest.TestCase):
 
 
 class ShippedReleaseNotesTests(unittest.TestCase):
-    """The file the publisher pastes must parse into the in-app preview.
-
-    The desktop reads the release body for its update highlights. The preview
-    starts at a heading that names the version -- the publisher's style
-    ("### Deadlock Dolly v0.6.54-alpha") or a bold version line -- and a
-    heading without the version ends it. A body with prose above the bullets,
-    or with no version heading at all, installs normally but shows no
-    highlights, which is easy to publish by accident because nothing else
-    complains.
-    """
+    """The pasted file must satisfy current and older installed preview readers."""
 
     def test_current_release_notes_parse_into_highlight_entries(self):
         notes = Path(__file__).resolve().parents[1] / "docs" / f"RELEASE_NOTES_{__version__}.md"
         self.assertTrue(notes.is_file(), f"no release notes file for {__version__}")
-        entries = parse_release_notes(notes.read_text(encoding="utf-8"), __version__)
+        entries = validate_publish_body(notes.read_text(encoding="utf-8"), __version__)
         self.assertGreaterEqual(len(entries), 2, "the publish description needs two to four bullets")
         self.assertLessEqual(len(entries), 4, "only the first four bullets reach the desktop preview")

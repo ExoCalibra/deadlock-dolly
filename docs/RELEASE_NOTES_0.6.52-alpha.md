@@ -5,7 +5,7 @@
 - **In-game panels that fit.** *Before:* fractional speeds and recording-source names could clip, and saved timeline heights could leave empty space. *After:* dropdowns stay readable, cards reflow and scroll, and the timeline fits Replay or Campaths, grows for Curves and stays near the bottom of the screen. Layout saves retain a recoverable backup.
 - **Clearer replay startup and navigation.** *Before:* player selection could be lost through seeks, and the loading notice looked separate from Dolly. *After:* the timeline keeps the chosen participant through seeks and tick steps, while a Dolly-branded loading card sits at the top center of the game's loading screen without a duplicate native popup.
 
-Built on the in-game UI rework contributed by Marcel, [@tbhtho](https://github.com/tbhtho), in [PR #20](https://github.com/cravvnn/deadlock-dolly/pull/20).
+Built on the in-game UI rework contributed by [@tbhtho](https://github.com/tbhtho) in [PR #20](https://github.com/cravvnn/deadlock-dolly/pull/20).
 
 ## Editing curves
 

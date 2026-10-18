@@ -1,5 +1,9 @@
 # Stage 2 test notes — 0.4.8 alpha
 
+Historical record: controls, plans and validation status below describe the
+original revision. Use the [current documentation](../README.md) for today's
+workflow and [development checks](TESTING.md) for current verification.
+
 Use the complete matching Windows package and a local replay in DX11.
 Stage 1 startup, cleanup, console, game UI and capture checks still apply.
 

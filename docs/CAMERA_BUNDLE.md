@@ -1,13 +1,16 @@
 # Camera bundle (camera.json)
 
+[Documentation](README.md) · [User guide](USER_GUIDE.md)
+
 A paired depth take carries a `camera.json` beside its depth master and EXR
 sequence. It records, for every admitted output frame, the camera calibration
 the renderer **actually used** for the captured scene sample — not a fresh
 estimate from the authored path. Compositors use it to line up a 3D scene with
 the recorded plates.
 
-- Location: the depth master's own directory (`<video>.depth/`, or
-  `<take>/depth/` for layered takes).
+- Location: `<take>/depth/camera.json`. For an output named `Shot.mp4`,
+  enabling depth creates `Shot/Shot.mp4` and `Shot/depth/`. Lossless Color
+  uses the same layout with a `.mkv` file.
 - Written only when the take completes: a cancelled or failed take keeps no
   bundle, so a partial take can never masquerade as a complete one.
 - Frame alignment: `frame` is the zero-based encoded color frame index, matching
@@ -25,7 +28,7 @@ the recorded plates.
   "format": "deadlock-dolly-camera",
   "version": 1,
   "complete": true,
-  "frames": 30,
+  "frames": 1,
   "width": 2560,
   "height": 1440,
   "color_width": 2560,
@@ -38,12 +41,12 @@ the recorded plates.
       "replay_time": 12.5,
       "capture_pts_100ns": 0,
       "state": "complete",
-      "view": [16 numbers],
-      "position": [3 numbers],
-      "up": [3 numbers],
-      "forward": [3 numbers],
-      "projection": [16 numbers],
-      "inverse_z": [4 numbers],
+      "view": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+      "position": [0, 0, 0],
+      "up": [0, 1, 0],
+      "forward": [0, 0, -1],
+      "projection": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 7, 0, 0, -1, 0],
+      "inverse_z": [0, -1, 0.14285714285714285, 0],
       "viewport": [0, 1],
       "near": 7,
       "far": null
@@ -52,7 +55,8 @@ the recorded plates.
 }
 ```
 
-`far: null` means the far plane is at infinity (an infinite projection).
+These matrix and clip values illustrate the format; they are not defaults to
+apply to another capture. `far: null` means an infinite far plane.
 
 ## Conventions
 
@@ -104,11 +108,23 @@ point through a record (`load_bundle`, `validate_bundle`, `project_point`).
 
 ## Provenance and limits
 
+The bundle accompanies a depth take even when **EXR sequence (float)** is off.
+For numerical reconstruction, enable that sequence: the 10-bit `depth.mov`
+maps a limited distance range to grayscale and is not a float-distance array.
+See [Layer export](LAYER_EXPORT.md) for the output layout and limitations.
+
 Values come from the engine's per-view constants sampled at the scene draw of
 the captured frame (the reviewed `PerViewConstantBuffer_t` layout). The
 projection's horizontal/vertical scale is part of that same reviewed layout;
 live captures have passed cross-frame projection/depth consistency checks.
-Effects that
-change the camera after the scene pass (DOF, post) and attachment motion are
-covered insofar as the sampled constants are the ones the scene was rendered
-with — the record describes the captured render, not the authoring timeline.
+The record describes scene geometry and its rendered camera, rather than the
+authoring timeline. It does not model post-processing blur, color grading,
+transparent effects or the temporal history used to produce the Color image.
+Calibration must pass the current renderer and projection checks; a supported
+window size or 100% render scale alone does not establish compatibility with
+every antialiasing or upscaling mode.
+
+## Credits
+
+See [Dolly credits and contributors](https://github.com/cravvnn/deadlock-dolly/blob/main/CREDITS.md)
+for the people, projects and tools behind Dolly.

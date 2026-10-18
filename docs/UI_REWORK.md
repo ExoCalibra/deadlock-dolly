@@ -1,5 +1,7 @@
 # In-game editor
 
+[Documentation](README.md) · [User guide](USER_GUIDE.md)
+
 The main panel has five tabs: **Camera**, **Follow**, **Bone Picker**, **Look**
 and **Export**. Your saved cameras are in **Campaths** on the left, with the
 timeline and playback controls below.
@@ -12,6 +14,10 @@ and horizontal position.
 
 The UI rework and saved layouts were contributed by
 [@tbhtho](https://github.com/tbhtho).
+
+See the full [credits](../CREDITS.md) for Dolly's contributors and supporting
+projects, including [@paralin](https://github.com/paralin)
+for Linux/Proton discovery and compatibility fixes.
 
 ## Show or hide the panels
 
@@ -61,8 +67,9 @@ capture, check **Pause after capture** beside **Resume/Pause** on the timeline.
 Dolly remembers your choice between sessions. It also applies to in-game
 **Replace** and the capture shortcut.
 
-Campaths lists each saved camera's arrival time, aspect ratio and bank. While
-paused, use **Previous** and **Forward** to view the cameras on either side of
+Campaths lists each saved camera's arrival time, aspect ratio and bank. Click a
+row to select it without moving the view; double-click to view it at the current
+paused replay moment. **Previous** and **Forward** view the cameras on either side of
 the current selection at the current replay moment. In **Replay**, select a
 camera row and press **Seek camera** to go to its recorded replay time and saved
 view. The replay slider and tick field seek while retaining your current camera.
@@ -71,20 +78,34 @@ In **Campaths**, **Seek here** applies the selected point on the shot timeline.
 **Play cinematic** prepares and starts the shot. You do not need to press Play
 again when preparation finishes.
 
+Select, view, seek and edit controls require the appropriate paused, idle
+editor state. Finish a recording or finalization and detach a bone preview
+before changing saved cameras. **Save Path**, **Delete**, **Clear All** and
+shot Undo/Redo are below the Campaths table.
+
 ## Finish a recording before editing cameras
 
-Pausing the replay or reaching the last camera leaves a normal video recording
-open. Use **Finish recording** in the main panel's footer; it stays available on
-every tab while recording. Wait for **Finalizing video...** to finish saving.
-Camera edits, including **Clear All**, become available again afterward.
+An authored camera-path take finishes automatically when the shot ends. A
+free-camera recording without a path stays open until **Finish recording**;
+pausing the replay alone does not finalize it. **Finish recording** is in the
+main panel's footer and remains available on every tab while recording. Use it
+to stop early, then wait for **Finalizing video...** to finish saving. Camera
+edits, including **Clear All**, become available again afterward.
 
 **Stop / restore** controls playback and restoration. Use **Finish recording**
 to close and save the video take.
 
-For a shot with one attached camera, **Replay seconds** chooses the length of
-that take. Recording keeps the single camera intact, so you can choose another
-duration for the next take. A shot with multiple cameras keeps its authored
-timing.
+For a shot with one attached camera, **Replay duration** on in-game Export
+(**Replay seconds** on desktop) chooses the length of that take. Recording
+keeps the single saved camera intact, so you can choose another duration for
+the next take. A shot with multiple cameras keeps its authored timing.
+
+**Player POV** records the game's selected spectator view instead. Select a
+hero with Game Follow or F9, pause at the start, return with F8 and choose
+**Record POV**. Keep **Camera path / Bone camera** selected for a saved bone
+attachment or path. Both workflows use the chosen export settings; see
+[Video and ReShade](VIDEO_AND_RESHADE.md) and [layer export](LAYER_EXPORT.md)
+for audio, fixed-step and pass restrictions.
 
 ## Edit camera curves
 
@@ -185,6 +206,10 @@ project value or Undo step is touched, so pressing **R** never edits your shot;
 selecting another camera or previewing one again returns that camera's own
 framing. Rebind it under **Controls** like any other shortcut — **Ctrl+Alt+R**
 stays Replace.
+
+The default **Stop / restore** shortcut is **Backspace**. F6 belongs to
+Deadlock's developer UI; existing saved bindings may differ. Check the desktop
+**Controls** page before relying on a shortcut.
 
 ## Find a player or a replay moment
 

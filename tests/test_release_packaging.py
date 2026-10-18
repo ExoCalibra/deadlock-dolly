@@ -41,6 +41,36 @@ class ReleasePackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Non-source"):
                     release_files.source_files(self.root)
 
+    def test_portable_guides_resolve_repository_links_without_missing_neighbors(self):
+        docs = self.root / "docs"
+        docs.mkdir()
+        source = ('[Guide](USER_GUIDE.md#controls)\n'
+                  '[Credits](../CREDITS.md "Project credits")\n'
+                  '![Logo](../assets/dolly.png)\n'
+                  '[Here](#controls)\n'
+                  '[Web](https://example.com/guide?q=1#controls)\n'
+                  '[Mail](mailto:help@example.com)\n')
+        for name in ("VIDEO_AND_RESHADE.md", "LAYER_EXPORT.md", "UPDATING.md",
+                     "SUPPORTED_CAMERA_CVARS.md"):
+            (docs / name).write_text(source, encoding="utf-8")
+        (docs / "SUPPORTED_CAMERA_CVARS.json").write_bytes(b'{"controls": []}\n')
+        bundle = self.root / "portable"
+        bundle.mkdir()
+        build_windows.stage_user_guides(self.root, bundle)
+        expected = ('[Guide](https://github.com/cravvnn/deadlock-dolly/blob/main/docs/USER_GUIDE.md#controls)\n'
+                    '[Credits](https://github.com/cravvnn/deadlock-dolly/blob/main/CREDITS.md "Project credits")\n'
+                    '![Logo](https://github.com/cravvnn/deadlock-dolly/blob/main/assets/dolly.png)\n'
+                    '[Here](#controls)\n'
+                    '[Web](https://example.com/guide?q=1#controls)\n'
+                    '[Mail](mailto:help@example.com)\n')
+        self.assertEqual({path.name for path in bundle.iterdir()}, {
+            "Video_and_ReShade.md", "LAYER_EXPORT.md", "Updating.md",
+            "Supported_Camera_Cvars.md", "Supported_Camera_Cvars.json"})
+        for path in bundle.glob("*.md"):
+            with self.subTest(guide=path.name):
+                self.assertEqual(path.read_text(encoding="utf-8"), expected)
+        self.assertEqual((bundle / "Supported_Camera_Cvars.json").read_bytes(), b'{"controls": []}\n')
+
     def test_source_manifest_missing_and_duplicate_files_fail_release(self):
         (self.root / "one.py").write_text("fixture")
         for contents, message in [("missing.py\n", "Missing or unsafe source file"),

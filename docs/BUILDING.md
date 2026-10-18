@@ -1,5 +1,7 @@
 # Windows builds and publishing
 
+[Documentation](README.md) · [User guide](USER_GUIDE.md)
+
 Build and test release packages locally. Publishing source, creating a version
 tag or publishing a GitHub Release must not start a hosted build. The retained
 `.github/workflows/windows.yml` is manual-only; use it only if you explicitly
@@ -20,7 +22,7 @@ build. Inspect `build/checks/` if a check fails. Keep verification enabled.
 For routine development edits, use the [focused checks](internal/TESTING.md)
 before requesting a release build; the full release gates remain required.
 A successful build does not publish anything or prove in-game behavior; complete
-the relevant [in-game checks](internal/STAGE1_TESTING.md) before publishing.
+the relevant [checks for the changed workflow](internal/TESTING.md#manual-integration-checks) before publishing.
 
 Do not upload the game's `client.dll`, `engine2.dll`, `tier0.dll` or `server.dll`.
 They are inspected from an installation and are not distributed with Dolly.
@@ -62,8 +64,10 @@ py -3.12 -m venv .venv
 ```
 
 No environment activation is required. Build dependencies are isolated from
-the app's source runtime. The script stops if a regression, icon check, or
-actual packaged-editor startup fails. Inspect `build/checks/` after a failure.
+the app's source runtime. Run all commands from the repository root with that
+same interpreter. `cmake` and `ctest` must be available on `PATH` (the CMake
+installer can add them). The script stops if a regression, icon check, or actual
+packaged-editor startup fails. Inspect `build/checks/` after a failure.
 
 Successful outputs are under `dist/`:
 
@@ -72,9 +76,13 @@ Successful outputs are under `dist/`:
 - `SHA256SUMS.txt` - local checksum record, not attached
 
 The portable ZIP contains a `DeadlockDolly` folder with `Dolly.exe`, `_internal`,
-`Start_Here.txt`, `LICENSE.txt`, an example shot and `BUILD_INFO.json`. Users
-only need to extract the folder and launch `Dolly.exe`; they do not run the
-build commands or install Python.
+`Start_Here.txt`, `LICENSE.txt`, export guides, an example shot and `BUILD_INFO.json`.
+The editor executable is `_internal/DollyApp.exe`; `Dolly.exe` is the public
+launcher with embedded update recovery. Users extract the whole folder and
+launch `Dolly.exe`; they do not run build commands or install Python.
+
+Project credits are included at `_internal/CREDITS.md`, where existing Dolly
+updaters can install and verify them alongside the runtime files.
 
 ## Refreshing the bundled FFmpeg pin
 
@@ -90,7 +98,7 @@ Prove the new pin using a fresh, empty cache directory so a local cached ZIP
 cannot conceal a broken URL. For example (choose unused output directories):
 
 ```powershell
-.\build\venv-build\Scripts\python.exe tools\fetch_ffmpeg.py --cache build\ffmpeg-pin-check-cache --destination build\ffmpeg-pin-check
+.\.venv\Scripts\python.exe tools\fetch_ffmpeg.py --cache build\ffmpeg-pin-check-cache --destination build\ffmpeg-pin-check
 .\build\ffmpeg-pin-check\bin\ffmpeg.exe -version
 ```
 
@@ -103,25 +111,32 @@ manual publishing action.
 
 ## Generating a compatibility profile after a Deadlock update
 
-`native/profiles/manifest.json` and `native/src/dolly_compat_generated.hpp` are
-generated, not hand-edited. When Valve ships a new `client.dll`, run the packer
-from the source root on a machine with the updated game installed:
+Follow the [game-update review workflow](internal/GAME_UPDATES.md) before changing
+compatibility data. `native/profiles/runtime-contracts.json` records reviewed
+runtime contracts; camera and audio profiles are also retained under
+`native/profiles/`. A new module hash or a matching signature alone does not
+review a changed layout or enable every optional feature.
+
+After reviewing the saved inputs, regenerate and check the Python/native tables
+from the source root using the same build environment:
 
 ```powershell
-py -3.12 -m pip install pefile capstone
-py -3.12 tools\generate_profile.py --game-dir "B:\SteamLibrary\steamapps\common\Deadlock" ^
-    --previous native\profiles\deadlock-2026-09-09-complete.json ^
-    --label 2026-09-11 --update-manifest
+.\.venv\Scripts\python.exe tools\generate_compatibility.py --write
+.\.venv\Scripts\python.exe tools\generate_compatibility.py --check
 ```
 
-It writes `native/profiles/deadlock-<label>-complete.json`, refreshes
-`manifest.json` and emits `dolly_compat_generated.hpp` with every reviewed
-profile plus AOB signatures for the installed build. Review the diff: confirm
-the main view setup, caller, `CViewRender` vtable, `SetGlobals` pointer and
-aspect-source pointer, and that no view field offset changed. Then rebuild
-`DollyNative.dll` and ship a release that lists the new hashes. A signature match
-at runtime can adopt a byte-identical build, but a layout change always requires
-this reviewed profile.
+The generator owns `dolly/_runtime_generated.py`,
+`native/include/dolly_runtime_generated.hpp` and the generated compatibility
+headers; do not edit them directly. To verify saved evidence against an installed
+game without launching it, run:
+
+```powershell
+.\.venv\Scripts\python.exe tools\generate_compatibility.py --check --verify-game-dir "B:\SteamLibrary\steamapps\common\Deadlock"
+```
+
+That check reads installed files; it does not establish live camera or export
+behavior. The normal native build checks generated inputs before rebuilding the
+DLL. Keep its matching metadata and runtime files together.
 
 ## What the build includes and checks
 
@@ -148,15 +163,16 @@ this reviewed profile.
 - Original component notices accompany the binary. Python's installed license
   and PyInstaller's COPYING file are copied from the actual build environment.
 
-The result is an unsigned portable app with [desktop update notices](internal/UPDATING.md):
+The result is an unsigned portable app with [desktop update notices](UPDATING.md):
 the editor opens immediately, release checks run in the background, and every
 download and installation requires an explicit **Update now** action.
 No installer or certificate-based code signing is configured. A successful
 bundle startup or native callback test does not establish Deadlock camera
-compatibility. Complete [STAGE1_TESTING.md](internal/STAGE1_TESTING.md) on the supported
-DX11 game build before publishing. The new in-game panel, native input and
-ReShade coexistence have not been tested in the Linux development workspace.
-Console remains available through Troubleshooting for the older workflow.
+compatibility. Complete the [relevant manual checks](internal/TESTING.md#manual-integration-checks)
+on the supported DX11 game build before publishing. Cross-platform math tests do not validate
+Windows injection or a Linux/Proton game session. Choose the camera driver in
+Replay's **Launch setup**; Settings' **Troubleshooting & recovery** contains the
+manual startup controls.
 
 ## Recovery and updating
 
@@ -167,11 +183,18 @@ the existing guarded journal recovery. If the editor itself cannot open, run:
 .\Dolly.exe --recover
 ```
 
-For an older source installation, its original `Recover_Game_Config.bat`
-still works. Recover before replacing old package files, and keep logs and
-saved shots. Do not delete an older installation with a pending recovery journal.
+Source users can run `Recover_Game_Config.bat` on Windows, or
+`python -m dolly.launcher --recover` from the source root. Recover before replacing
+old package files, and keep logs and saved shots. Do not delete an installation
+with a pending recovery journal. The [user update guide](UPDATING.md) explains
+**Update now**, explicit consent and recovery of an already approved update.
 
 ## Maintaining the repository
+
+The [credits](../CREDITS.md) record contributors and upstream projects,
+including [@paralin](https://github.com/paralin) for
+Linux/Proton discovery and compatibility fixes. Keep that record current as
+contributions are integrated.
 
 Keep `SOURCE_FILES.txt` updated when adding a source, documentation, workflow
 or asset file. Release exports use that list instead of copying the whole
@@ -189,7 +212,7 @@ Primary references:
 - [Windowed streams and launching external programs](https://pyinstaller.org/en/stable/common-issues-and-pitfalls.html)
 - [GitHub workflow artifacts](https://docs.github.com/en/actions/tutorials/store-and-share-data)
 
-## 0.3.9 Windows build correction
+## Historical 0.3.9 Windows build correction
 
 The 0.3.8 run compiled the native helper and passed both C++ tests, then failed
 its Windows shared-memory test with `InterlockedExchange` not found. This update
@@ -203,4 +226,5 @@ The Windows workflow prepares Media Foundation on its Server 2022 runner.
 CTest records a short synthetic H.264 MP4, reopens it to verify timestamps, and
 checks finish, cancel and no-overwrite behavior. Missing media components or
 encoder errors fail that gate; they do not get reported as a successful test.
-ReShade runtime DLLs and shaders are not bundled or downloaded by the build.
+The ReShade runtime DLL is installed separately. The crosire/prod80 shader
+library and its notices are bundled under `third_party/reshade_shaders`.

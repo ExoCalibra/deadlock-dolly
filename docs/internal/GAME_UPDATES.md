@@ -1,6 +1,11 @@
 # Deadlock updates and Dolly
 
-## Shared reviewed contracts (unreleased hardening)
+Maintainer reference. The current review procedure comes first; the later
+build-specific sections preserve historical evidence and pending checks at
+the time of each review. For setup and checking your installed build, use the
+[user guide](../USER_GUIDE.md) and [current documentation](../README.md).
+
+## Shared reviewed contracts
 
 `native/profiles/manifest.json` controls accepted module fingerprints and the
 narrower feature pins. `native/profiles/runtime-contracts.json` now holds the
@@ -52,7 +57,7 @@ reviewed. The 6745 player scene candidate uses its reviewed producer at `0x5c8f0
 with the retained ten-argument ABI; older profiles keep their original entries.
 Offline review and test passes do not certify live Players or Depth output.
 
-## Version6722 hotfix and Follow slide correction
+## Historical review: Version6722 hotfix and Follow slide correction
 
 Steam build25614556 uses client44a50bc2.../image40f5000. Exact original6712
 and6722 PE files were compared privately; startup, replay, observer, camera,
@@ -72,7 +77,7 @@ changed config/command, nonfinite data or another callsite passes through.
 Optional diagnostics report scopes/blends/corrections/rejections for live proof.
 This correction still needs bounded runtime and visual acceptance.
 
-## Build 6712 replay startup and schema printing
+## Historical review: Build 6712 replay startup and schema printing
 
 Production startup now waits for the reviewed normal replay camera handoff
 before pausing. The selected replay and first-packet gates remain intact;
@@ -102,7 +107,7 @@ The field at new0x30 is integer pitch and must not be read as the old float.
 CSV columns retain their meanings; source_volume is not final mixed loudness,
 and source_rate_parameter is not asserted to be pitch. Runtime retest pending.
 
-## Build 6712 offline compatibility review (2026-09-29)
+## Historical review: Build 6712 offline compatibility (2026-09-29)
 
 The September 29 profiles cover the camera wrapper and changed view fields,
 engine replay accessors, ICvar interface, ten-argument scene producer, renderer
@@ -129,7 +134,7 @@ These are offline-reviewed compatibility changes, not an in-game certification.
 An owned replay startup, camera/F9 recovery, audio and layered export still need
 runtime verification before release. No running game was inspected or modified.
 
-## Complete module scan and audio fallback (2026-09-28)
+## Historical review: Complete module scan and audio fallback (2026-09-28)
 
 **Check game build** and Native launch now hash seven game modules in one scan:
 `client`, `engine2`, `tier0`, `scenesystem`, `soundsystem`, `resourcesystem`, and
@@ -178,7 +183,7 @@ tests cover moved functions/data, signed displacements, ambiguity, changed
 prologues, truncation and invalid table targets. A bounded owned replay remains
 necessary before claiming in-game capture behavior on a newly updated build.
 
-## Compatibility scanner and generator — 0.5.3
+## Historical reference: Compatibility scanner and generator — 0.5.3
 
 `native/profiles/manifest.json` is the single source of truth for the reviewed
 builds. It lists the accepted SHA-256 pin for every reviewed `client.dll`,
@@ -195,8 +200,9 @@ build:
 | Unsupported | A module is not listed. The message names each module, the observed hash, the reviewed date and whether the file is newer than the review. |
 | Incomplete | A required module is missing from the install. |
 
-No network request is made; the manifest is bundled. **Home → Troubleshooting →
-Check game build** runs the same scan on demand.
+No network request is made; the manifest is bundled. The current on-demand entry is **Settings → Troubleshooting & recovery →
+Startup controls → Check game build**. The section above describes the
+original three-module scanner; current scans include the optional modules.
 
 ### The AOB fallback
 
@@ -212,19 +218,15 @@ pointer). If any symbol is ambiguous or missing, or the reviewed 32-byte
 prologue changed, the build stays blocked. Layout changes still require a new
 reviewed profile.
 
-### Generating a profile after a game update
+### Historical profile generation procedure
 
-1. Run `python tools/generate_profile.py --game-dir <Deadlock> --previous
-   <last-complete-profile> --label <YYYY-MM-DD> --update-manifest`.
-   It requires `pefile` and `capstone` (see `requirements-build.txt`).
-2. Inspect the generated profile and header diff. Confirm the main view setup,
-   caller, vtable, globals and engine-client addresses and that field offsets are
-   unchanged.
-3. Rebuild `DollyNative.dll` on Windows x64 (see
-   [BUILDING.md](../BUILDING.md)) and ship a release that lists the new build.
-4. Play a short path in the updated client and Stop / restore before publishing.
+The original client-only procedure has been superseded by the
+[shared reviewed-contract workflow](#shared-reviewed-contracts). Profile
+discovery does not approve new fingerprints. Review each affected subsystem,
+regenerate the saved contracts, inspect and test the changes, then validate
+the affected runtime behavior before publishing support.
 
-## 0.3.13 compatibility
+## Historical reference: 0.3.13 compatibility
 
 This release supports the supplied September 9 client.dll, engine2.dll and tier0.dll.
 The previous September 7 client remains supported. Both use the same native
@@ -245,7 +247,7 @@ its current lookup/data-accessor ABI and interface slots were reviewed.
 All three game modules retain exact fingerprint checks. The game's server.dll
 is not a native-camera compatibility dependency and is not bundled.
 
-## Install this complete update
+## Historical 0.3.13 installation procedure
 
 1. Check out the matching tag or branch, or use a source ZIP from the same build
    if you have one. Either way the tree must contain the complete repository
@@ -259,7 +261,7 @@ is not a native-camera compatibility dependency and is not bundled.
    fresh directory. Keep Dolly.exe and the complete _internal folder together.
 5. Check native startup, play a short path twice, animate DOF, and Stop / restore.
 
-## Future updates
+## Historical updater proposal (0.3.13)
 
 This version does not automatically download or install Dolly updates.
 The release page is https://github.com/cravvnn/deadlock-dolly/releases.
