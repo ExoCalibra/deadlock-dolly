@@ -11,11 +11,13 @@ After Effects (X right, Y down, Z into the screen)
 pos:      (x, y, z) -> (x, -z, y)
 rotation: X/Y/Z Rotation, R = Rx * Ry * Rz
 zoom:     (comp_width / 2) / tan(hfov / 2)
+dof:      Focus Distance = focus distance, Aperture = aperture diameter
 
 USD (Z up, one unit is about an inch)
 pos:      (x, y, z) -> (x, y, z)
 rotation: rotateXYZ, R = Rz * Ry * Rx
 focal:    (horizontalAperture / 2) / tan(hfov / 2)
+dof:      focusDistance = focus distance, fStop = (focalLength / 10) / aperture diameter
 """
 
 from __future__ import annotations
@@ -201,6 +203,50 @@ def arrival_at(frames: list[Frame], phase: float):
     return None
 
 
+# Depth of field
+CITADEL_SWITCHES = ("r_depth_of_field", "r_citadel_depthoffield_enable")
+CITADEL_FOCUS = "r_citadel_depthoffield_focus_distance"
+CITADEL_APERTURE = "r_citadel_depthoffield_aperture_diameter"
+CITADEL_FOCUS_DEFAULT = 200.0  # Dolly's Citadel default when no focus is authored
+
+
+def depth_of_field(project: Project, frames: list[Frame]):
+    """Citadel depth of field for every frame, or None when no frame uses it.
+
+    Each entry is (focus distance, aperture diameter) in inches, with aperture 0
+    where the lens is off. Values come from the shot at the time each frame
+    rendered.
+    """
+    if not project.keyframes:
+        return None, []
+
+    lenses, notes = [], set()
+    for frame in frames:
+        cvars = project.evaluate(max(0.0, frame.phase))["cvars"]
+        aperture = float(cvars.get(CITADEL_APERTURE, 0))  # The game's default aperture has no blur.
+        if all(cvars.get(name, 0) for name in CITADEL_SWITCHES) and aperture > 0:
+            if CITADEL_FOCUS not in cvars:
+                notes.add(f"No Citadel focus distance is authored - exported at {CITADEL_FOCUS_DEFAULT:g} inches.")
+            if cvars.get("r_citadel_depthoffield_mode", 0):
+                notes.add("Citadel near-only and far-only modes are exported as normal depth of field.")
+            lenses.append((max(1.0, float(cvars.get(CITADEL_FOCUS, CITADEL_FOCUS_DEFAULT))), aperture))
+        else:
+            if cvars.get("r_dof_override", 0) and cvars.get("r_depth_of_field", 0):
+                notes.add("Native range DOF isn't a lens, so it isn't exported - use Citadel DOF to export it.")
+            lenses.append(None)
+
+    if not any(lenses):
+        return None, sorted(notes)
+    
+    # A frame with the lens off keeps the nearest focus distance, so focus never jumps.
+    focus = next(lens[0] for lens in lenses if lens)
+    filled = []
+    for lens in lenses:
+        focus = lens[0] if lens else focus
+        filled.append(lens or (focus, 0.0))
+    return filled, sorted(notes)
+
+
 # After Effects (.jsx)
 def ae_vector(x: float, y: float, z: float) -> tuple[float, float, float]:
     """Source vector to After Effects vector."""
@@ -278,6 +324,7 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
         return tuple(value - base for value, base in zip(ae_vector(*position), origin))
 
     keys = [(marker.key, marker.time, offset(marker.position)) for marker in take.markers]
+    lenses, dof_warnings = depth_of_field(project, frames)
     data = {
         "frame_numbers": array(str(f.frame) for f in frames),
         "positions": array(array(map(number, offset(f.position))) for f in frames),
@@ -285,6 +332,7 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
         "fovs": array(number(f.fov) for f in frames),
         "keys": array(array([str(n), number(t), *map(number, p)]) for n, t, p in keys),
         "origin": array(map(number, origin)),
+        "dof": array(array(map(number, lens)) for lens in lenses) if lenses else "null",
     }
     name = json.dumps(project.name, ensure_ascii=True)
     video_name = json.dumps(video, ensure_ascii=True) if video else "null"
@@ -307,6 +355,7 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
     var rotations = {data["rotations"]};
     var fovs = {data["fovs"]};
     var dollyKeys = {data["keys"]};
+    var dof = {data["dof"]}; // null, or per frame [focus distance, aperture]; aperture 0 is off
 
     function importVideo() {{
         var file = $.fileName ? new File(new File($.fileName).parent.fsName + "/" + VIDEO_FILE) : null;
@@ -364,7 +413,19 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
         transform.property("ADBE Rotate X").setValuesAtTimes(times, xs);
         transform.property("ADBE Rotate Y").setValuesAtTimes(times, ys);
         transform.property("ADBE Rotate Z").setValuesAtTimes(times, zs);
-        camera.property("ADBE Camera Options Group").property("ADBE Camera Zoom").setValuesAtTimes(times, zooms);
+        var options = camera.property("ADBE Camera Options Group");
+        options.property("ADBE Camera Zoom").setValuesAtTimes(times, zooms);
+        if (dof) {{
+            var focuses = [], apertures = [];
+            for (var d = 0; d < dof.length; d++) {{
+                focuses.push(dof[d][0] * SCALE);
+                apertures.push(dof[d][1] * SCALE);
+            }}
+            options.property("ADBE Camera Depth of Field").setValue(1);
+            options.property("ADBE Camera Blur Level").setValue(100);
+            options.property("ADBE Camera Focus Distance").setValuesAtTimes(times, focuses);
+            options.property("ADBE Camera Aperture").setValuesAtTimes(times, apertures);
+        }}
         comp.openInViewer();
     }} catch (error) {{
         alert("Dolly camera import failed: " + error.toString());
@@ -373,7 +434,7 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
     }}
 }})();
 """
-    return script, take.warnings
+    return script, take.warnings + dof_warnings
 
 
 def export_jsx(project: Project, path: str | Path, fps: float, **options) -> list[str]:
@@ -449,7 +510,16 @@ def build_usda(project: Project, fps: float, *, camera_data: str | Path | None =
 
     translations = (usd_tuple(offset(f.position)) for f in frames)
     rotations = (usd_tuple(r) for r in usd_rotations(frames))
-    focals = (number(USD_APERTURE / 2 / math.tan(math.radians(f.fov) / 2)) for f in frames)
+    focals = [USD_APERTURE / 2 / math.tan(math.radians(f.fov) / 2) for f in frames]
+    lenses, dof_warnings = depth_of_field(project, frames)
+    dof = ""
+    if lenses:
+        # focalLength is in tenths of a unit, so fStop = focal / 10 / aperture.
+        # fStop 0 turns depth of field off.
+        stops = (number(focal / 10 / aperture) if aperture else "0"
+                 for focal, (_focus, aperture) in zip(focals, lenses))
+        dof = (f"        float focusDistance.timeSamples = {usd_samples(frames, (number(focus) for focus, _ in lenses))}\n"
+               f"        float fStop.timeSamples = {usd_samples(frames, stops)}\n")
     keys = "".join(f'''
         def Xform "Key_{marker.key:02d}" (
             doc = "Dolly key {marker.key} @ {marker.time:.3f}s"
@@ -483,8 +553,8 @@ def Xform "Dolly"
         float2 clippingRange = (1, 1000000)
         float horizontalAperture = {number(USD_APERTURE)}
         float verticalAperture = {number(vertical_aperture)}
-        float focalLength.timeSamples = {usd_samples(frames, focals)}
-        double3 xformOp:translate.timeSamples = {usd_samples(frames, translations)}
+        float focalLength.timeSamples = {usd_samples(frames, map(number, focals))}
+{dof}        double3 xformOp:translate.timeSamples = {usd_samples(frames, translations)}
         float3 xformOp:rotateXYZ.timeSamples = {usd_samples(frames, rotations)}
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
     }}
@@ -493,7 +563,7 @@ def Xform "Dolly"
     {{{keys}    }}
 }}
 """
-    return layer, take.warnings
+    return layer, take.warnings + dof_warnings
 
 
 def export_usda(project: Project, path: str | Path, fps: float, **options) -> list[str]:

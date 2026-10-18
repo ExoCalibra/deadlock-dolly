@@ -9,10 +9,10 @@ import tempfile
 import unittest
 
 from dolly.camera_export import (angle_vectors, ae_rotation, ae_rotations, build_jsx, build_usda,
-                                 comp_size, export_jsx, export_usda, horizontal_fov, load_take,
-                                 sample_camera, sample_camera_data, ae_vector, usd_rotation,
-                                 usd_rotations)
-from dolly.path import AttachKey, Keyframe, Project
+                                 comp_size, depth_of_field, export_jsx, export_usda, horizontal_fov,
+                                 load_take, sample_camera, sample_camera_data, ae_vector,
+                                 usd_rotation, usd_rotations)
+from dolly.path import AttachKey, CvarTrack, Keyframe, Project, TrackKey
 
 
 def camera(time, x=0, y=0, z=0, pitch=0, yaw=0, roll=0, aspect=16 / 9):
@@ -391,6 +391,84 @@ class UsdTests(unittest.TestCase):
             export_usda(Project(keyframes=[camera(0), camera(1)]), path, 30)
             self.assertTrue(path.read_text("ascii").startswith("#usda 1.0"))
             self.assertEqual(list(Path(folder).iterdir()), [path])
+
+
+def citadel_shot(**setup):
+    """A 2 s shot whose Citadel focus pulls from 200 to 600 inches."""
+    values = {"r_depth_of_field": 1, "r_citadel_depthoffield_enable": 1,
+              "r_citadel_depthoffield_aperture_diameter": .5, **setup}
+    return Project(keyframes=[camera(0), camera(2)], interpolation="linear",
+                   setup_values={name: value for name, value in values.items() if value is not None},
+                   tracks=[CvarTrack("r_citadel_depthoffield_focus_distance",
+                                     [TrackKey(0, 200.0), TrackKey(2, 600.0)], "linear")])
+
+
+class DepthOfFieldTests(unittest.TestCase):
+    def test_citadel_lens_follows_the_shot_every_frame(self):
+        shot = citadel_shot()
+        lenses, warnings = depth_of_field(shot, sample_camera(shot, 10).frames)
+        self.assertEqual((len(lenses), warnings), (21, []))
+        self.assertEqual(lenses[0], (200, .5))
+        self.assertAlmostEqual(lenses[10][0], 400)
+        self.assertEqual(lenses[-1], (600, .5))
+
+    def test_after_effects_camera_gets_the_lens_in_comp_pixels(self):
+        script, warnings = build_jsx(citadel_shot(), 10)
+        dof = json.loads(re.search(r"var dof = (\[.*?\]); //", script).group(1))
+        self.assertEqual((dof[0], dof[-1]), ([200, .5], [600, .5]))
+        for match_name in ("ADBE Camera Depth of Field", "ADBE Camera Focus Distance",
+                           "ADBE Camera Aperture", "ADBE Camera Blur Level"):
+            self.assertIn(match_name, script)
+        self.assertNotIn("isn't", " ".join(warnings))
+
+    def test_usd_camera_gets_focus_distance_and_f_stop(self):
+        layer, _ = build_usda(citadel_shot(), 10)
+        focus = usd_samples(layer, "float focusDistance")
+        self.assertEqual((focus[0], focus[20]), ((200,), (600,)))
+        # Default lens at 16:9: 106.26 degrees, focal length 13.5, so f/2.7 at a 0.5 inch aperture.
+        for (stop,) in usd_samples(layer, "float fStop").values():
+            self.assertAlmostEqual(stop, 13.5 / 10 / .5, places=5)
+
+    def test_a_shot_without_depth_of_field_exports_none(self):
+        shot = Project(keyframes=[camera(0), camera(1)])
+        script, _ = build_jsx(shot, 10)
+        self.assertIn("var dof = null;", script)
+        self.assertNotIn("focusDistance", build_usda(shot, 10)[0])
+        self.assertEqual(depth_of_field(shot, sample_camera(shot, 10).frames), (None, []))
+
+    def test_switching_the_lens_off_holds_focus_and_stops_the_blur(self):
+        shot = citadel_shot()
+        shot.tracks.append(CvarTrack("r_citadel_depthoffield_enable",
+                                     [TrackKey(0, 1.0), TrackKey(1, 0.0)], "step"))
+        lenses, _ = depth_of_field(shot, sample_camera(shot, 10).frames)
+        self.assertEqual(lenses[9], (380, .5))
+        self.assertEqual(lenses[15], (380, 0))  # Focus holds where the lens switched off.
+        stops = usd_samples(build_usda(shot, 10)[0], "float fStop")
+        self.assertEqual(stops[15], (0,))
+
+    def test_range_dof_and_unauthored_choices_are_reported(self):
+        ranges = Project(keyframes=[camera(0), camera(1)],
+                         setup_values={"r_depth_of_field": 1, "r_dof_override": 1})
+        lenses, warnings = depth_of_field(ranges, sample_camera(ranges, 10).frames)
+        self.assertIsNone(lenses)
+        self.assertIn("Native range DOF isn't a lens", warnings[0])
+        shot = Project(keyframes=[camera(0), camera(1)],
+                       setup_values={"r_depth_of_field": 1, "r_citadel_depthoffield_enable": 1,
+                                     "r_citadel_depthoffield_aperture_diameter": .5,
+                                     "r_citadel_depthoffield_mode": 1})
+        lenses, warnings = depth_of_field(shot, sample_camera(shot, 10).frames)
+        self.assertEqual(lenses[0], (200, .5))
+        self.assertEqual(len(warnings), 2)  # Unauthored focus, and the near-only mode.
+        self.assertIn("near-only", build_jsx(shot, 10)[1][-1] + build_jsx(shot, 10)[1][-2])
+
+    def test_recorded_frames_use_the_shot_time_they_rendered(self):
+        rows = [[frame, frame / 10, max(0, frame - 5) / 10, 0, 0, 0, 0, 0, 0, 90] for frame in range(15)]
+        with tempfile.TemporaryDirectory() as folder:
+            data = ScriptTests.write_camera_data(folder, rows, frames_written=15, fps=10)
+            take = load_take(citadel_shot(), 10, data)
+        lenses, _ = depth_of_field(citadel_shot(), take.frames)
+        self.assertEqual(lenses[5][0], 200)  # Half a second of pre-roll before the shot starts.
+        self.assertAlmostEqual(lenses[14][0], 380)
 
 
 if __name__ == "__main__":
