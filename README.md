@@ -13,7 +13,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
 ![License](https://img.shields.io/badge/license-MIT-2ea44f)
-![Version](https://img.shields.io/github/v/release/cravvnn/deadlock-dolly?include_prereleases&label=version)
+[![Version](https://img.shields.io/badge/version-0.6.57--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
 
 ![Deadlock Dolly demo](assets/dolly-demo.gif)
 

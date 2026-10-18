@@ -135,6 +135,8 @@ correcting a published body, a fresh Dolly session fetches the corrected notes;
 updating the body cannot replace the parser inside an older running executable.
 
 1. Use a new increasing version in `dolly/__init__.py` for every public build.
+   Update the README's static version badge, Current source line and current
+   release-notes link to the same version.
 2. Build locally with `tools/build_windows.py`; do not build on GitHub Actions.
    The build includes Dolly.exe with embedded update/recovery, a file manifest, bundled
    FFmpeg, and matching native/Python components. Both GUI and updater smoke
