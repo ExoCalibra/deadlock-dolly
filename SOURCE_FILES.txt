@@ -287,6 +287,7 @@ tests/test_portable.py
 tests/test_preview_convergence.py
 tests/test_release_packaging.py
 tests/test_replays.py
+tests/test_runtime.py
 tests/test_screenshot.py
 tests/test_seek_boundary.py
 tests/test_seek_overshoot.py
