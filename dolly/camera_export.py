@@ -415,13 +415,14 @@ def build_jsx(project: Project, fps: float, *, camera_data: str | Path | None = 
         transform.property("ADBE Rotate Z").setValuesAtTimes(times, zs);
         var options = camera.property("ADBE Camera Options Group");
         options.property("ADBE Camera Zoom").setValuesAtTimes(times, zooms);
+        // Always set it: some renderers turn depth of field on for a new camera.
+        options.property("ADBE Camera Depth of Field").setValue(dof ? 1 : 0);
         if (dof) {{
             var focuses = [], apertures = [];
             for (var d = 0; d < dof.length; d++) {{
                 focuses.push(dof[d][0] * SCALE);
                 apertures.push(dof[d][1] * SCALE);
             }}
-            options.property("ADBE Camera Depth of Field").setValue(1);
             options.property("ADBE Camera Blur Level").setValue(100);
             options.property("ADBE Camera Focus Distance").setValuesAtTimes(times, focuses);
             options.property("ADBE Camera Aperture").setValuesAtTimes(times, apertures);

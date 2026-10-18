@@ -433,6 +433,8 @@ class DepthOfFieldTests(unittest.TestCase):
         shot = Project(keyframes=[camera(0), camera(1)])
         script, _ = build_jsx(shot, 10)
         self.assertIn("var dof = null;", script)
+        # Switched off explicitly, never left at a renderer's default.
+        self.assertIn('property("ADBE Camera Depth of Field").setValue(dof ? 1 : 0);', script)
         self.assertNotIn("focusDistance", build_usda(shot, 10)[0])
         self.assertEqual(depth_of_field(shot, sample_camera(shot, 10).frames), (None, []))
 
