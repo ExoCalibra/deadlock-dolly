@@ -8,7 +8,7 @@
 
 [![Download](https://img.shields.io/badge/Download-Releases-2ea44f?logo=github&logoColor=white)](https://github.com/cravvnn/deadlock-dolly/releases)
 [![Sponsor](https://img.shields.io/badge/Sponsor-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/cravvnn)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/PGVPEp4bT)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/deadlockediting)
 [![Report an issue](https://img.shields.io/badge/Report%20an%20issue-6e7781?logo=github&logoColor=white)](https://github.com/cravvnn/deadlock-dolly/issues)
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
@@ -145,7 +145,7 @@ settings and build outputs stay out of Git.
 
 ## Support
 
-Contact **@Cravvnn on Discord**, join the [Dolly Discord](https://discord.gg/PGVPEp4bT),
+Contact **@Cravvnn on Discord**, join the [Deadlock Editing Discord](https://discord.gg/deadlockediting),
 or [report an issue](https://github.com/cravvnn/deadlock-dolly/issues).
 Include the Dolly version, the action that failed and the ZIP from
 **Export diagnostics**. If the app does not open, include
