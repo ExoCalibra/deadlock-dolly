@@ -1,5 +1,9 @@
 # Published release updates
 
+Maintainer reference for packaging, publishing and updater behavior. For
+current user instructions, see [Updating and recovery](../UPDATING.md);
+the [documentation index](../README.md) covers editing workflows.
+
 Packaged Windows builds include the updater and recovery launcher in `Dolly.exe`.
 Source checkouts use the local build workflow; the packaged updater does not
 install or build source checkouts.
@@ -101,8 +105,8 @@ separate folder. Ordinary recovery needs only Dolly.exe.
 
 The in-app highlights use the same short publish description pasted into the
 GitHub release body. Open with the published heading that names the release —
-`### Deadlock Dolly v0.6.52-alpha` — or the equivalent bold version line
-`**0.6.52-alpha**`, then two to four bullets in the form
+`### Deadlock Dolly v0.6.52-alpha` — followed by a blank line and the required
+bold version line `**0.6.52-alpha**`, then two to four bullets in the form
 `- **Short title.** *Before:* ... *After:* ...`. Wrapped lines are supported.
 Use the version being published; the example is not an assigned next version.
 No separate summary attachment or package download is needed to read highlights.
@@ -110,11 +114,29 @@ No separate summary attachment or package download is needed to read highlights.
 The preview starts at a heading that names the version being published, plain or
 bold; a heading without the version ends the preview, so ordinary section
 headings stay out of the notes. Keep the bullets directly under that heading.
-Older Dolly builds parse only a bold version line, so while users still run
-them a body may keep `**0.6.52-alpha**` under the heading to light their
-previews as well.
+Versions 0.6.51 through 0.6.54 parse only a bold version line. Keep both lines,
+including when editing or shortening the description: a body with only the
+plain heading previews correctly in newer clients but shows no highlights in
+those installed versions. The normal Windows builder checks this authoring
+contract before building.
+
+Validate the exact text you will paste, after any edits, with:
+
+```powershell
+python tools/check_release_notes.py path/to/publish-body.md
+```
+
+The command defaults to the checkout's version; use `--version` when checking
+another release. Running it without a file checks the current release-notes
+document. It reads local text and never publishes or downloads an update.
+
+An already open Dolly notice caches the release metadata it discovered. After
+correcting a published body, a fresh Dolly session fetches the corrected notes;
+updating the body cannot replace the parser inside an older running executable.
 
 1. Use a new increasing version in `dolly/__init__.py` for every public build.
+   Update the README's static version badge, Current source line and current
+   release-notes link to the same version.
 2. Build locally with `tools/build_windows.py`; do not build on GitHub Actions.
    The build includes Dolly.exe with embedded update/recovery, a file manifest, bundled
    FFmpeg, and matching native/Python components. Both GUI and updater smoke

@@ -22,6 +22,7 @@ _MAX_FILE_BYTES = 128 * 1024 * 1024
 _STRUCTURE_TOLERANCE = 1e-3
 _VIEW_TOLERANCE = 1e-3
 _AFFINE_TOLERANCE = 0.05
+_FLOAT32_EPSILON = 2 ** -23
 
 
 class CameraBundleError(ValueError):
@@ -241,12 +242,20 @@ def _close(a: float, b: float, tolerance: float) -> bool:
     return abs(a - b) <= tolerance * max(1.0, abs(a), abs(b))
 
 
-def _check_projection(record: CameraRecord, what: str, issues: list[str]) -> None:
+def _check_projection(record: CameraRecord, what: str, issues: list[str], *,
+                      width: int, height: int) -> None:
     p = record.projection
-    for index in (1, 2, 3, 4, 6, 7):
+    for index in (1, 3, 4, 7, 8, 9, 12, 13):
         if not _close(p[index], 0.0, _STRUCTURE_TOLERANCE):
             issues.append(f"{what}: projection is oblique or malformed")
             return
+    # Temporal AA shifts clip X/Y by a bounded fraction of the depth viewport.
+    # Keep the sampled values and normalize by clip W's homogeneous scale,
+    # matching native admission including binary32 rounding at one pixel.
+    limit = 2 * abs(p[14]) * (1 + 4 * _FLOAT32_EPSILON)
+    if not (abs(p[2]) * width <= limit and abs(p[6]) * height <= limit):
+        issues.append(f"{what}: projection jitter exceeds one depth pixel")
+        return
     if p[0] == 0 or p[5] == 0:
         issues.append(f"{what}: projection scale is zero")
         return
@@ -315,7 +324,7 @@ def validate_bundle(bundle: CameraBundle, *, require_complete: bool = False) -> 
         previous_sample = record.sample
         if record.state != "complete":
             partial_states += 1
-        _check_projection(record, what, issues)
+        _check_projection(record, what, issues, width=bundle.width, height=bundle.height)
         if record.view is not None:
             _check_view(record, what, issues)
     if bundle.complete and partial_states:

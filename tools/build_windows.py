@@ -14,12 +14,14 @@ import struct
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urljoin, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from dolly import __version__
 from dolly.launcher import UNLOCKER_SHA256
 from release_files import bundle_zip, sha256, source_zip
+from check_release_notes import validate_publish_body
 from build_native import build_native, copy_native_runtime, reject_game_binaries
 from fetch_ffmpeg import download as download_ffmpeg, stage as stage_ffmpeg
 
@@ -87,6 +89,32 @@ def copy_runtime_licenses(destination: Path) -> None:
     shutil.copy2(distribution.locate_file(candidates[0]), destination / "PyInstaller-COPYING.txt")
 
 
+def stage_user_guides(root: Path, bundle: Path) -> None:
+    """Keep portable guide links valid when their repository neighbors are absent."""
+    for source, name in (
+        ("docs/VIDEO_AND_RESHADE.md", "Video_and_ReShade.md"),
+        ("docs/LAYER_EXPORT.md", "LAYER_EXPORT.md"),
+        ("docs/UPDATING.md", "Updating.md"),
+        ("docs/SUPPORTED_CAMERA_CVARS.md", "Supported_Camera_Cvars.md"),
+    ):
+        base = "https://github.com/cravvnn/deadlock-dolly/blob/main/" + source
+
+        def link(match: re.Match) -> str:
+            target = match[2]
+            if target.startswith("#") or urlsplit(target).scheme or target.startswith("//"):
+                return match[0]
+            return match[1] + urljoin(base, target) + (match[3] or "") + ")"
+
+        text = (root / source).read_text(encoding="utf-8")
+        # Repository guides use inline Markdown links. Preserve same-page
+        # anchors and external URLs; resolve sibling and parent paths online.
+        text = re.sub(r"""(\]\()([^\s()]+)([ \t]+(?:"[^"]*"|'[^']*'))?\)""",
+                      link, text)
+        (bundle / name).write_text(text, encoding="utf-8")
+    shutil.copy2(root / "docs/SUPPORTED_CAMERA_CVARS.json",
+                 bundle / "Supported_Camera_Cvars.json")
+
+
 def run_regression_tests(root: Path, log_path: Path) -> None:
     """Keep the complete test log and expose failures in the Actions job output."""
     environment = os.environ.copy()
@@ -118,6 +146,8 @@ def main() -> int:
     required = re.search(r"^pyinstaller==([^\s]+)", (ROOT / "requirements-build.txt").read_text(), re.M)[1]
     if PyInstaller.__version__ != required:
         raise RuntimeError("Install the pinned requirements-build.txt in the build environment")
+    notes = ROOT / "docs" / f"RELEASE_NOTES_{__version__}.md"
+    validate_publish_body(notes.read_text(encoding="utf-8-sig"), __version__)
     build = ROOT / "build"
     checks = build / "checks"
     checks.mkdir(parents=True, exist_ok=True)
@@ -163,19 +193,13 @@ def main() -> int:
                  third_party / "notices" / "Dear-ImGui-LICENSE.txt")
     shutil.copy2(ROOT / "native" / "vendor" / "reshade" / "LICENSE.md",
                  third_party / "notices" / "ReShade-API-LICENSE.md")
-    video_guide = (ROOT / "docs" / "VIDEO_AND_RESHADE.md").read_text(encoding="utf-8")
-    # Maintainer notes stay in the repository; point their links at GitHub.
-    video_guide = video_guide.replace(
-        "](internal/", "](https://github.com/cravvnn/deadlock-dolly/blob/main/docs/internal/")
-    (bundle / "Video_and_ReShade.md").write_text(video_guide, encoding="utf-8")
+    stage_user_guides(ROOT, bundle)
     release_notes = ROOT / "docs" / f"RELEASE_NOTES_{__version__}.md"
     if release_notes.is_file():
         shutil.copy2(release_notes, bundle / "Release_Notes.md")
     shutil.copy2(ROOT / "LICENSE.txt", bundle / "LICENSE.txt")
+    shutil.copy2(ROOT / "CREDITS.md", bundle / "_internal" / "CREDITS.md")
     shutil.copy2(ROOT / "packaging" / "Portable_Start_Here.txt", bundle / "Start_Here.txt")
-    for extension in ("md", "json"):
-        shutil.copy2(ROOT / "docs" / f"SUPPORTED_CAMERA_CVARS.{extension}",
-                     bundle / f"Supported_Camera_Cvars.{extension}")
     shutil.copytree(ROOT / "examples", bundle / "examples", dirs_exist_ok=True)
     reject_game_binaries(bundle)
     executable = bundle / "Dolly.exe"

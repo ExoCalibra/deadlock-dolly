@@ -1,5 +1,9 @@
 # Validation — 0.5.17 alpha
 
+Historical record: controls, plans and validation status below describe the
+original revision. Use the [current documentation](../README.md) for today's
+workflow and [development checks](TESTING.md) for current verification.
+
 ## Depth takes skip transition frames
 
 - A depth take no longer fails on its first presented frame when the scene

@@ -127,13 +127,19 @@ bool read_per_view_projection(const void* bytes, std::size_t size, std::uint32_t
     for (unsigned index : {8u, 9u, 12u, 13u})
         if (!near(at(192 + index * 4), 0))
             return false;
-    // The same reviewed matrix supplies the horizontal/vertical scale that the
-    // retained camera bundle records, so its other off-diagonal entries must be
-    // the structural zeros of a non-oblique perspective and both scales must be
-    // present.
-    for (unsigned index : {1u, 2u, 3u, 4u, 6u, 7u})
+    // Temporal antialiasing offsets clip X/Y by a subpixel amount without
+    // changing Z/W. Keep those sampled offsets, bounded to one scene pixel
+    // after normalizing by the perspective W scale. The other cross-axis and
+    // translation entries remain structural zeros.
+    for (unsigned index : {1u, 3u, 4u, 7u})
         if (!near(at(192 + index * 4), 0))
             return false;
+    const double w_scale = std::abs(at(248));
+    constexpr double jitter_rounding = 1 + 4 * std::numeric_limits<float>::epsilon();
+    if (!std::isfinite(w_scale) || !std::isfinite(at(200)) || !std::isfinite(at(216)) ||
+        std::abs(at(200)) * width > 2 * w_scale * jitter_rounding ||
+        std::abs(at(216)) * height > 2 * w_scale * jitter_rounding)
+        return false;
     const double scale_x = at(192), scale_y = at(212);
     if (!std::isfinite(scale_x) || scale_x == 0 || !std::isfinite(scale_y) || scale_y == 0)
         return false;

@@ -1,5 +1,9 @@
 # Dashboard preload readiness
 
+Maintainer reference with versioned implementation and validation evidence.
+For current operation and controls, use the [user documentation](../README.md).
+Recorded results apply to the revisions described below.
+
 Automatic startup retains hideout, unlocker, restored gameinfo, selected replay,
 initial-full-packet and camera checks. Between unlocker initialization and replay
 dispatch it now verifies dashboard map/shader preloading. The game console is

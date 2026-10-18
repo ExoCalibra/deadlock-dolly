@@ -1,5 +1,10 @@
 # Native camera and editor — 0.4.1 alpha
 
+Historical implementation reference for the version named below. Its UI,
+build instructions and validation status describe that revision. For current
+operation use the [user guide](../USER_GUIDE.md), [in-game editor](../UI_REWORK.md)
+and [building guide](../BUILDING.md).
+
 The Native driver moves authored path playback into Deadlock's main-view setup.
 The editor sends the complete shot before playback starts. The native helper
 then evaluates and applies position, rotation and aspect-ratio framing for

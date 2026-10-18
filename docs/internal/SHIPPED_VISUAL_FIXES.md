@@ -1,5 +1,9 @@
 # Shipped visual fixes — reference, do NOT re-propose
 
+Maintainer reference with versioned implementation and validation evidence.
+For current operation and controls, use the [user documentation](../README.md).
+Recorded results apply to the revisions described below.
+
 Status: **fixed, shipped and visually accepted by Andrew**. Raised twice now, so
 this file exists to stop future chats from re-opening them as bugs. Treat them
 as closed unless a *game update* regresses them (see "Update-fragility" at the

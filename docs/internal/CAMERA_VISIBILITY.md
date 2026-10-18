@@ -1,5 +1,9 @@
 # Native camera visibility
 
+Maintainer reference with versioned implementation and validation evidence.
+For current operation and controls, use the [user documentation](../README.md).
+Recorded results apply to the revisions described below.
+
 ## Native shot replay preparation
 
 Native Play shot now resets the selected replay inside the same owned game

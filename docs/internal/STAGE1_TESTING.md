@@ -1,5 +1,9 @@
 # Stage 1 manual test checklist — 0.4.4-alpha
 
+Historical record: controls, plans and validation status below describe the
+original revision. Use the [current documentation](../README.md) for today's
+workflow and [development checks](TESTING.md) for current verification.
+
 This is a historical integration checklist. Current [build and publication
 instructions](../BUILDING.md) and [development checks](TESTING.md) govern today's
 workflow. Version, helper ABI, hosted-build and pre-release references below

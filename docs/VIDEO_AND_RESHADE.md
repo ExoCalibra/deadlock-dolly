@@ -1,5 +1,7 @@
 # Video and ReShade
 
+[Documentation](README.md) · [User guide](USER_GUIDE.md)
+
 ## Replay graphics profiles
 
 In **Settings > Replay graphics profiles**, save your current graphics under a
@@ -34,22 +36,31 @@ diagnostics. Differences or unreadable values produce a warning without writing
 additional controls. This readback is not a visual-quality guarantee. Shot and
 export effects may deliberately change graphics later in the session.
 
-## Record an MP4
+## Record a video
 
 1. Open a replay through Dolly using DirectX 11 and Native camera mode.
-2. On the desktop **Export** tab, choose a new `.mp4` filename and the export
-   settings: video FPS (30, 60, 120, 300 or 600), bitrate, encoder, and optional
-   fixed-step and export speed. 60 FPS, 20 Mbps and automatic encoder are the
-   defaults.
-3. Return to Deadlock, open **F8**, and click **Record video**. Dolly prepares
+2. On the desktop **Export** tab, choose **Camera path** or **Player POV** under
+   **Camera source**, then choose a new output file. Most encoders write `.mp4`;
+   **Lossless FFV1 (.mkv)** requires `.mkv`. Set **Video FPS**, **Export speed**
+   and, under **Encoder & quality**, the encoder and bitrate. Defaults are
+   60 FPS, 20 Mbps, Auto and real-time capture.
+3. Return to Deadlock, open **F8 → Export**, and click **Record video** (or
+   **Record POV** for Player POV). Dolly prepares
    the replay, starts the recorder, and plays the shot once the counter is
    live. **Play shot** remains available for previews without recording.
-4. Open **F8** and click **Finish recording**. The MP4 is ready after
-   finalization. Recording continues through camera handoffs and desktop controls.
+4. Let the shot finish and wait for finalization. A recording that plays a shot
+   ends automatically at its endpoint; a free-camera recording without a shot
+   stays open until **Finish recording**. Use that button to finish early, or
+   **Discard recording** to discard the current recording.
 
-Capture uses the current game resolution, up to 3840 × 2160. Both dimensions
-must be even. SDR RGBA/BGRA backbuffers are supported; HDR is not. Change the
-game resolution before recording. Resizing during recording finishes the file.
+For **Player POV**, first select a hero with **Game Follow** or the game's
+**F9** interface, pause at the start, and set **Replay seconds**. Return to
+**F8 → Export** to record the segment; the game HUD hides automatically.
+
+Capture uses the current game backbuffer, with even dimensions up to 8192 on
+each axis and a separate bounded memory budget. SDR RGBA/BGRA is supported;
+HDR is not. Depth and Players have additional resource limits. Change the
+resolution before capture; resizing ends the current recording.
 
 By default this is real-time, video-only H.264 recording. Playback speed
 controls how fast the replay moves; export FPS controls how often frames are
@@ -58,15 +69,16 @@ counter reports missed capture slots; selecting 60 FPS cannot make a slower
 game render 60 different frames. Reduce resolution, shader cost or export FPS
 if necessary.
 
-**Fixed-step** export instead paces the replay to the chosen video FPS, so the
-output contains exactly the authored frames with no missing slots. The game's
-simulation pauses and steps one frame at a time; each step completes its
-readback and waits for encoder capacity before the next step runs. Expect the
-game to render slower than real time during a fixed-step recording. Use
+**Fixed-step export (frame-accurate)** paces the engine to the chosen video FPS
+and waits for readback and encoder queue capacity. Expect rendering to run
+slower than real time. Use
 **Export speed** to scale replay time per output frame (for example 0.5× for
 smooth slow motion at a high FPS). The engine time step is `Export speed / Video FPS`;
 Dolly verifies it before recording starts and restores the previous settings
 afterward. A clamped or unavailable timing setting prevents capture from starting.
+The waits are bounded: a stalled ordinary Color recording can still report
+dropped frames, while paired depth stops on a capture/writer failure. Check the
+final status rather than treating the fixed-step checkbox as a success guarantee.
 
 **Depth master (.mov)** is a default-off option on the Export tab. It writes a
 paired 10-bit ProRes depth master and a normalized preview beside the color
@@ -80,19 +92,26 @@ scale after finish, discard or a failed start. Window resolution, anti-aliasing
 and the selected upscaling mode stay as configured. Full render scale can make
 export slower, particularly on GPUs normally using reduced render scale.
 
-Every color frame requires verified scene depth and the same replay time.
+Every admitted color frame in a depth take requires verified scene depth and
+the same replay time.
 The manifest records depth dimensions (`width`/`height`) and color dimensions
 (`color_width`/`color_height`). The depth layer's normalized preview maps depths
 at or beyond 8192 camera-axis game units to white. Unsupported or ambiguous
 depth stops recording instead of writing an unpaired frame. Depth values are
 camera-axis game units, not metres; the optional EXR sequence preserves float
-precision.
+precision, including infinity for the far plane. The 10-bit MOV maps the
+0–8192 range to grayscale and is not a float-distance master. A supported
+resolution and 100% render scale do not guarantee that every antialiasing or
+upscaling mode passes the current calibration checks.
+
+Depth and extra layers use a new take folder. For `Shot.mp4`, the Color file
+is `Shot/Shot.mp4`, with depth data in `Shot/depth/`. See
+[Layer export](LAYER_EXPORT.md) for exact files, alpha outputs and limitations.
 
 Dolly's panel and path guides are excluded from the file. ReShade color effects
 are included, while its menu, splash and FPS display are excluded. Deadlock's
 own HUD remains part of the scene: enable **Hide HUD during playback** for a
-clean shot. Recording starts when the game is focused; return within ten seconds
-if starting from the desktop. Manual recording includes any seeking or setup
+clean shot. Bring the game into view while capture prepares. Manual recording includes any seeking or setup
 performed after recording starts.
 
 Pressing **Play shot** before the recorder reports *recording* waits briefly for
@@ -100,23 +119,27 @@ the counter instead of starting the shot early. If the recorder never starts, or
 it finishes or fails first, Dolly stops and asks you to finish or discard the
 recording and start a new one.
 
-Existing files are never overwritten. **Discard** removes the incomplete file
-created by that recording. Encoder failures report an error and remove an
-unfinished output. Keep Deadlock open while an MP4 is finalizing. Windows N
+Existing files are never overwritten. **Discard recording** removes the current
+unfinished recording; completed earlier layer passes or diagnostic scratch
+data may remain. Encoder failures report an error and remove an unfinished
+native output. Keep Deadlock open while the recording is finalizing. Windows N
 editions need Microsoft's Media Feature Pack to record; camera editing remains
 available without it.
 
-Enable **Game audio** to record Deadlock's sound into a real-time Color export.
-The take folder contains the video with audio and a separate game-audio WAV.
-Other desktop audio is excluded. **Reconstructed audio** is experimental and
-also requires Source2Viewer for sound-asset extraction.
+Enable **Include game audio** to record Deadlock's sound into a real-time Color
+export. The take folder contains the video with audio and a separate
+`<video-stem>_game_audio.wav`; other desktop audio is excluded.
+**Include reconstructed audio** is experimental and requires a separately
+installed Source 2 Viewer CLI for sound-asset extraction. Its sound files,
+`reconstructed.wav` and `usage.csv` are saved under
+`<video-stem>_reconstructed/` beside the Color file.
 
 Audio exports require real-time capture. Dolly refuses audio with **Fixed-step**
 or extra layer takes because their simulation timing can differ from recorded
 audio. Export silent layers separately when using those options. Arbitrary
 output resizing is not included. Paired depth masters and isolated layer takes
 are available; see
-[LAYER_EXPORT.md](internal/LAYER_EXPORT.md).
+[Layer export](LAYER_EXPORT.md).
 
 ## High frame rates and fixed-step
 
@@ -124,18 +147,18 @@ Choose the frame rate in Export → Video FPS before starting a recording. The
 in-game Record video button uses that selection. Playback speed and camera
 update rate are separate settings; changing video FPS does not change either.
 
-At 300 or 600 FPS, real-time capture depends on the game and encoder sustaining
-that throughput; without fixed-step, Dolly reports missed slots and preserves
-elapsed time rather than synthesizing frames. Fixed-step export removes that
-dependence: the simulation advances one step at a time and waits for readback
-and the encoder, so every output frame is present. Encoder support still
+Use fixed-step for 300 or 600 FPS. Real-time capture depends on the game and
+encoder sustaining the selected rate; missed slots preserve elapsed time rather
+than synthesizing frames. Fixed-step adds backpressure, subject to the failure
+and timeout limits above. Encoder support still
 depends on resolution and the selected codec; lower the resolution or choose a
 lower FPS if the encoder rejects the configuration.
 
-The paired depth master and layer takes need a verified scene sample for every
-captured frame. They fail closed (stop the take with an error) instead of
-recording unpaired data; see [LAYER_EXPORT.md](internal/LAYER_EXPORT.md) for renderer
-requirements.
+Paired depth requires a verified scene depth sample for each admitted Color
+frame. Players separately verifies its ownership capture; World and Effects
+require the reviewed scene classes. These checks stop an unsupported take
+instead of presenting it as a complete layer. See [Layer export](LAYER_EXPORT.md)
+for the different requirements.
 
 ## Export the camera
 
@@ -199,9 +222,11 @@ to tweak the settings in your app of choice after importing.
 
 ## Set up ReShade
 
-1. Download **ReShade 6.8.0 or a compatible newer full add-on support** build from the [official ReShade
-   website](https://reshade.me/). Dolly requires a 64-bit runtime supporting
-   add-on API 20 and the manual effect-runtime functions.
+1. Obtain a **64-bit ReShade runtime with full add-on support** from the
+   [official ReShade website](https://reshade.me/). Dolly's headers target
+   ReShade 6.8.0/API 20; the selected runtime must support API 20 and the manual
+   effect-runtime functions. A newer version number alone does not establish
+   compatibility.
 2. Open the downloaded setup EXE as an archive with 7-Zip. Extract
    **ReShade64.dll** into a separate folder, such as `Documents\Dolly-ReShade`.
    The setup program's appended ZIP contains this DLL; running the installer
@@ -281,3 +306,8 @@ References: [ReShade runtime API](https://crosire.github.io/reshade-docs/structr
 [official installer source](https://github.com/crosire/reshade/blob/18deaa52de0c425a78b329e9cb3c497281cd00ec/setup/MainWindow.xaml.cs),
 [Media Foundation sink writer](https://learn.microsoft.com/en-us/windows/win32/medfound/tutorial--using-the-sink-writer-to-encode-video).
 Build checks and remaining runtime tests are recorded in [VALIDATION.md](internal/VALIDATION.md).
+
+## Credits
+
+See [Dolly credits and contributors](https://github.com/cravvnn/deadlock-dolly/blob/main/CREDITS.md)
+for the people, projects and tools behind Dolly.

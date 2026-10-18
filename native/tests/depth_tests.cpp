@@ -98,6 +98,96 @@ int main(int argc, char** argv) {
         require(!read_per_view_projection(per_view.data(), per_view.size(), 16, 3, parsed),
                 "Projection for a different viewport accepted");
         const auto saved_per_view = per_view;
+        // A rolled, translated camera with temporal clip-X/Y offsets is still
+        // non-oblique: Z/W and therefore linear depth do not change. Exercise
+        // realistic scene sizes and non-unit homogeneous projection scales.
+        const auto jittered_view = [&](unsigned width, unsigned height, float scale, float pixels_x,
+                                       float pixels_y) {
+            per_view = saved_per_view;
+            const float cosine = static_cast<float>(std::cos(37.9796998 * 3.141592653589793 / 180));
+            const float sine = static_cast<float>(std::sin(37.9796998 * 3.141592653589793 / 180));
+            constexpr float x = 6815.65f, y = -195.05f, z = 1094.457f;
+            put(128, cosine);
+            put(132, -sine);
+            put(144, sine);
+            put(148, cosine);
+            put(176, -x * cosine - y * sine);
+            put(180, x * sine - y * cosine);
+            put(184, -z);
+            put(416, x);
+            put(420, y);
+            put(424, z);
+            put(432, -sine);
+            put(436, cosine);
+            put(192, .75f * scale);
+            put(212, 1.8f * scale); // Aspect 2.4.
+            put(236, 7 * scale);
+            put(248, -scale);
+            put(260, -1 / scale);
+            put(264, 1 / (7 * scale));
+            put(328, static_cast<float>(width));
+            put(332, static_cast<float>(height));
+            put(336, 1.0f / width);
+            put(340, 1.0f / height);
+            const std::array<float, 2> offsets{2 * pixels_x * scale / width,
+                                               2 * pixels_y * scale / height};
+            put(200, offsets[0]);
+            put(216, offsets[1]);
+            return offsets;
+        };
+        for (const auto size :
+             {std::array<unsigned, 2>{2560, 1440}, std::array<unsigned, 2>{1706, 960}}) {
+            for (float scale : {.25f, 1.0f, 4.0f}) {
+                for (const auto pixels :
+                     {std::array<float, 2>{-1, 1}, std::array<float, 2>{.5f, -.5f},
+                      std::array<float, 2>{0, 0}}) {
+                    const auto offsets =
+                        jittered_view(size[0], size[1], scale, pixels[0], pixels[1]);
+                    require(read_per_view_projection(per_view.data(), per_view.size(), size[0],
+                                                     size[1], parsed),
+                            "Bounded temporal projection jitter or rolled view rejected");
+                    require(parsed.projection_matrix[2] == offsets[0] &&
+                                parsed.projection_matrix[6] == offsets[1],
+                            "Temporal projection offsets were discarded or rounded");
+                    require(parsed.linearize(.5, z), "Temporal jitter broke linear depth");
+                    close_to(z, 14, "Temporal jitter changed linear depth");
+                    const auto& p = parsed.projection_matrix;
+                    const double view_z = -14, clip_w = p[14] * view_z + p[15];
+                    const double before_x = (p[0] * 3 / clip_w + 1) * size[0] / 2;
+                    const double after_x = ((p[0] * 3 + p[2] * view_z) / clip_w + 1) * size[0] / 2;
+                    const double before_y = (1 - p[5] * -2 / clip_w) * size[1] / 2;
+                    const double after_y = (1 - (p[5] * -2 + p[6] * view_z) / clip_w) * size[1] / 2;
+                    require(std::abs(after_x - before_x + pixels[0]) < 1e-6 &&
+                                std::abs(after_y - before_y - pixels[1]) < 1e-6,
+                            "Retained projection does not preserve the sampled pixel offset");
+                }
+                for (unsigned axis = 0; axis < 2; ++axis) {
+                    for (float sign : {-1.0f, 1.0f}) {
+                        jittered_view(size[0], size[1], scale, axis == 0 ? sign * 1.01f : 0,
+                                      axis == 1 ? sign * 1.01f : 0);
+                        require(!read_per_view_projection(per_view.data(), per_view.size(), size[0],
+                                                          size[1], parsed),
+                                "Projection offset larger than one scene pixel accepted");
+                    }
+                }
+            }
+        }
+        for (unsigned offset : {196u, 204u, 208u, 220u, 224u, 228u, 240u, 244u}) {
+            jittered_view(2560, 1440, 1, .5f, -.5f);
+            put(offset, .001f);
+            require(!read_per_view_projection(per_view.data(), per_view.size(), 2560, 1440, parsed),
+                    "Temporal jitter allowance admitted oblique or cross-axis projection");
+        }
+        for (unsigned offset : {200u, 216u}) {
+            for (float value : {std::numeric_limits<float>::infinity(),
+                                std::numeric_limits<float>::quiet_NaN()}) {
+                jittered_view(2560, 1440, 1, 0, 0);
+                put(offset, value);
+                require(
+                    !read_per_view_projection(per_view.data(), per_view.size(), 2560, 1440, parsed),
+                    "Non-finite temporal projection offset accepted");
+            }
+        }
         for (unsigned offset : {128u, 140u, 188u, 196u, 200u, 204u, 208u, 216u, 220u, 224u, 236u,
                                 264u, 328u, 336u, 376u, 436u, 456u}) {
             per_view = saved_per_view;

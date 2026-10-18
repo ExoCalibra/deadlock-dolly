@@ -148,6 +148,26 @@ class DepthNormalsTests(unittest.TestCase):
         self.assertFalse(valid[1, 1])
         self.assertTrue(np.isnan(points[1, 1]).all())
 
+    def test_shifted_camera_points_and_slanted_normals_match_pixel_intrinsics(self):
+        # A homogeneous scale of two, aspect 2.4, and a principal point shifted
+        # -0.75px horizontally and -0.5px vertically. Generate the rays from
+        # pixel-space focal lengths/principal point independently of view_points.
+        projection = [1.5, 0, 3 / 64, 0, 0, 3.6, -2 / 48, 0,
+                      0, 0, 0, 14, 0, 0, -2, 0]
+        camera = parsed_record(projection=projection, inverse_z=[0, -.5, 1 / 14, 0])
+        points, valid = view_points(camera, np.full((48, 64), 10.0))
+        self.assertTrue(valid.all())
+        np.testing.assert_allclose(points[0, 0], (-12.8125, 230 / 43.2, -10), atol=1e-10)
+        x, y = np.meshgrid(np.arange(64) + .5, np.arange(48) + .5)
+        directions = np.stack(((x - 31.25) / 24, -(y - 23.5) / 43.2,
+                               -np.ones((48, 64))), axis=-1)
+        normal = np.array([.35, .15, 1.0]) / np.linalg.norm([.35, .15, 1.0])
+        distances = plane_depth(directions, normal, -25)
+        frame = reconstruct_normals(camera, distances)
+        self.assertTrue(frame.valid.all())
+        errors = angular_errors_degrees(frame.normals, normal)
+        self.assertLess(float(np.max(errors)), 1e-3)
+
     def test_front_plane_faces_the_camera(self):
         camera = parsed_record()
         directions = ray_directions(camera, 64, 48)

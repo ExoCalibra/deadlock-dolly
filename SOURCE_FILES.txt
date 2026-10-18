@@ -3,6 +3,7 @@
 .github/workflows/windows.yml
 .gitignore
 CONTRIBUTING.md
+CREDITS.md
 LICENSE.txt
 Launch_Dolly.bat
 README.md
@@ -319,6 +320,7 @@ tools/confetti_offsets.py
 tools/update_game.py
 tools/fetch_ffmpeg.py
 tools/release_files.py
+tools/check_release_notes.py
 .clang-format
 tools/format_cpp.py
 tools/generate_profile.py
@@ -763,3 +765,9 @@ tests/test_depth_normals.py
 dolly/depth_exr.py
 tests/test_depth_exr.py
 tests/fixtures/depth-frame.exr
+
+docs/README.md
+docs/UPDATING.md
+docs/LAYER_EXPORT.md
+docs/internal/README.md
+docs/RELEASE_NOTES_0.6.58-alpha.md

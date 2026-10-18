@@ -1,13 +1,34 @@
 # Contributing
 
+## Contributors and credits
+
+[@paralin](https://github.com/paralin) contributed
+Linux/Proton Steam discovery, Wine mount-point handling and interrupted
+plugin-cleanup recovery. The full [credits](CREDITS.md) record Dolly's creator,
+contributors, project references and supporting tools.
+
+When contributing, include your preferred credit name or handle and a short
+description of the work. Identify any upstream code, license and provenance
+that should be retained alongside it.
+
+## Development
+
 Keep documentation concise and focused on setup, controls and troubleshooting.
 Detailed build procedures and test results belong in the guides under docs/.
 
-Use Python 3.10+ with Tcl/Tk to run from source. The reference Windows build
-uses Python 3.12 x64; see [BUILDING.md](docs/BUILDING.md).
+Use Python 3.10+ with Tcl/Tk to run from source. On Windows, use a 64-bit
+interpreter and run `Launch_Dolly.bat` or `python -m dolly` from the repository
+root. The basic source editor needs no pip packages; optional audio and build
+tools have additional dependencies. Native features require the matching native
+helper, assets and build metadata from the checkout. The Windows package bundles
+its own runtime; its build uses Python 3.12 x64 and the pinned
+`requirements-build.txt`. See [BUILDING.md](docs/BUILDING.md).
 
-Run `python -m unittest discover -s tests -q` before proposing a change. For
-camera or transport changes, describe the tested replay state and separate
+Choose owning tests and relevant consumers using the [testing guide](docs/internal/TESTING.md).
+Run `python -m unittest discover -s tests -q` for shared controller/path/settings
+or fixture changes and before a release. Use the selected environment's Python
+from the repository root; do not add `-t .`, because tests import sibling fixtures.
+For camera or transport changes, describe the tested replay state and separate
 simulated checks from observations in the native game. Do not commit personal
 replays, diagnostic exports, recovery journals, credentials or build outputs.
 

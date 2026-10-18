@@ -1640,8 +1640,26 @@ void capture(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceContex
             }
             if (result == depth::ReadbackResult::pending)
                 break;
-            if (result != depth::ReadbackResult::ready || slot.depth.frame.sample != gpu.drained) {
-                fail(s, E_FAIL, L"Depth readback or frame pairing failed; recording stopped.");
+            if (result != depth::ReadbackResult::ready) {
+                const auto readback_error = static_cast<HRESULT>(gpu.depth_queue.error());
+                const auto error = FAILED(readback_error) ? readback_error : E_FAIL;
+                wchar_t detail[192]{}, message[256]{};
+                MultiByteToWideChar(CP_UTF8, 0, gpu.depth_queue.diagnostic(), -1, detail, 192);
+                std::swprintf(
+                    message, 256,
+                    L"Depth readback failed: %ls (result=%d, HRESULT=0x%08lX). Recording stopped.",
+                    detail, static_cast<int>(result), static_cast<unsigned long>(error));
+                fail(s, error, message);
+                return;
+            }
+            if (slot.depth.frame.sample != gpu.drained) {
+                wchar_t message[192]{};
+                std::swprintf(
+                    message, 192,
+                    L"Depth/color frame mismatch: expected sample %llu, received %llu. Recording stopped.",
+                    static_cast<unsigned long long>(gpu.drained),
+                    static_cast<unsigned long long>(slot.depth.frame.sample));
+                fail(s, HRESULT_FROM_WIN32(ERROR_INVALID_DATA), message);
                 return;
             }
             slot.depth_ready = true;

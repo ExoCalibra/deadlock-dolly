@@ -1,4 +1,6 @@
-# Supported camera cvars — 0.4.5 alpha
+# Supported camera cvars
+
+[Documentation](README.md) · [User guide](USER_GUIDE.md)
 
 These 14 effect controls support fixed values and animated tracks in Native
 mode. Framing uses the separate camera aspect curve. The installed game
@@ -28,18 +30,18 @@ effect track or fixed shot variable.
 
 ## Range DOF
 
-The in-game **Editor → Depth of field** card exposes the same range and tilt
-controls between Cameras and Replay. Capture a camera first. **Enable DOF**
+The in-game **F8 → Look → Depth of field** card exposes the range and tilt
+controls. Capture a camera first, pause the replay and stop playback. **Enable DOF**
 activates both required switches and initializes a missing/empty range track
 with the same values as the desktop preset. Switching off and on preserves
-existing focus pulls. The duplicate individual-range controls are not shown
-in-game; those cvars remain available on desktop for existing projects.
-Edits preview at
-the held camera without seeking; animated channels receive a key at the
+existing focus pulls. **Individual focus overrides** expands the four separate
+range cvars; **Ground tilt** is beside the main focus ranges. The separate
+**Citadel DOF** card exposes the game's other DOF controls.
+Edits apply on release at the held camera without seeking; animated channels receive a key at the
 playhead, and other channels become fixed shot values. Unauthored controls
 display defaults, rather than readback of arbitrary external console changes.
 
-On the desktop Effects tab, click **+ Range DOF**. The preset enables
+On the desktop Look page, click **+ Range DOF**. The preset enables
 `r_depth_of_field` and `r_dof_override`, and adds a range track. Edit each
 key as four numbers separated by spaces, for example:
 
@@ -54,13 +56,21 @@ Four zeros (`0 0 0 0`) disables the direct range override and lets the
 game use its other range settings. Stop restores the complete original
 value unless an explicit restore value was entered.
 
-The `r_dof_override_*` additions require the reviewed September 9 tier0
-build. Older reviewed builds retain the original seven native controls.
+Available controls depend on the installed game's reviewed native profile and
+typed cvar bindings. An older accepted profile may expose only the original
+seven controls; accepting a camera profile does not bypass the effect checks.
 The six range/tilt numeric controls have no declared game limits; Dolly
 requires finite float32 values. Their actual appearance depends on the
 game render pass and graphics settings. This does not guarantee an
 anti-aliasing improvement over the Citadel DOF controls.
 
-Vector shots save as project format 3 and require 0.4.5 or newer.
-Scalar-only shots retain format 2. The JSON companion lists the exact
-types, component counts, bounds and verified module fingerprint.
+Vector tracks require a project format that supports four-component values.
+Other authored features can select a newer format, so do not manually change a
+shot's format number. The [JSON companion](SUPPORTED_CAMERA_CVARS.json) lists
+types, component counts, bounds and the original verification fingerprints;
+the running editor checks the current installed-game profile separately.
+
+## Credits
+
+See [Dolly credits and contributors](https://github.com/cravvnn/deadlock-dolly/blob/main/CREDITS.md)
+for the people, projects and tools behind Dolly.

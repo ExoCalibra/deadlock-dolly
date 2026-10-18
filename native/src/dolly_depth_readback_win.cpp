@@ -5,6 +5,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include "dolly_depth_readback.hpp"
 
@@ -46,6 +47,8 @@ struct Readback::Impl {
     Format format = Format::d24s8;
     std::size_t head = 0, count = 0;
     HRESULT failure = S_OK;
+    const char* reason = "none";
+    std::size_t calibration_candidates = 0, valid_calibrations = 0;
     void reset() noexcept {
         for (auto& slot : slots) {
             slot.staging.reset();
@@ -59,6 +62,8 @@ struct Readback::Impl {
         dxgi = DXGI_FORMAT_UNKNOWN;
         head = count = 0;
         failure = S_OK;
+        reason = "none";
+        calibration_candidates = valid_calibrations = 0;
     }
 };
 
@@ -72,6 +77,13 @@ std::size_t Readback::pending() const noexcept {
 }
 long Readback::error() const noexcept {
     return impl->failure;
+}
+const char* Readback::diagnostic() const noexcept {
+    static thread_local char text[192]{};
+    std::snprintf(text, sizeof(text), "%s; calibration=%zu/%zu size=%ux%u", impl->reason,
+                  impl->valid_calibrations, impl->calibration_candidates, impl->width,
+                  impl->height);
+    return text;
 }
 
 ReadbackResult Readback::enqueue(ID3D11Device* device, ID3D11DeviceContext* context,
@@ -178,15 +190,23 @@ ReadbackResult Readback::poll(ID3D11DeviceContext* context, RawFrame& output) no
     auto& state = *impl;
     if (FAILED(state.failure))
         return ReadbackResult::failed;
-    if (!context || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+    if (!context || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) {
+        state.reason = "invalid readback context";
         return ReadbackResult::invalid;
-    if (!state.count)
+    }
+    if (!state.count) {
+        state.reason = "no pending depth frame";
         return ReadbackResult::empty;
+    }
     Com<ID3D11Device> device;
     context->GetDevice(&device.p);
-    if (device.p != state.device.p)
+    if (device.p != state.device.p) {
+        state.reason = "readback device changed";
         return ReadbackResult::invalid;
+    }
     auto& slot = state.slots[state.head];
+    state.calibration_candidates = slot.calibration_count;
+    state.valid_calibrations = 0;
     D3D11_MAPPED_SUBRESOURCE mapped{};
     const auto result =
         context->Map(slot.staging.p, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
@@ -194,6 +214,7 @@ ReadbackResult Readback::poll(ID3D11DeviceContext* context, RawFrame& output) no
         return ReadbackResult::pending;
     if (FAILED(result)) {
         state.failure = result;
+        state.reason = "depth texture map failed";
         return ReadbackResult::failed;
     }
     bool copied = false;
@@ -212,6 +233,7 @@ ReadbackResult Readback::poll(ID3D11DeviceContext* context, RawFrame& output) no
             }
             if (FAILED(mapped_buffer)) {
                 state.failure = mapped_buffer;
+                state.reason = "camera calibration map failed";
                 break;
             }
             Projection candidate;
@@ -219,6 +241,7 @@ ReadbackResult Readback::poll(ID3D11DeviceContext* context, RawFrame& output) no
                                                         state.height, candidate);
             context->Unmap(slot.calibration[i].p, 0);
             if (valid) {
+                ++state.valid_calibrations;
                 if (calibrated) {
                     // Duplicated per-view bindings are fine. Conflicting
                     // calibrations must never be resolved by binding order.
@@ -239,8 +262,11 @@ ReadbackResult Readback::poll(ID3D11DeviceContext* context, RawFrame& output) no
             }
         }
         const auto row_bytes = std::size_t(state.width) * 4;
-        if (!calibration_pending && SUCCEEDED(state.failure) && (!calibrated || ambiguous))
+        if (!calibration_pending && SUCCEEDED(state.failure) && (!calibrated || ambiguous)) {
             state.failure = HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+            state.reason =
+                ambiguous ? "conflicting camera calibrations" : "no valid camera calibration";
+        }
         if (!calibration_pending && SUCCEEDED(state.failure) && calibrated && !ambiguous &&
             mapped.pData && mapped.RowPitch >= row_bytes) {
             RawFrame frame;
@@ -257,15 +283,19 @@ ReadbackResult Readback::poll(ID3D11DeviceContext* context, RawFrame& output) no
         }
     } catch (...) {
         state.failure = E_OUTOFMEMORY;
+        state.reason = "depth readback allocation failed";
     }
     context->Unmap(slot.staging.p, 0);
     if (calibration_pending)
         return ReadbackResult::pending;
     if (!copied) {
-        if (SUCCEEDED(state.failure))
+        if (SUCCEEDED(state.failure)) {
             state.failure = E_FAIL;
+            state.reason = "invalid depth row stride";
+        }
         return ReadbackResult::failed;
     }
+    state.reason = "ready";
     state.head = (state.head + 1) % kSlots;
     --state.count;
     return ReadbackResult::ready;
