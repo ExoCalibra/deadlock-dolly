@@ -267,11 +267,20 @@ class ScriptTests(unittest.TestCase):
                  dict(fields=["frame"]), dict(frames=[]),
                  dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 200]]),
                  dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, float("nan")]]),
-                 dict(frames=good * 2))
+                 dict(frames=good * 2), dict(fps=None), dict(fps=True), dict(fps=0), dict(fps="60"))
         for overrides in cases:
             with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as folder:
                 with self.assertRaises(ValueError):
                     sample_camera_data(self.write_camera_data(folder, good, **overrides), 60)
+
+    def test_camera_data_must_match_the_take_frame_rate(self):
+        rows = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90], [1, 1 / 30, 1 / 30, 1, 0, 0, 0, 0, 0, 90]]
+        with tempfile.TemporaryDirectory() as folder:
+            data = self.write_camera_data(folder, rows, frames_written=2, fps=30)
+            # Read at 60 fps, the 30 fps rows would land on every other frame.
+            with self.assertRaisesRegex(ValueError, "recorded at 30 fps, not 60 fps"):
+                sample_camera_data(data, 60)
+            self.assertEqual([f.frame for f in sample_camera_data(data, 30.0).frames], [0, 1])
 
     def test_export_writes_the_script(self):
         shot = Project(keyframes=[camera(0), camera(1)])

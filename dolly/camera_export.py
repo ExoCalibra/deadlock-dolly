@@ -1,15 +1,21 @@
 """
-Camera data saved per frame. Falls back to using keyframes when no camera data is available.
+Camera exports for After Effects (.jsx) and USD (.usda).
 
-AE uses left handed cartesian coordinates
+The camera track data is recorded to <video>.camera-track.json, with one
+row per video frame. Without the recorded data, the shot's keyframes are sampled
+instead. Player POV takes need the camera track since their keyframes are placeholders.
+
+X forward, Y left, Z up. Positions are offsets from the first frame's camera.
+
+After Effects (X right, Y down, Z into the screen)
 pos:      (x, y, z) -> (x, -z, y)
-rotation: (x, y, z) -> (Rx, Ry, Rz)
-fov:      2 * atan(lens_scale * aspect_ratio)
+rotation: X/Y/Z Rotation, R = Rx * Ry * Rz
+zoom:     (comp_width / 2) / tan(hfov / 2)
 
-USD (.usda)
+USD (Z up, one unit is about an inch)
 pos:      (x, y, z) -> (x, y, z)
-rotation: (x, y, z), R = Rz * Ry * Rx
-fov:      (horizontalAperture / 2) / tan(fov / 2)
+rotation: rotateXYZ, R = Rz * Ry * Rx
+focal:    (horizontalAperture / 2) / tan(hfov / 2)
 """
 
 from __future__ import annotations
@@ -122,7 +128,13 @@ def sample_camera_data(path: str | Path, fps: float) -> Take:
     data = json.loads(Path(path).read_text("utf-8"))
     if (not isinstance(data, dict) or data.get("format") != "deadlock-dolly-camera-track"
             or data.get("version") != 1 or data.get("fields") != CAMERA_FIELDS):
-        raise ValueError("Not a supported camera path")
+        raise ValueError("Not a supported camera track")
+    # Frame numbers come from video_time * fps, so the take's rate must be the one recorded.
+    recorded = data.get("fps")
+    if isinstance(recorded, bool) or not isinstance(recorded, (int, float)) or not math.isfinite(recorded) or recorded <= 0:
+        raise ValueError("The camera data has no valid frame rate")
+    if not math.isclose(recorded, fps):
+        raise ValueError(f"The camera data was recorded at {number(float(recorded))} fps, not {number(float(fps))} fps")
     rows = data.get("frames")
     if not isinstance(rows, list) or not rows:
         raise ValueError("The camera data has no frames")
