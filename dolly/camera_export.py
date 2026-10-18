@@ -133,7 +133,7 @@ def sample_camera_data(path: str | Path, fps: float) -> Take:
     if (not isinstance(data, dict) or data.get("format") != "deadlock-dolly-camera-track"
             or data.get("version") != 1 or data.get("fields") != CAMERA_FIELDS):
         raise ValueError("Not a supported camera track")
-    # Frame numbers come from video_time * fps, so the take's rate must be the one recorded.
+    # Frame times are frame / fps, so the take's rate must be the one recorded.
     recorded = data.get("fps")
     if isinstance(recorded, bool) or not isinstance(recorded, (int, float)) or not math.isfinite(recorded) or recorded <= 0:
         raise ValueError("The camera data has no valid frame rate")
@@ -148,11 +148,12 @@ def sample_camera_data(path: str | Path, fps: float) -> Take:
     for row in rows:
         if (not isinstance(row, list) or len(row) != len(CAMERA_FIELDS) or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in row)):
             raise ValueError("The camera data has an invalid frame")
-        _, video_time, phase, x, y, z, pitch, yaw, roll, fov = row
-        frame = round(video_time * fps)
-        if frame <= last_frame or not 1 < fov < 179:
+        frame, _video_time, phase, x, y, z, pitch, yaw, roll, fov = row
+        # Key by the frame's position in the file, not its timestamp: a real-time take
+        # that dropped frames has gaps in its timestamps
+        if frame != int(frame) or frame <= last_frame or not 1 < fov < 179:
             raise ValueError("The camera data has an invalid frame")
-        last_frame = frame
+        frame = last_frame = int(frame)
         frames.append(Frame(frame, frame / fps, (x, y, z), (pitch, yaw, roll), fov, phase))
 
     written = data.get("frames_written")

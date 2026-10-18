@@ -252,13 +252,24 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(take.markers[1].position, (50, 0, 0))
         self.assertIn("markers are left out", take.warnings[0])
 
-    def test_camera_data_frames_follow_video_time_not_row_order(self):
-        rows = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90], [1, 0.5, .5, 1, 0, 0, 0, 0, 0, 90]]
+    def test_camera_data_frames_follow_their_position_in_the_file(self):
+        # A real-time take that dropped the frame due at 3/60 s: the next frames carry later
+        # timestamps, but they are still the file's 4th and 5th frames.
+        times = (0, 1, 2, 4, 5)
+        rows = [[index, t / 60, t / 60, index, 0, 0, 0, 0, 0, 90] for index, t in enumerate(times)]
         with tempfile.TemporaryDirectory() as folder:
-            take = sample_camera_data(self.write_camera_data(folder, rows, 2), 60)
+            take = sample_camera_data(self.write_camera_data(folder, rows, 5), 60)
+        self.assertEqual([f.frame for f in take.frames], [0, 1, 2, 3, 4])
+        self.assertAlmostEqual(take.frames[4].time, 4 / 60)
+        self.assertEqual(take.frames[4].position, (4, 0, 0))
+        self.assertEqual(take.frames[4].phase, 5 / 60)  # The shot time it rendered is kept.
+        self.assertEqual((take.video_frames, take.warnings), (5, []))
+        # Frames without a camera row stay gaps, and their neighbours keep their numbers.
+        rows = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90], [30, 0.5, .5, 1, 0, 0, 0, 0, 0, 90]]
+        with tempfile.TemporaryDirectory() as folder:
+            take = sample_camera_data(self.write_camera_data(folder, rows, 31), 60)
         self.assertEqual([f.frame for f in take.frames], [0, 30])
-        self.assertEqual(take.frames[1].position, (1, 0, 0))
-        self.assertEqual((take.video_frames, take.warnings), (31, []))
+        self.assertEqual(take.video_frames, 31)
 
     def test_invalid_camera_data_is_rejected(self):
         good = [[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 90]]
@@ -267,6 +278,8 @@ class ScriptTests(unittest.TestCase):
                  dict(fields=["frame"]), dict(frames=[]),
                  dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, 200]]),
                  dict(frames=[[0, 0.0, 0, 0, 0, 0, 0, 0, 0, float("nan")]]),
+                 dict(frames=[[0.5, 0.0, 0, 0, 0, 0, 0, 0, 0, 90]]),  # Not a whole frame
+                 dict(frames=[[2, 0.0, 0, 0, 0, 0, 0, 0, 0, 90], [1, 0.1, 0, 0, 0, 0, 0, 0, 0, 90]]),
                  dict(frames=good * 2), dict(fps=None), dict(fps=True), dict(fps=0), dict(fps="60"))
         for overrides in cases:
             with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as folder:
