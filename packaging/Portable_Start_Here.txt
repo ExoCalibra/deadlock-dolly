@@ -173,6 +173,8 @@ their current controls.
 
 Camera-list selection, double-click view, Delete and shared Undo/Redo are
 available in-game. Ctrl+Z undoes shot edits; Ctrl+Y or Ctrl+Shift+Z redoes them.
+Select a camera and use Seek camera on the Replay timeline to visit its saved
+view at its recorded time. Replay slider/tick seeks retain the current camera.
 History does not rewind the replay. Players/Depth exports retain their alpha
 appearance limitations; see Video_and_ReShade.md for export usage and limits.
 

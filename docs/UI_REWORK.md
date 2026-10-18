@@ -63,8 +63,10 @@ Dolly remembers your choice between sessions. It also applies to in-game
 
 Campaths lists each saved camera's arrival time, aspect ratio and bank. While
 paused, use **Previous** and **Forward** to view the cameras on either side of
-the current selection. **Seek here** applies the selected point on the Campaths
-timeline, or seeks to the selected tick when the timeline is in Replay mode.
+the current selection at the current replay moment. In **Replay**, select a
+camera row and press **Seek camera** to go to its recorded replay time and saved
+view. The replay slider and tick field seek while retaining your current camera.
+In **Campaths**, **Seek here** applies the selected point on the shot timeline.
 
 **Play cinematic** prepares and starts the shot. You do not need to press Play
 again when preparation finishes.

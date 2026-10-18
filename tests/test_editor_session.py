@@ -299,12 +299,81 @@ class EditorSessionTests(unittest.TestCase):
                     self.app._delete_key.assert_called_once()
                     self.app._submit.assert_not_called()
 
+    def test_seek_camera_queues_the_selected_authored_endpoint_snapshot(self):
+        from copy import deepcopy
+        from dolly.shot_history import ShotHistory
+        self.camera_list_app()
+        self.app.project = Project(start_tick=31191, tick_rate=64, keyframes=[
+            Keyframe(0, 1, 2, 3, 4, 5, 6),
+            Keyframe(7.09375, 70, 80, 90, 10, 110, 12, aspect_ratio=1.8)])
+        self.app.shot_history = ShotHistory(self.app.project)
+        self.app._snapshot = lambda: deepcopy(self.app.project)
+        self.app.shot_time = Value(2.35)
+        saved = self.app.project.to_dict()
+        self.assertTrue(session.dispatch(self.app, {
+            'action': 'seek_camera', 'value': 1,
+            'pose': (self.app.shot_history.revision, 0, 0, 0, 0, 0, 0)}, self.bridge))
+        self.assertEqual(self.app.project.to_dict(), saved)
+        self.controller.seek.assert_not_called()
+        operation = self.app._submit.call_args.args[1]
+        # Editing or replacing the live shot after dispatch cannot retarget a
+        # queued camera seek, including its authored time and full saved pose.
+        self.app.project.start_tick = 1
+        self.app.project.keyframes[1].time = 20
+        self.app.project.keyframes[1].x = 999
+        self.app.project = Project()
+        operation()
+        self.controller.seek.assert_called_once()
+        project, time = self.controller.seek.call_args.args
+        self.assertEqual(project.to_dict(), saved)
+        self.assertEqual(time, 7.09375)
+        self.assertEqual(round(project.start_tick + time * project.tick_rate), 31645)
+        frame = project.evaluate(time)
+        self.assertEqual(tuple(frame[name] for name in
+            ('x', 'y', 'z', 'pitch', 'yaw', 'roll', 'aspect_ratio')),
+            (70, 80, 90, 10, 110, 12, 1.8))
+        self.controller.select_paused_camera.assert_not_called()
+        self.controller.seek_replay_tick.assert_not_called()
+
+    def test_seek_camera_rejects_invalid_indices_and_active_operations(self):
+        from dolly.gui import DollyApp
+        self.camera_list_app()
+        event = {'action': 'seek_camera', 'value': 1,
+                 'pose': (self.app.shot_history.revision, 0, 0, 0, 0, 0, 0)}
+        for value in (-1, 2, .5, float('nan'), float('inf')):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                session.dispatch(self.app, dict(event, value=value), self.bridge)
+        self.app._snapshot.assert_not_called()
+        self.app._submit.assert_not_called()
+        for state, playing, busy in (('starting', False, False),
+                                    ('recording', False, False),
+                                    ('finalizing', False, False),
+                                    ('completed', True, False),
+                                    ('completed', False, True)):
+            with self.subTest(state=state, playing=playing, busy=busy):
+                self.app.video_export = Mock()
+                self.app.video_export.status.return_value = {'state': state}
+                self.app.playing, self.app.busy = playing, busy
+                self.app._shot_edit_ready = lambda: DollyApp._shot_edit_ready(self.app)
+                self.assertEqual(session.dispatch(self.app, event, self.bridge), not busy)
+                self.app._snapshot.assert_not_called()
+                self.app._select_key.assert_not_called()
+                self.app._submit.assert_not_called()
+        self.app.playing = self.app.busy = False
+        self.controller.status.return_value['playing'] = True
+        with self.assertRaisesRegex(ValueError, 'Pause shot playback'):
+            session.dispatch(self.app, event, self.bridge)
+        self.app._snapshot.assert_not_called()
+        self.app._submit.assert_not_called()
+        self.controller.seek.assert_not_called()
+        self.controller.select_paused_camera.assert_not_called()
+
     def test_stale_camera_action_cannot_delete_a_different_project_camera(self):
         self.camera_list_app()
         revision = self.app.shot_history.revision
         self.app.project.name = 'New edit'
         self.app.shot_history.record(self.app.project)
-        for action in ('select_camera', 'view_camera', 'delete_camera', 'undo_shot', 'redo_shot', 'camera_page'):
+        for action in ('select_camera', 'view_camera', 'seek_camera', 'delete_camera', 'undo_shot', 'redo_shot', 'camera_page'):
             with self.subTest(action=action), self.assertRaisesRegex(ValueError, 'camera list changed'):
                 session.dispatch(self.app, {'action': action, 'value': 0,
                                            'pose': (revision, 0, 0, 0, 0, 0, 0)}, self.bridge)

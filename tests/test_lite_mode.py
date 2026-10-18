@@ -27,7 +27,7 @@ class LiteModeTests(unittest.TestCase):
 
     def test_extra_actions_are_appended_without_changing_original_ids(self):
         from dolly.editor_wire import EXTRA_ACTIONS
-        self.assertEqual(EXTRA_ACTIONS[-14:],('save_shot','seek_replay_tick','clear_camera_path','focus_replay_player','prepare_cinematic','set_pause_after_capture','set_camera_position','set_camera_curve_value','select_curve_camera','set_camera_position_tangents','preview_camera_curve_value','preview_camera_position_tangents','clear_camera_curve_preview','level_view'))
+        self.assertEqual(EXTRA_ACTIONS[-15:],('save_shot','seek_replay_tick','clear_camera_path','focus_replay_player','prepare_cinematic','set_pause_after_capture','set_camera_position','set_camera_curve_value','select_curve_camera','set_camera_position_tangents','preview_camera_curve_value','preview_camera_position_tangents','clear_camera_curve_preview','level_view','seek_camera'))
         self.assertEqual(EXTRA_ACTIONS.index('set_framing')+26,40)
         self.assertEqual(EXTRA_ACTIONS.index('save_shot')+26,105)
         self.assertEqual(EXTRA_ACTIONS.index('focus_replay_player')+26,108)
@@ -41,6 +41,7 @@ class LiteModeTests(unittest.TestCase):
         self.assertEqual(EXTRA_ACTIONS.index('preview_camera_position_tangents')+26,116)
         self.assertEqual(EXTRA_ACTIONS.index('clear_camera_curve_preview')+26,117)
         self.assertEqual(EXTRA_ACTIONS.index('level_view')+26,118)
+        self.assertEqual(EXTRA_ACTIONS.index('seek_camera')+26,119)
 
     def test_typed_tick_dispatch_uses_dolly_seek_and_rejects_invalid_input(self):
         from unittest.mock import patch

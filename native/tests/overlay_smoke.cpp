@@ -904,7 +904,9 @@ bool editor_roster_snapshot(EditorRoster& out) noexcept {
 }
 bool editor_enqueue(EditorAction action, double value, const CameraPose* pose) noexcept {
     try {
-        auto& events=action>=EditorAction::PreviewCameraCurveValue ? observed_previews : observed_actions;
+        const bool preview = action >= EditorAction::PreviewCameraCurveValue &&
+                             action <= EditorAction::ClearCameraCurvePreview;
+        auto& events = preview ? observed_previews : observed_actions;
         events.push_back({action, value, pose ? (*pose)[0] : 0,
                                     pose ? (*pose)[1] : 0, pose ? *pose : CameraPose{}});
     } catch (...) {
@@ -1654,12 +1656,80 @@ static void ui_rework_regressions() {
     require(observed_actions.size()==1 && observed_actions[0].action==dolly::EditorAction::PreviousView,
             "Timeline previous camera button lost the saved-view action");
     const float previous_x=ctx->NavWindow->NavRectRel[ImGuiNavLayer_Main].Min.x;
-    activate(timeline,"Seek here");
+    const auto before_camera_seek = snapshot;
+    snapshot.tick = 31646;
+    snapshot.duration = 3;
+    snapshot.selected_camera = 0;
+    snapshot.playhead = 0;
+    frame();
+    frame();
+    const int second_camera = 1;
+    const auto second_row_seed = ImHashData(&second_camera, sizeof(second_camera), paths->ID);
+    observed_actions.clear();
+    ctx->NavNextActivateId = ImGui::GetIDWithSeed("##camera", nullptr, second_row_seed);
+    frame();
+    frame();
+    require(observed_actions.size() == 1 &&
+                observed_actions[0].action == dolly::EditorAction::SelectCamera &&
+                observed_actions[0].value == 1 &&
+                observed_actions[0].pose[0] == camera_revision_stub,
+            "Camera 2 selection lost its index or current revision");
+    snapshot.selected_camera = 1;
+    snapshot.playhead = 3;
+    for (int echoed_frame = 0; echoed_frame < 4; ++echoed_frame)
+        frame();
+    require(panel.timeline_mode() == 0, "Selecting Camera 2 switched away from Replay");
+    observed_actions.clear();
+    activate(timeline, "Seek camera");
+    require(observed_actions.size() == 1 &&
+                observed_actions[0].action == dolly::EditorAction::SeekCamera &&
+                observed_actions[0].value == 1 &&
+                observed_actions[0].pose[0] == camera_revision_stub,
+            "Replay Seek camera re-seeks the current tick instead of the selected camera");
     const float seek_x=ctx->NavWindow->NavRectRel[ImGuiNavLayer_Main].Min.x;
     const auto seek_rect=ctx->NavWindow->NavRectRel[ImGuiNavLayer_Main];
-    require(std::abs((seek_rect.Min.x+seek_rect.Max.x)*.5f+
-                        timeline->DC.CursorStartPos.x-timeline->Pos.x-timeline->Size.x*.5f)<2,
-            "Seek here is not centered on the timeline");
+    require(std::abs((seek_rect.Min.x + seek_rect.Max.x) * .5f + timeline->DC.CursorStartPos.x -
+                     timeline->Pos.x - timeline->Size.x * .5f) < 2,
+            "Seek camera is not centered on the timeline");
+    snapshot.camera_count = 40;
+    snapshot.duration = 117;
+    camera_first_stub = 32;
+    frame();
+    frame();
+    observed_actions.clear();
+    activate(timeline, "Seek camera");
+    require(observed_actions.size() == 1 &&
+                observed_actions[0].action == dolly::EditorAction::SeekCamera &&
+                observed_actions[0].value == 1 &&
+                observed_actions[0].pose[0] == camera_revision_stub,
+            "Browsing another camera page disabled seeking the selected camera");
+    snapshot.camera_count = 2;
+    snapshot.duration = 3;
+    camera_first_stub = 0;
+    frame();
+    frame();
+    activate(timeline, "Campaths###lite-campath-mode");
+    observed_actions.clear();
+    io.AddMousePosEvent((panel.timeline_x0() + panel.timeline_x1()) * .5f, panel.timeline_y());
+    frame();
+    frame();
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    frame();
+    require(observed_actions.empty(),
+            "Campaths draft scrub unexpectedly seeks before confirmation");
+    activate(timeline, "Seek here");
+    require(observed_actions.size() == 1 &&
+                observed_actions[0].action == dolly::EditorAction::SeekShot &&
+                observed_actions[0].value > 0 && observed_actions[0].value < 3,
+            "Campaths Seek here lost its independently chosen shot cursor");
+    activate(timeline, "Replay###lite-timeline-mode");
+    snapshot = before_camera_seek;
+    frame();
+    frame();
     observed_actions.clear();activate(timeline,"Resume");
     const auto resume_rect=ctx->NavWindow->NavRectRel[ImGuiNavLayer_Main];
     require(resume_rect.Min.y>seek_rect.Max.y && resume_rect.Min.x>timeline->WindowPadding.x &&
