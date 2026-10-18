@@ -741,6 +741,7 @@ native/ui_override/panorama/styles/citadel_prewarm_assets_status.css
 docs/RELEASE_NOTES_0.6.52-alpha.md
 docs/RELEASE_NOTES_0.6.53-alpha.md
 docs/RELEASE_NOTES_0.6.54-alpha.md
+docs/RELEASE_NOTES_0.6.55-alpha.md
 tests/test_authored_tangents.py
 tests/test_tangent_ui.py
 tests/test_tangent_editor.py

@@ -1,10 +1,11 @@
 # Deadlock Dolly — user guide
 
 Dolly connects its desktop editor and in-game panel to the same camera project.
-Version [0.6.54-alpha](RELEASE_NOTES_0.6.54-alpha.md) keeps Dolly's startup
-verifying while Deadlock is still compiling shaders after a game update, adds a
-per-frame camera file to every paired depth take, and prevents the float EXR
-choice from being accepted and then dropped.
+Version [0.6.55-alpha](RELEASE_NOTES_0.6.55-alpha.md) restores player selection
+through Dolly's timeline on the current Deadlock build, keeps Follow slide
+transitions smooth, and displays update highlights from the published release
+heading. Existing paired depth/EXR takes retain their per-frame camera files;
+normal reconstruction remains internal groundwork.
 The [in-game editor guide](UI_REWORK.md) covers curve editing, player selection
 and saved layouts, building on the UI rework contributed by
 [@tbhtho](https://github.com/tbhtho).
