@@ -1,6 +1,9 @@
 # Deadlock Dolly — user guide
 
 Dolly connects its desktop editor and in-game panel to the same camera project.
+Version [0.6.57-alpha](RELEASE_NOTES_0.6.57-alpha.md) is a build and tooling
+release: the bundled FFmpeg pin was refreshed after the upstream archive was
+pruned, and the hosted Windows build works again. Nothing changes in the app.
 Version [0.6.56-alpha](RELEASE_NOTES_0.6.56-alpha.md) adds **Seek camera** to
 the Replay timeline: select a saved camera, then seek to its recorded replay
 time and full saved view. Campaths keeps **Seek here** for the shot cursor.
