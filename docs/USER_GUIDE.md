@@ -1,11 +1,11 @@
 # Deadlock Dolly — user guide
 
 Dolly connects its desktop editor and in-game panel to the same camera project.
-Version [0.6.55-alpha](RELEASE_NOTES_0.6.55-alpha.md) restores player selection
-through Dolly's timeline on the current Deadlock build, keeps Follow slide
-transitions smooth, and displays update highlights from the published release
-heading. Existing paired depth/EXR takes retain their per-frame camera files;
-normal reconstruction remains internal groundwork.
+Version [0.6.56-alpha](RELEASE_NOTES_0.6.56-alpha.md) adds **Seek camera** to
+the Replay timeline: select a saved camera, then seek to its recorded replay
+time and full saved view. Campaths keeps **Seek here** for the shot cursor.
+Existing paired depth/EXR takes retain their per-frame camera files; normal
+reconstruction remains internal groundwork.
 The [in-game editor guide](UI_REWORK.md) covers curve editing, player selection
 and saved layouts, building on the UI rework contributed by
 [@tbhtho](https://github.com/tbhtho).
@@ -250,6 +250,11 @@ camera. Double-click the row, or press **View selected**, to visit its view at
 the current paused replay moment. This does not seek to the camera's recorded
 replay time. For longer lists, **Earlier** and **Later** browse the saved cameras.
 
+To visit a saved camera at its recorded replay time, select its row and press
+**Seek camera** on the bottom **Replay** timeline. Dolly pauses at that part of
+the replay and applies the saved view. The replay slider and tick field continue
+to seek while retaining the current camera.
+
 **Delete camera** removes the selected camera immediately. **Undo** restores
 it, including its player/bone attachment and framing; **Redo** repeats the
 deletion. The desktop **Edit** menu and in-game buttons use the same shot edit
@@ -265,7 +270,7 @@ not saved across app restarts. A new edit after Undo replaces the redo branch.
 
 ### Edit a view between saved cameras
 
-Open **Camera** in the in-game Dolly panel. Drag the **Shot** timeline
+Choose **Campaths** on the bottom in-game timeline. Drag the **Shot** timeline
 (or Ctrl+click its slider to type seconds), then press **Seek here**. Dolly
 pauses the replay at that part of the shot and applies its position, rotation
 and framing. Moving the slider alone does not seek. Hold **Alt** and drag a
@@ -286,8 +291,8 @@ step size of **1, 2, 5, 10 or 25 ticks**, then press **Back** or **Forward** to
 inspect an animation while keeping the current camera fixed. The panel stays
 open and shows the actual replay tick. Some recordings omit intermediate ticks;
 Dolly chooses the nearest recorded tick in the requested direction and reports
-the actual movement. Seek here follows the shot camera; tick steps hold your
-current view. When following a participant selected on the Replay timeline,
+the actual movement. **Seek here** in Campaths follows the shot camera; tick
+steps hold your current view. When following a participant selected on the Replay timeline,
 replay seeks and tick steps resolve that player's current hero and keep following.
 Use **Fly camera** to return to a fixed view. Detach an active player-camera
 preview before fixed-camera tick stepping. Desktop replay library and launch

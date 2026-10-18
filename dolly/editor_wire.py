@@ -61,8 +61,10 @@ EXTRA_ACTIONS += ("set_camera_curve_value", "select_curve_camera")
 EXTRA_ACTIONS += ("set_camera_position_tangents",)
 EXTRA_ACTIONS += ("preview_camera_curve_value", "preview_camera_position_tangents",
                   "clear_camera_curve_preview")
-# Level view is appended last so every existing action ID stays fixed (118).
+# Appended actions preserve all earlier IDs and existing shared-memory layouts.
 EXTRA_ACTIONS += ("level_view",)
+# Selected authored camera: value = camera index; pose[0] = list revision (119).
+EXTRA_ACTIONS += ("seek_camera",)
 EXTRA_ACTIONS += ("set_video_ae_camera",)
 EXTRA_ACTIONS += ("set_video_usd_camera",)
 

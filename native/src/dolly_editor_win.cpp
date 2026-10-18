@@ -867,13 +867,15 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
     if ((action == EditorAction::SetVideoAeCamera || action == EditorAction::SetVideoUsdCamera) &&
         (state.busy || pose_override || (value != 0 && value != 1)))
         return false;
-    const bool camera_mutation = action == EditorAction::Capture || action == EditorAction::Replace ||
+    const bool camera_mutation =
+        action == EditorAction::Capture || action == EditorAction::Replace ||
         action == EditorAction::ResetCameraPath || action == EditorAction::ClearCameraPath ||
         action == EditorAction::DeleteCamera || action == EditorAction::UndoShot ||
         action == EditorAction::RedoShot || action == EditorAction::SetCameraTime ||
         action == EditorAction::SetCameraRoll || action == EditorAction::SetCameraPosition ||
-        action == EditorAction::SetCameraCurveValue || action == EditorAction::SetCameraPositionTangents ||
-        action == EditorAction::SetFraming ||
+        action == EditorAction::SetCameraCurveValue ||
+        action == EditorAction::SetCameraPositionTangents || action == EditorAction::SetFraming ||
+        action == EditorAction::SeekCamera ||
         (action >= EditorAction::SetAttachTarget && action <= EditorAction::AttachReset) ||
         action == EditorAction::AttachSnap || action == EditorAction::SetAttachBone ||
         action == EditorAction::SetSourceBlend;
@@ -914,7 +916,8 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
         for (double component : *pose_override) if (!std::isfinite(component)) return false;
     }
     const bool camera_action =
-        action >= EditorAction::SelectCamera && action <= EditorAction::SetCameraRoll;
+        (action >= EditorAction::SelectCamera && action <= EditorAction::SetCameraRoll) ||
+        action == EditorAction::SeekCamera;
     const bool curve_action = action == EditorAction::SetCameraCurveValue ||
                               action == EditorAction::SelectCurveCamera ||
                               action == EditorAction::SetCameraPositionTangents || preview_action;
@@ -956,6 +959,8 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
             state.attach_preview || state.owner != EditorOwner::Panel ||
             !editor_camera_list(list) || list.total != state.camera_count ||
             !valid_editor_camera_action(list, action, value, (*pose_override)[0]))
+            return false;
+        if (action == EditorAction::SeekCamera && value != state.selected_camera)
             return false;
         for (double component : *pose_override)
             if (!std::isfinite(component))

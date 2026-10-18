@@ -412,7 +412,7 @@ class EditorBridgeTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<B", config, 437)[0], 128 | 32)
         with self.assertRaises(ValueError):
             self.bridge.configure_editor(video_ae_camera=1)
-        self.publish([(1, 119, 1), (2, 119, 0)])
+        self.publish([(1, 120, 1), (2, 120, 0)])
         self.assertEqual([(e["action"], e["value"]) for e in self.bridge.editor_status()["events"]],
                          [("set_video_ae_camera", 1), ("set_video_ae_camera", 0)])
 
@@ -427,7 +427,7 @@ class EditorBridgeTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<fBB", config, 442), (0.0, 0, 0))
         with self.assertRaises(ValueError):
             self.bridge.configure_editor(video_usd_camera=1)
-        self.publish([(1, 120, 1)])
+        self.publish([(1, 121, 1)])
         self.assertEqual([(e["action"], e["value"]) for e in self.bridge.editor_status()["events"]],
                          [("set_video_usd_camera", 1)])
 

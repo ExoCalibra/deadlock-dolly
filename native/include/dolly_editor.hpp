@@ -152,9 +152,13 @@ enum class EditorAction : std::uint32_t {
     ClearCameraCurvePreview,
     // Live level-view reset. Appended so every existing action ID is unchanged.
     LevelView,
+    // Selected authored camera seek; existing replay/shot seek IDs stay fixed.
+    SeekCamera,
     SetVideoAeCamera,
     SetVideoUsdCamera
 };
+static_assert(static_cast<std::uint32_t>(EditorAction::SeekCamera) == 119,
+              "Stable selected-camera seek action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::LevelView)==118,
               "Stable level-view action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::PreviewCameraCurveValue)==115 &&
@@ -170,9 +174,9 @@ static_assert(static_cast<std::uint32_t>(EditorAction::SetCameraPosition) == 111
               "Stable XYZ value-graph action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::SetPauseAfterCapture) == 110,
               "Stable pause-after-capture preference action ID");
-static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoAeCamera) == 119,
+static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoAeCamera) == 120,
               "Stable After Effects camera export action ID");
-static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoUsdCamera) == 120,
+static_assert(static_cast<std::uint32_t>(EditorAction::SetVideoUsdCamera) == 121,
               "Stable USD camera export action ID");
 static_assert(static_cast<std::uint32_t>(EditorAction::TakeScreenshot) == 98,
               "Stable screenshot action ID");
@@ -514,6 +518,8 @@ inline bool valid_editor_camera_action(const EditorCameraList& list, EditorActio
         return false;
     if (action == EditorAction::UndoShot || action == EditorAction::RedoShot)
         return value == 0 && (list.flags & (action == EditorAction::UndoShot ? 1u : 2u));
+    if (action == EditorAction::SeekCamera)
+        return value >= 0 && value < list.total;
     if (action == EditorAction::CameraPage)
         return value >= 0 && value < list.total &&
                (std::fmod(value, double(kEditorCameraListCount)) == 0 ||

@@ -754,40 +754,60 @@ void OverlayPanel::draw_lite_timeline(const EditorSnapshot& state) {
     SetCursorScreenPos(after_track);
     const bool compact_popup = compact && BeginPopup("##compact-transport");
     if (!compact || compact_popup) {
-    if(!compact)SetCursorPosX(GetWindowSize().x*.5f-38*s-GetStyle().ItemSpacing.x-100*s);
-    BeginGroup();
-    BeginDisabled(!state.paused || state.playing || state.attach_preview || !state.camera_count);
-    action_button("< Previous", EditorAction::PreviousView, 100*s);
-    if (IsItemHovered()) SetTooltip("Select and view the previous saved camera.");
-    EndDisabled(); SameLine();
-    BeginDisabled(state.playing || state.attach_preview ||
-                  (lite_campath_timeline_ ? !state.camera_count : !(have_info && (info.flags&2))));
-    action_button("Seek here",lite_campath_timeline_ ? EditorAction::SeekShot : EditorAction::SeekReplayTick,
-                  76*s,lite_campath_timeline_ ? double(lite_shot_time_) : double(lite_replay_cursor_));
-    if (IsItemHovered()) SetTooltip(lite_campath_timeline_ ? "Apply the selected point on the campath shot." : "Seek to the selected replay tick.");
-    EndDisabled(); SameLine();
-    BeginDisabled(!state.paused || state.playing || state.attach_preview || !state.camera_count);
-    action_button("Forward >", EditorAction::NextView, 100*s);
-    if (IsItemHovered()) SetTooltip("Select and view the next saved camera.");
-    EndDisabled();
-    EndGroup();
-    if (!compact) transport_width_ = GetItemRectSize().x;
-    if (!compact) SetCursorPosX(std::max(GetStyle().WindowPadding.x, (GetWindowSize().x-speed_width_)*.5f));
-    BeginGroup();
-    action_button(state.paused ? "Resume" : "Pause",EditorAction::PlayPause,83*s);
-    SameLine();
-    // Match the desktop's acknowledged preference without flashing the previous
-    // value back while the configuration makes its normal round trip.
-    const auto now_ms = GetTickCount64();
-    if (state.pause_after_capture == pause_capture_pending_value_ ||
-        now_ms >= pause_capture_pending_until_)
-        pause_capture_pending_until_ = 0;
-    bool pause_after_capture = pause_capture_pending_until_ ? pause_capture_pending_value_ :
-                                                           state.pause_after_capture;
-    if (Checkbox("Pause after capture", &pause_after_capture) &&
-        editor_enqueue(EditorAction::SetPauseAfterCapture, pause_after_capture ? 1 : 0)) {
-        pause_capture_pending_value_ = pause_after_capture;
-        pause_capture_pending_until_ = now_ms + 1000;
+        const float seek_width = (lite_campath_timeline_ ? 76.f : 112.f) * s;
+        if (!compact)
+            SetCursorPosX(GetWindowSize().x * .5f - seek_width * .5f - GetStyle().ItemSpacing.x -
+                          100 * s);
+        BeginGroup();
+        BeginDisabled(!state.paused || state.playing || state.attach_preview ||
+                      !state.camera_count);
+        action_button("< Previous", EditorAction::PreviousView, 100 * s);
+        if (IsItemHovered())
+            SetTooltip("Select and view the previous saved camera.");
+        EndDisabled();
+        SameLine();
+        const bool selected_camera_available = have_list && state.selected_camera < list.total;
+        BeginDisabled(state.playing || state.attach_preview || !state.camera_count ||
+                      (!lite_campath_timeline_ &&
+                       (!state.paused || !selected_camera_available ||
+                        editor_recording_locks_cameras(editor_recording_status().state))));
+        if (lite_campath_timeline_)
+            action_button("Seek here", EditorAction::SeekShot, seek_width, double(lite_shot_time_));
+        else if (Button("Seek camera", ImVec2(seek_width, 0)))
+            camera_request(EditorAction::SeekCamera, state.selected_camera, list);
+        if (IsItemHovered())
+            SetTooltip(lite_campath_timeline_
+                           ? "Apply the selected point on the campath shot."
+                           : "Seek to the selected saved camera's replay time and view.");
+        EndDisabled();
+        SameLine();
+        BeginDisabled(!state.paused || state.playing || state.attach_preview ||
+                      !state.camera_count);
+        action_button("Forward >", EditorAction::NextView, 100 * s);
+        if (IsItemHovered())
+            SetTooltip("Select and view the next saved camera.");
+        EndDisabled();
+        EndGroup();
+        if (!compact)
+            transport_width_ = GetItemRectSize().x;
+        if (!compact)
+            SetCursorPosX(
+                std::max(GetStyle().WindowPadding.x, (GetWindowSize().x - speed_width_) * .5f));
+        BeginGroup();
+        action_button(state.paused ? "Resume" : "Pause", EditorAction::PlayPause, 83 * s);
+        SameLine();
+        // Match the desktop's acknowledged preference without flashing the previous
+        // value back while the configuration makes its normal round trip.
+        const auto now_ms = GetTickCount64();
+        if (state.pause_after_capture == pause_capture_pending_value_ ||
+            now_ms >= pause_capture_pending_until_)
+            pause_capture_pending_until_ = 0;
+        bool pause_after_capture =
+            pause_capture_pending_until_ ? pause_capture_pending_value_ : state.pause_after_capture;
+        if (Checkbox("Pause after capture", &pause_after_capture) &&
+            editor_enqueue(EditorAction::SetPauseAfterCapture, pause_after_capture ? 1 : 0)) {
+            pause_capture_pending_value_ = pause_after_capture;
+            pause_capture_pending_until_ = now_ms + 1000;
     }
     if (IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         SetTooltip("Pause the replay after capturing a camera. Also applies to the capture shortcut.");

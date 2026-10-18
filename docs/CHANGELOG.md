@@ -1,5 +1,22 @@
 # Changes
 
+## 0.6.56-alpha
+
+- Seek to the selected saved camera from the Replay timeline using its exact
+  authored time and full saved view. Previously the middle Seek here button
+  sought the current replay tick and retained the current view.
+- Label that Replay action **Seek camera**. Keep Campaths **Seek here** at the
+  shot cursor and the replay slider, typed tick and event-marker seeks at their
+  selected replay ticks.
+- Bind saved-camera requests to the camera-list revision, validate selection
+  and active-operation guards, and capture the shot snapshot before queuing.
+  Support the selected camera even when browsing another camera-list page.
+- Cover the actual in-game button and native event guards, plus exact saved-time
+  and immutable-target dispatch, with regressions that fail when the old routing
+  or wrong queued target is restored.
+
+Full details: [0.6.56 release notes](RELEASE_NOTES_0.6.56-alpha.md).
+
 ## 0.6.55-alpha
 
 - Restore player selection through Dolly's replay timeline on Deadlock builds

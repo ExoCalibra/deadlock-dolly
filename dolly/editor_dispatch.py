@@ -238,7 +238,7 @@ def _dispatch(app, event, bridge, *, publish):
     elif action == "set_camera_position":
         if _edit_camera_position(app, event, bridge):
             publish()
-    elif action in ("select_camera", "view_camera", "delete_camera", "undo_shot", "redo_shot",
+    elif action in ("select_camera", "view_camera", "seek_camera", "delete_camera", "undo_shot", "redo_shot",
                     "camera_page", "set_camera_time", "set_camera_roll"):
         history = getattr(app, "shot_history", None)
         revision = event["pose"][0]
@@ -270,8 +270,16 @@ def _dispatch(app, event, bridge, *, publish):
         else:
             if not 0 <= value < len(app.project.keyframes):
                 raise ValueError("Selected in-game camera no longer exists")
+            if action == "seek_camera":
+                if app.controller.status().get("playing"):
+                    raise ValueError("Pause shot playback before seeking a saved camera.")
+                project = app._snapshot()
+                shot_time = project.keyframes[int(value)].time
             _select(app, int(value), view=action == "view_camera")
-            if action == "delete_camera":
+            if action == "seek_camera":
+                _native_operation(app, "Seeking saved camera",
+                                  lambda: app.controller.seek(project, shot_time), bridge)
+            elif action == "delete_camera":
                 app._delete_key()
             publish()
     elif action in ("capture", "replace"):

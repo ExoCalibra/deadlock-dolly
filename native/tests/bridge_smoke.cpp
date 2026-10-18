@@ -1919,6 +1919,53 @@ void editor_framing_checks() {
     std::atomic_store(&dolly::gCameraList,std::shared_ptr<const EditorCameraList>(list));
     CameraPose request{};request[0]=7;
     dolly::gAcknowledged = dolly::gLastEvent;
+    {
+        const auto selected = config->selected_camera;
+        config->selected_camera = 1;
+        const auto serial = dolly::gLastEvent;
+        require(editor_enqueue(EditorAction::SeekCamera, 1, &request),
+                "Selected camera seek cannot enter the real event ring");
+        const auto& event = dolly::gEvents[serial % kEditorEventCount];
+        require(event.action == 119 && event.value == 1 && event.pose[0] == 7,
+                "Selected camera seek lost its appended action, index or revision");
+        const auto after_valid = dolly::gLastEvent;
+        for (double index : {-1., .5, 0., 2.})
+            require(!editor_enqueue(EditorAction::SeekCamera, index, &request),
+                    "Invalid or no-longer-selected camera seek entered the event ring");
+        request[0] = 6;
+        require(!editor_enqueue(EditorAction::SeekCamera, 1, &request),
+                "Stale camera revision entered the seek event ring");
+        request[0] = 7;
+        require(!editor_enqueue(EditorAction::SeekCamera, 1),
+                "Camera seek without revision identity entered the event ring");
+        editor_set_owner(EditorOwner::Flight);
+        require(!editor_enqueue(EditorAction::SeekCamera, 1, &request),
+                "Camera seek bypassed panel ownership");
+        editor_set_owner(EditorOwner::Panel);
+        editor_update_view(true, false, true, pose);
+        require(!editor_enqueue(EditorAction::SeekCamera, 1, &request),
+                "Unpaused replay accepted a selected camera seek");
+        editor_update_view(true, true, true, pose);
+        const auto playback = config->playback_flags;
+        for (unsigned flag : {1u, 2u}) {
+            config->playback_flags = flag;
+            require(!editor_enqueue(EditorAction::SeekCamera, 1, &request),
+                    "Busy or playing editor accepted a selected camera seek");
+        }
+        config->playback_flags = playback;
+        require(dolly::gLastEvent == after_valid,
+                "Rejected camera seeks advanced the real event ring");
+        config->camera_count = list->total = 40;
+        list->first = 32;
+        list->count = 8;
+        require(editor_enqueue(EditorAction::SeekCamera, 1, &request) &&
+                    !editor_enqueue(EditorAction::ViewCamera, 1, &request),
+                "Global selected camera seek changed the visible-page view contract");
+        config->camera_count = list->total = list->count = 2;
+        list->first = 0;
+        config->selected_camera = selected;
+    }
+    dolly::gAcknowledged = dolly::gLastEvent;
     const auto preparation_serial = dolly::gLastEvent;
     require(editor_enqueue(EditorAction::PrepareCinematic,42,&request),
             "Cinematic preparation cannot enter the real event ring");
@@ -2072,6 +2119,10 @@ void editor_framing_checks() {
         } cleanup;
         video::Options options{};
         options.path = output.c_str();
+        CameraPose camera_seek_request{7, 0, 0, 0, 0, 0, 0};
+        require(
+            editor_enqueue(EditorAction::SeekCamera, config->selected_camera, &camera_seek_request),
+            "Idle camera seek failed before the recording guard test");
         require(video::start(options), "Cannot start the no-Present recorder guard fixture");
         require(editor_recording_status().state == video::State::starting &&
                     editor_recording_locks_cameras(editor_recording_status().state) &&
@@ -2079,6 +2130,9 @@ void editor_framing_checks() {
                 "The recorder fixture did not keep replay and recording state separate");
         dolly::gAcknowledged = dolly::gLastEvent;
         const auto locked_serial = dolly::gLastEvent;
+        require(!editor_enqueue(EditorAction::SeekCamera, config->selected_camera,
+                                &camera_seek_request),
+                "Paused recording accepted a selected camera seek");
         for (auto action : {EditorAction::Capture, EditorAction::Replace, EditorAction::ResetCameraPath})
             require(!editor_enqueue(action), "Paused recording accepted a capture action into the real event ring");
         for (auto action : {EditorAction::ClearCameraPath, EditorAction::DeleteCamera, EditorAction::UndoShot,
