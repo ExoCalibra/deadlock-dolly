@@ -424,15 +424,15 @@ inline bool find_bone_vector(std::uintptr_t object, std::uintptr_t& data, std::u
                 --name_budget;
                 std::uintptr_t text = 0;
                 char name[65]{};
-                if (!read_value(pointer + index * stride, text) ||
+                if (!read_value(pointer + std::uintptr_t(index) * stride, text) ||
                     !read_c_string(text, name, sizeof(name)) || !valid_bone_name(name))
                     break;
                 if (index == 0)
                     root_first = std::strcmp(name, "root_motion") == 0;
                 if (stride == 16) {
                     std::uint32_t length = 0;
-                    if (!read_value(pointer + index * stride + 8, length) || length < 1 ||
-                        length > 96)
+                    if (!read_value(pointer + std::uintptr_t(index) * stride + 8, length) ||
+                        length < 1 || length > 96)
                         break;
                 }
             }
@@ -483,7 +483,8 @@ inline unsigned skeleton_name_score(std::uintptr_t data, std::uint32_t entries,
     for (std::uint32_t entry = 0; entry < limit; ++entry) {
         std::uintptr_t text = 0;
         char name[65]{};
-        if (!read_value(data + entry * stride, text) || !read_c_string(text, name, sizeof(name)))
+        if (!read_value(data + std::uintptr_t(entry) * stride, text) ||
+            !read_c_string(text, name, sizeof(name)))
             continue;
         for (unsigned marker = 0; marker < 8; ++marker)
             if (!seen[marker] && std::strcmp(name, kMarkers[marker]) == 0) {
@@ -665,7 +666,7 @@ inline bool resolve_bone(const Offsets& offsets, std::uintptr_t node,
     for (std::uint32_t entry = 0; entry < hit.entries; ++entry) {
         std::uintptr_t text = 0;
         char name[65]{};
-        if (!read_value(hit.data + entry * hit.stride, text) ||
+        if (!read_value(hit.data + std::uintptr_t(entry) * hit.stride, text) ||
             !read_c_string(text, name, sizeof(name)) || !valid_bone_name(name) ||
             !((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z') ||
               name[0] == '_' || name[0] == '$'))
@@ -687,7 +688,7 @@ inline bool resolve_bone(const Offsets& offsets, std::uintptr_t node,
         for (std::uint32_t entry = 0; entry < hit.entries && !found; ++entry) {
             std::uintptr_t text = 0;
             char name[65]{};
-            if (!read_value(hit.data + entry * hit.stride, text) ||
+            if (!read_value(hit.data + std::uintptr_t(entry) * hit.stride, text) ||
                 !read_c_string(text, name, sizeof(name)))
                 continue;
             if (model_token(name) == segment.bone_hash) {
@@ -704,7 +705,7 @@ inline bool resolve_bone(const Offsets& offsets, std::uintptr_t node,
         for (std::uint32_t entry = 0; entry < hit.entries; ++entry) {
             std::uintptr_t text = 0;
             char name[65]{};
-            if (!read_value(hit.data + entry * hit.stride, text) ||
+            if (!read_value(hit.data + std::uintptr_t(entry) * hit.stride, text) ||
                 !read_c_string(text, name, sizeof(name)))
                 continue;
             for (unsigned candidate = 0; candidate < candidate_count; ++candidate)
@@ -759,7 +760,7 @@ inline bool resolve_bone(const Offsets& offsets, std::uintptr_t node,
                 std::uintptr_t text = 0;
                 dolly::PickerBone bone{};
                 bone.source_index = entry;
-                if (!read_value(hit.data + entry * hit.stride, text) ||
+                if (!read_value(hit.data + std::uintptr_t(entry) * hit.stride, text) ||
                     !read_c_string(text, bone.name, sizeof(bone.name)) ||
                     !valid_bone_name(bone.name)) {
                     error = "The full bone catalog changed while it was read. Reopen the picker.";

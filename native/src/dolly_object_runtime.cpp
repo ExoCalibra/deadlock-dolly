@@ -78,7 +78,8 @@ bool build_proxy(const EditorObjectItem& item, ObjectSegment* out, std::size_t c
         return false;
     const Entry e = kLibrary[item.shape];
     const Basis b = angles_to_basis(item.angles);
-    const double hx = e.half_x * item.scale, hy = e.half_y * item.scale, hz = e.half_z * item.scale;
+    const double hx = double(e.half_x) * item.scale, hy = double(e.half_y) * item.scale,
+                 hz = double(e.half_z) * item.scale;
     Writer w{out, capacity};
     switch (shape) {
     case Shape::Box: {

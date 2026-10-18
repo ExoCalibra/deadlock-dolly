@@ -188,7 +188,7 @@ HeroPortrait decode_hero_portrait(const Bytes& b) noexcept {
                 b.size() - payload <= 1024 * 1024 &&
                 std::memcmp(b.data() + payload, "\x89PNG\r\n\x1a\n", 8) == 0)
                 return png(b, payload, w, h);
-            if (b[data + 26] != 28 || b.size() - payload != w * h * 4)
+            if (b[data + 26] != 28 || b.size() - payload != std::size_t(w) * h * 4)
                 return {};
             return {w, h, Bytes(b.begin() + payload, b.end())};
         }

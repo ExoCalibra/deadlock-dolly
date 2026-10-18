@@ -845,11 +845,11 @@ void OverlayPanel::draw_curve_workspace(const EditorSnapshot& state, const Edito
             }
             if(position_graph_dragging_ && position_graph_axis_==int(channel)) {
                 position_graph_draft_=std::clamp(position_graph_original_+
-                    (position_graph_mouse_y_-io.MousePos.y)*position_graph_units_per_pixel_,channel_min(channel),channel_max(channel));
+                    (double(position_graph_mouse_y_)-io.MousePos.y)*position_graph_units_per_pixel_,channel_min(channel),channel_max(channel));
                 const auto& key=graph->graph_keys()[position_graph_index_];
                 double displayed=key.pose[channel]+position_graph_draft_-position_graph_original_;
                 if(io.KeyAlt) {
-                    double nearest_value=8*s*position_graph_units_per_pixel_;
+                    double nearest_value=8.0*s*position_graph_units_per_pixel_;
                     const auto consider=[&](unsigned index) {
                         const auto& neighbor=graph->graph_keys()[index];
                         double authored=neighbor.authored_pose[channel];
