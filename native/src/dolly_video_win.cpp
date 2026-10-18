@@ -14,6 +14,8 @@
 #include <condition_variable>
 #include <cstring>
 #include <cstdio>
+#include <io.h>
+#include <fcntl.h>
 #include <cwchar>
 #include <memory>
 #include <mutex>
@@ -30,6 +32,7 @@
 namespace dolly::video {
 namespace {
 constexpr unsigned kSlots = 3;
+constexpr std::size_t kCameraFrameLimit = 262144;
 // Sized for an 8K backbuffer (high-resolution stills); 4K takes are unchanged.
 constexpr std::uint64_t kMemoryLimit = 2048ULL * 1024 * 1024;
 constexpr UINT kMaxDimension = 8192;
@@ -96,6 +99,15 @@ struct MediaApi {
 struct FrameStamp {
     double phase = -1;
     bool native = false;
+    bool has_camera = false;
+    CameraSample camera{};
+    double capture_time = 0;
+};
+struct CameraFrame {
+    std::uint64_t frame = 0;
+    double video_time = 0, phase = 0;
+    CameraSample camera{};
+    double capture_time = 0;
 };
 struct CpuFrame {
     FrameStamp stamp;
@@ -114,12 +126,15 @@ struct Session {
     bool depth_exr = false;
     bool shot_only = false;
     bool white_clear = false;
+    bool camera_enabled = false;
+    const char* camera_partial = nullptr;
     std::uint32_t max_frames = 0;
     // Depth layer folder and its ProRes master, derived from the color path's
     // parent when depth is enabled: <color parent>\depth\depth.mov.
     std::wstring depth_directory, depth_video_path;
     ShotRange shot;
     ShotClockTrace shot_clock;
+    std::vector<CameraFrame> camera_trace; // Touched only by the encoder thread.
     CaptureTrace capture_trace;
     depth::Sequence depth_output; // Touched only by the encoder thread.
     std::wstring ffmpeg;
@@ -215,6 +230,12 @@ RenderResources gpu;
 std::atomic<bool> gPathPlaying{false};
 std::atomic<bool> gPathCompleted{false};
 std::atomic<double> gPathPhase{0};
+// The camera applied with gPathPhase. Seven doubles cannot be one atomic, so a
+// short mutex keeps a capture from pairing one frame's position with another's.
+std::mutex gCameraMutex;
+CameraSample gCamera{};
+bool gCameraValid = false;
+double gCameraPhase = -1;
 
 std::uint64_t now_qpc() noexcept {
     LARGE_INTEGER result{};
@@ -313,6 +334,78 @@ bool write_shot_sidecar(const Session& s) noexcept {
     std::fclose(file);
     return true;
 }
+// Optional metadata has independent ownership and finalization: failure never
+// removes a valid video, overwrites a foreign sidecar, or masquerades as complete.
+bool write_camera_sidecar(const Session& s) noexcept {
+    if (!s.camera_enabled)
+        return true;
+    std::wstring temporary;
+    bool owned = false;
+    try {
+        const auto destination = s.path + L".camera-track.json";
+        temporary = destination + L".pending-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                    std::to_wstring(s.first_qpc.load());
+        HANDLE handle = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return false;
+        owned = true;
+        const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_BINARY);
+        if (fd < 0) {
+            CloseHandle(handle);
+            DeleteFileW(temporary.c_str());
+            return false;
+        }
+        std::FILE* file = _fdopen(fd, "wb");
+        if (!file) {
+            _close(fd);
+            DeleteFileW(temporary.c_str());
+            return false;
+        }
+        const auto count = s.written.load(std::memory_order_acquire);
+        const bool complete = !s.camera_partial && count > 0 && s.camera_trace.size() == count;
+        const char* reason = s.camera_partial ? s.camera_partial : "missing camera frames";
+        std::fprintf(
+            file,
+            "{\n  \"format\": \"deadlock-dolly-camera-track\",\n  \"version\": 2,\n"
+            "  \"fps\": %u,\n  \"fixed_step\": %s,\n  \"frames_written\": %llu,\n"
+            "  \"first_qpc\": %llu,\n  \"qpc_frequency\": %llu,\n"
+            "  \"width\": %u,\n  \"height\": %u,\n  \"depth\": %s,\n"
+            "  \"complete\": %s,\n  \"partial_reason\": \"%s\",\n"
+            "  \"source\": \"native-view-hook\",\n"
+            "  \"fields\": [\"frame\", \"video_time\", \"phase\", \"x\", \"y\", \"z\", "
+            "\"pitch\", \"yaw\", \"roll\", \"horizontal_fov\", \"capture_time\"],\n  \"frames\": [",
+            s.fps, s.fixed_step ? "true" : "false", static_cast<unsigned long long>(count),
+            static_cast<unsigned long long>(s.first_qpc.load()),
+            static_cast<unsigned long long>(s.frequency), s.width, s.height,
+            s.depth_enabled ? "true" : "false", complete ? "true" : "false",
+            complete ? "" : reason);
+        for (std::size_t i = 0; i < s.camera_trace.size(); ++i) {
+            const auto& f = s.camera_trace[i];
+            const auto& c = f.camera;
+            std::fprintf(
+                file,
+                "%s\n    [%llu, %.9f, %.9f, %.17g, %.17g, %.17g, %.17g, %.17g, %.17g, %.17g, %.9f]",
+                i ? "," : "", static_cast<unsigned long long>(f.frame), f.video_time, f.phase,
+                c.position[0], c.position[1], c.position[2], c.angles[0], c.angles[1], c.angles[2],
+                c.horizontal_fov, f.capture_time);
+        }
+        std::fprintf(file, "\n  ]\n}\n");
+        const bool flushed = std::fflush(file) == 0 && std::ferror(file) == 0 && _commit(fd) == 0;
+        const bool closed = std::fclose(file) == 0;
+        // No MOVEFILE_REPLACE_EXISTING: an existing destination is never ours.
+        const bool published =
+            flushed && closed &&
+            MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH) != 0;
+        if (!published)
+            DeleteFileW(temporary.c_str());
+        return published;
+    } catch (...) {
+        if (owned)
+            DeleteFileW(temporary.c_str());
+        return false;
+    }
+}
 
 HRESULT media_type(IMFMediaType* type, const GUID& subtype, const Session& s) {
     HRESULT hr = type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -405,10 +498,31 @@ HRESULT make_sample(MediaApi& api, const Session& s, const CpuFrame& frame,
 }
 // Metadata follows successful output writes, not GPU submissions that may still
 // be pending at stop. Only the encoder worker mutates the written-frame range.
-void observe_written_frame(Session& s, const FrameStamp& stamp) noexcept {
+void observe_written_frame(Session& s, const FrameStamp& stamp, double video_time) noexcept {
     const auto index = s.written.fetch_add(1, std::memory_order_relaxed);
     s.shot.observe(index, stamp.phase);
     s.shot_clock.observe(index, stamp.phase, stamp.native);
+    if (s.camera_enabled && !s.camera_partial) {
+        bool valid = stamp.has_camera && std::isfinite(stamp.phase) && stamp.phase >= 0 &&
+                     std::isfinite(video_time) && video_time >= 0 &&
+                     std::isfinite(stamp.camera.horizontal_fov) &&
+                     stamp.camera.horizontal_fov > 1 && stamp.camera.horizontal_fov < 179;
+        for (unsigned i = 0; i < 3; ++i)
+            valid = valid && std::isfinite(stamp.camera.position[i]) &&
+                    std::isfinite(stamp.camera.angles[i]);
+        if (!valid)
+            s.camera_partial = "missing or invalid camera sample";
+        else if (s.camera_trace.size() >= kCameraFrameLimit)
+            s.camera_partial = "camera frame limit reached";
+        else {
+            try {
+                s.camera_trace.push_back(
+                    {index, video_time, stamp.phase, stamp.camera, stamp.capture_time});
+            } catch (...) {
+                s.camera_partial = "camera allocation failed";
+            }
+        }
+    }
 }
 HRESULT write_sample(Session& s, IMFSinkWriter* writer, DWORD stream, IMFSample* sample,
                      std::uint64_t start_pts, std::uint64_t end_pts, const FrameStamp& stamp) {
@@ -417,7 +531,7 @@ HRESULT write_sample(Session& s, IMFSinkWriter* writer, DWORD stream, IMFSample*
     if (SUCCEEDED(hr))
         hr = writer->WriteSample(stream, sample);
     if (SUCCEEDED(hr)) {
-        observe_written_frame(s, stamp);
+        observe_written_frame(s, stamp, double(start_pts) / 10000000.0);
         s.duration.store(start_pts + duration, std::memory_order_release);
     }
     return hr;
@@ -896,7 +1010,9 @@ void encode_ffmpeg(std::shared_ptr<Session> s) noexcept {
                 }
                 wrote_any = true;
                 ++frames;
-                observe_written_frame(*s, stamp);
+                // Raw frames are piped at a constant rate: frame N is at N / fps.
+                observe_written_frame(*s, stamp,
+                                      double(frames - 1) / std::max<std::uint32_t>(1, s->fps));
                 s->duration.store(frames * 10000000ull / std::max<std::uint32_t>(1, s->fps),
                                   std::memory_order_release);
                 continue;
@@ -929,7 +1045,8 @@ void encode_ffmpeg(std::shared_ptr<Session> s) noexcept {
             }
             wrote_any = true;
             ++frames;
-            observe_written_frame(*s, stamp);
+            observe_written_frame(*s, stamp,
+                                  double(frames - 1) / std::max<std::uint32_t>(1, s->fps));
         }
         child.close_input();
         depth_child.close_input();
@@ -1009,8 +1126,11 @@ void encode_ffmpeg(std::shared_ptr<Session> s) noexcept {
     }
     if (created && (!finalized || s->cancel.load()))
         DeleteFileW(s->path.c_str());
-    if (finalized && !s->cancel.load() && SUCCEEDED(s->error.load()) && s->shot.open())
-        write_shot_sidecar(*s);
+    if (finalized && !s->cancel.load() && SUCCEEDED(s->error.load())) {
+        if (s->shot.open())
+            write_shot_sidecar(*s);
+        write_camera_sidecar(*s);
+    }
     s->state.store(FAILED(s->error.load())          ? State::failed
                    : (s->cancel.load() || !created) ? State::cancelled
                                                     : State::completed,
@@ -1171,8 +1291,11 @@ void encode(std::shared_ptr<Session> s) noexcept {
     // existing destination rejected by MF_OPENMODE_FAIL_IF_EXIST.
     if (created && (!finalized || s->cancel.load()))
         DeleteFileW(s->path.c_str());
-    if (finalized && !s->cancel.load() && SUCCEEDED(s->error.load()) && s->shot.open())
-        write_shot_sidecar(*s);
+    if (finalized && !s->cancel.load() && SUCCEEDED(s->error.load())) {
+        if (s->shot.open())
+            write_shot_sidecar(*s);
+        write_camera_sidecar(*s);
+    }
     s->state.store(FAILED(s->error.load())          ? State::failed
                    : (s->cancel.load() || !created) ? State::cancelled
                                                     : State::completed,
@@ -1285,6 +1408,11 @@ bool start(const Options& options) noexcept {
         gPathPlaying.store(false, std::memory_order_release);
         gPathCompleted.store(false, std::memory_order_release);
         gPathPhase.store(0, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> camera_lock(gCameraMutex);
+            gCameraValid = false;
+            gCameraPhase = -1;
+        }
         auto next = std::make_shared<Session>();
         next->path = path;
         next->fps = options.fps;
@@ -1298,6 +1426,7 @@ bool start(const Options& options) noexcept {
         next->depth_exr = options.depth_exr;
         next->shot_only = options.shot_only;
         next->white_clear = options.white_clear;
+        next->camera_enabled = options.camera_track;
         next->max_frames = options.max_frames;
         if (options.ffmpeg)
             next->ffmpeg = options.ffmpeg;
@@ -1421,8 +1550,16 @@ bool wants_shot_only() noexcept {
     }
     return cached.shot_only.load(std::memory_order_acquire);
 }
-void publish_path_replay_time(bool playing, double phase, bool completed) noexcept {
+void publish_path_replay_time(bool playing, double phase, bool completed,
+                              const CameraSample* camera) noexcept {
     gPathCompleted.store(completed, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(gCameraMutex);
+        gCameraValid = playing && std::isfinite(phase) && camera != nullptr;
+        gCameraPhase = phase;
+        if (gCameraValid)
+            gCamera = *camera;
+    }
     if (playing && std::isfinite(phase)) {
         gPathPhase.store(phase, std::memory_order_relaxed);
         gPathPlaying.store(true, std::memory_order_release);
@@ -1795,6 +1932,13 @@ void capture(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceContex
     if (timing)
         timing->outcome = CaptureTrace::admitted;
     slot.stamp = {replay_time, native_clock};
+    slot.stamp.capture_time = double(pts) / 10000000.0;
+    if (s.camera_enabled && native_clock) {
+        // The native clock and this camera come from the same view evaluation.
+        std::lock_guard<std::mutex> lock(gCameraMutex);
+        slot.stamp.has_camera = gCameraValid && std::abs(gCameraPhase - replay_time) < 1e-9;
+        slot.stamp.camera = gCamera;
+    }
     slot.pts = pts;
     ++gpu.submitted;
     const auto admitted = s.capture_submitted.fetch_add(1, std::memory_order_relaxed) + 1;

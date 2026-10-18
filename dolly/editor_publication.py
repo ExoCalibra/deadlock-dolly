@@ -145,6 +145,8 @@ def configure(app):
         video_pov=_value(app, "video_source", "Camera path") == "Player POV",
         pov_duration=_pov_duration(app),
         layers={layer: _value(app, "video_layer_" + layer, False) for layer in ("world", "players", "effects")},
+        video_ae_camera=bool(_value(app, "video_ae_camera", False)),
+        video_usd_camera=bool(_value(app, "video_usd_camera", False)),
     )
     # A UI refresh must not overwrite an owner chosen by F7/F8/F9 in-game.
     # Explicit owner changes are handled only by command transitions below.

@@ -8,8 +8,8 @@ constexpr std::size_t kMediaMappingBytes = 12288, kMediaStatusOffset = 8192;
 #pragma pack(push, 1)
 struct MediaCommand {
     char magic[8];
-    // reserved: flags in bits0..4, hard video frame limit in bits16..31 (0
-    // unlimited). Bits5..15 remain invalid; older consumers refuse the limit.
+    // reserved: flags in bits0..5, hard video frame limit in bits16..31 (0
+    // unlimited). Bit5 requests camera metadata; bits6..15 remain invalid; older consumers refuse the limit.
     // encoder/codec/quality/preset select the FFmpeg backend/rate control.
     std::uint32_t sequence, abi, command, fps, bitrate, reserved;
     std::uint32_t encoder, codec, quality, preset;

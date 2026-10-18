@@ -764,6 +764,183 @@ class VideoGuiTests(unittest.TestCase):
         self.app._play.assert_called_once()
         self.assertFalse(self.app._pending_auto_play)
 
+    def write_recorded_camera(self, frames=61, *, width=1920, height=1080, first_qpc=123456):
+        from dolly.camera_export import CAMERA_FIELDS_V2
+        rows = [[i, i/60, i/60, i, 0, 64, 0, 90, 0, 100, i/60] for i in range(frames)]
+        path = Path(self.folder.name) / "shot.mp4.camera-track.json"
+        path.write_text(json.dumps(dict(format="deadlock-dolly-camera-track", version=2, fps=60,
+            fixed_step=True, complete=True, source="native-view-hook", depth=False,
+            frames_written=frames, first_qpc=first_qpc, qpc_frequency=10000000,
+            width=width, height=height, fields=CAMERA_FIELDS_V2, frames=rows)))
+        return dict(state="completed", frames_written=frames, fps=60, width=width, height=height,
+                    video_first_qpc=first_qpc, qpc_frequency=10000000)
+
+    def finish_color_take(self, status=None, *, camera=True):
+        self.app._layer_queue = []
+        self.app._active_layer_take = None
+        self.app.video_export.output_path = Path(self.folder.name) / "shot.mp4"
+        self.app.video_export.output_directory = Path(self.folder.name)
+        self.app.video_export.finish_pending = False
+        self.app._log = Mock()
+        status = status or (self.write_recorded_camera() if camera else {"state": "completed"})
+        self.app._video_operation_done(status)
+        # _submit enqueues work; exercise the actual operation and UI callback.
+        if self.app._submit.call_args and self.app._submit.call_args.args[0] == "Exporting recorded camera":
+            _, work, done = self.app._submit.call_args.args
+            done(work())
+
+    def test_completed_take_waits_for_worker_before_consuming_camera_exports(self):
+        self.app.busy = True
+        self.app._last_video_state = "recording"
+        self.app.video_export.status.return_value = {"state": "completed"}
+        self.app._ae_camera_take = (self.two_camera_project(), 60, 1, False)
+        self.app._video_operation_done = Mock()
+        self.app._refresh_video({})
+        self.app._video_operation_done.assert_not_called()
+        self.assertIsNotNone(self.app._ae_camera_take)
+        self.assertEqual(self.app._last_video_state, "recording")
+
+    def test_ae_camera_toggle_saves_the_recorded_shot_beside_the_video(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        self.app.project.keyframes[-1].x = 999
+        self.finish_color_take()
+        script = Path(self.folder.name) / "shot_camera.jsx"
+        self.assertIn("var FRAMES = 61;", script.read_text("ascii"))
+        self.assertNotIn("999", script.read_text("ascii"))
+        self.app._log.assert_any_call("After Effects camera saved to " + str(script))
+        self.assertIsNone(self.app._ae_camera_take)
+
+    def test_camera_export_refuses_authored_fallback_when_recording_has_no_data(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        self.finish_color_take(camera=False)
+        self.assertFalse((Path(self.folder.name) / "shot_camera.jsx").exists())
+        self.assertIn("video is preserved", self.app._log.call_args.args[0])
+
+    def test_camera_export_refuses_stale_recording_identity(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        status = self.write_recorded_camera()
+        self.finish_color_take(dict(status, video_first_qpc=999))
+        self.assertFalse((Path(self.folder.name) / "shot_camera.jsx").exists())
+        self.assertIn("different recording", self.app._log.call_args.args[0])
+
+    def test_camera_exports_match_the_recorded_frame_size(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app.video_usd_camera = Var(True)
+        for width, height, aperture in ((2560,1080,"15.1875"), (1920,1200,"22.5"),
+                                        (1440,1080,"27"), (3440,1440,"15.069767")):
+            with self.subTest(size=(width,height)):
+                self.app._start_video_recording()
+                self.finish_color_take(self.write_recorded_camera(width=width, height=height))
+                folder = Path(self.folder.name)
+                self.assertIn(f"var COMP_WIDTH = {width};", (folder / "shot_camera.jsx").read_text("ascii"))
+                self.assertIn(f"var COMP_HEIGHT = {height};", (folder / "shot_camera.jsx").read_text("ascii"))
+                self.assertIn(f"float verticalAperture = {aperture}\n", (folder / "shot_camera.usda").read_text("ascii"))
+                # Each take owns new filenames; tests reuse a temporary fixture folder.
+                (folder / "shot_camera.jsx").unlink()
+                (folder / "shot_camera.usda").unlink()
+
+    def start_pov_take(self):
+        self.app.project = Project()
+        self.app.video_source = Var("Player POV")
+        self.app.video_pov_duration = Var("5")
+        self.app.controller = Mock()
+        self.app.controller.status.return_value = {"tick": 640, "game_ui_visible": True}
+        self.app.video_ae_camera = Var(True)
+        self.app.video_usd_camera = Var(True)
+        self.app._start_video_recording()
+        self.app._error.assert_not_called()
+
+    def test_pov_camera_exports_from_the_recorded_camera_data(self):
+        self.start_pov_take()
+        folder = Path(self.folder.name)
+        status = self.write_recorded_camera(frames=3)
+        path = folder / "shot.mp4.camera-track.json"
+        data = json.loads(path.read_text())
+        for i, row in enumerate(data['frames']): row[3] = 900+i
+        path.write_text(json.dumps(data))
+        self.finish_color_take(status)
+        script = (folder / "shot_camera.jsx").read_text("ascii")
+        self.assertIn('var SHOT_NAME = "Player POV";', script)
+        self.assertIn("var FRAMES = 3;", script)
+        self.assertIn("var ORIGIN = [900,-64,0];", script)
+        self.assertIn("var dollyKeys = [];", script)  # The POV keys are placeholders, never markers.
+        layer = (folder / "shot_camera.usda").read_text("ascii")
+        self.assertNotIn("Key_", layer)
+        self.app._log.assert_any_call("USD camera saved to " + str(folder / "shot_camera.usda"))
+
+    def test_pov_camera_without_camera_data_is_not_saved(self):
+        self.start_pov_take()
+        self.finish_color_take(camera=False)
+        # Never fall back to the placeholder keys, which would export a camera stuck at 0,0,0.
+        self.assertEqual(sorted(p.name for p in Path(self.folder.name).glob("*_camera.*")), [])
+        self.app._log.assert_any_call(
+            "After Effects camera was not saved: Recording saved no camera data; video is preserved")
+        self.app._log.assert_any_call(
+            "USD camera was not saved: Recording saved no camera data; video is preserved")
+
+    def test_ae_camera_prefers_camera_data(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        self.finish_color_take(self.write_recorded_camera(frames=2))
+        text = (Path(self.folder.name) / "shot_camera.jsx").read_text("ascii")
+        self.assertIn("var FRAMES = 2;", text)
+        self.assertIn("var frameNumbers = [0,1];", text)
+
+    def test_usd_camera_toggle_saves_a_layer_beside_the_video(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_usd_camera = Var(True)
+        self.app._start_video_recording()
+        self.finish_color_take()
+        layer = Path(self.folder.name) / "shot_camera.usda"
+        self.assertTrue(layer.read_text("ascii").startswith("#usda 1.0"))
+        self.assertEqual(list(Path(self.folder.name).glob("*.jsx")), [])
+        self.app._log.assert_any_call("USD camera saved to " + str(layer))
+        self.assertIsNone(self.app._usd_camera_take)
+
+    def test_both_camera_formats_come_from_one_take(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app.video_usd_camera = Var(True)
+        self.app._start_video_recording()
+        with patch("dolly.camera_export.export_jsx", side_effect=OSError("disk full")):
+            self.finish_color_take()
+        # One format failing must not stop the other.
+        self.app._log.assert_any_call("After Effects camera was not saved: disk full")
+        self.assertTrue((Path(self.folder.name) / "shot_camera.usda").is_file())
+
+    def test_ae_camera_is_not_written_when_the_toggle_is_off(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(False)
+        self.app._start_video_recording()
+        self.finish_color_take()
+        self.assertEqual(list(Path(self.folder.name).glob("*.jsx")), [])
+
+    def test_ae_camera_is_dropped_when_the_take_fails(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        self.app._video_operation_done({"state": "failed", "error": "encoder stopped"})
+        self.assertIsNone(self.app._ae_camera_take)
+        self.finish_color_take()
+        self.assertEqual(list(Path(self.folder.name).glob("*.jsx")), [])
+
+    def test_ae_camera_write_failure_is_logged_without_failing_the_take(self):
+        self.app.project = self.two_camera_project()
+        self.app.video_ae_camera = Var(True)
+        self.app._start_video_recording()
+        with patch("dolly.camera_export.export_jsx", side_effect=OSError("disk full")):
+            self.finish_color_take()
+        self.app._log.assert_any_call("After Effects camera was not saved: disk full")
+        self.app._error.assert_not_called()
+
     def test_poll_delivers_recorder_ready_to_pending_playback(self):
         self.app._pending_auto_play = True
         self.app.busy = False

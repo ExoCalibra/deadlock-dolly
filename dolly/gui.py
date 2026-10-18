@@ -361,6 +361,8 @@ class DollyApp:
         self.video_status_text = tk.StringVar(value="Launch a replay to record video.")
         self.video_game_audio = tk.BooleanVar(value=False)
         self.video_reconstructed_audio = tk.BooleanVar(value=False)
+        self.video_ae_camera = tk.BooleanVar(value=False)
+        self.video_usd_camera = tk.BooleanVar(value=False)
         self.clip_audio = None
         self._pending_auto_play = False
         # Layered takes capture exactly the authored path, so they finish
@@ -597,7 +599,7 @@ class DollyApp:
         pov = self.video_source.get() == "Player POV"
         single_attach = len(self.project.keyframes) == 1 and self.project.keyframes[0].source == "attach"
         if pov or single_attach:
-            self.video_pov_controls.pack(fill="x")
+            self.video_pov_controls.pack(fill="x", before=self.video_camera_options)
         else:
             self.video_pov_controls.pack_forget()
         self.video_start_button.configure(text="Record POV" if pov else "Record video")
@@ -613,6 +615,51 @@ class DollyApp:
         if path:
             self.video_path.set(path)
             self._remember_export_folder()
+
+    def _export_camera(self, video, status=None):
+        """Freeze UI intent, then validate and write optional exports on the worker."""
+        from . import camera_export
+        jobs = []
+        for attribute, export, suffix, label, extra in (
+                ("_ae_camera_take", "export_jsx", "_camera.jsx", "After Effects camera", {"video": video.name}),
+                ("_usd_camera_take", "export_usda", "_camera.usda", "USD camera", {})):
+            pending = getattr(self, attribute, None)
+            setattr(self, attribute, None)
+            if pending is not None:
+                jobs.append((pending, export, video.with_name(video.stem + suffix), label, extra))
+        if not jobs:
+            return
+        recorded_status = dict(status or {})
+
+        def export_recorded_camera():
+            messages = []
+            project, fps, speed, pov = jobs[0][0]
+            camera_data = video.with_name(video.name + ".camera-track.json")
+            try:
+                take = camera_export.load_take(project, fps,
+                    camera_data=camera_data if camera_data.is_file() else None,
+                    speed=speed, pov=pov, video_frames=recorded_status.get("frames_written"),
+                    expected_status=recorded_status, require_recorded=True)
+            except (OSError, ValueError) as exc:
+                return [f"{label} was not saved: {exc}" for _, _, _, label, _ in jobs]
+            for pending, export, path, label, extra in jobs:
+                try:
+                    warnings = getattr(camera_export, export)(project, path, fps, take=take, **extra)
+                except (OSError, ValueError) as exc:
+                    messages.append(f"{label} was not saved: {exc}")
+                    continue
+                messages.append(f"{label} saved to {path}")
+                messages.extend(f"{label}: {warning}" for warning in warnings)
+            return messages
+
+        def exported(messages):
+            for message in messages:
+                self._log(message)
+            failures = [message for message in messages if "was not saved:" in message]
+            if failures:
+                self.status_text.set("Video saved; camera export failed. See the log for details.")
+
+        self._submit("Exporting recorded camera", export_recorded_camera, exported)
 
     def _remember_export_folder(self, _event=None):
         """Persist explicit destination edits, never generated per-layer paths."""
@@ -757,6 +804,8 @@ class DollyApp:
                                    depth_exr=bool(self.video_depth_exr.get()),
                                    layers=layers, shot_only=pov or bone_project is not None,
                                    players_scratch=(getattr(self, "players_scratch", None).get().strip() or None) if getattr(self, "players_scratch", None) is not None else None,
+                                   camera_track=any(getattr(self, name, None) is not None and getattr(self, name).get()
+                                                    for name in ("video_ae_camera", "video_usd_camera")),
                                    bundle_audio=bool(self.video_game_audio.get() or
                                                      self.video_reconstructed_audio.get())).validated()
             if "players" in options.layers:
@@ -774,6 +823,14 @@ class DollyApp:
         self._bone_take_project = copy.deepcopy(bone_project)
         project = self._pov_project or bone_project or (Project.from_dict(self.project.to_dict()) if len(self.project.keyframes) >= 2 else None)
         frozen = False if pov else self.frozen.get()
+        # Export speed only applies to fixed-step takes.
+        speed = options.speed if options.fixed_step else 1.0
+        camera_project = project or Project.from_dict(self.project.to_dict())
+        camera_take = (camera_project, options.fps, speed, pov)
+        for attribute, variable in (("_ae_camera_take", "video_ae_camera"),
+                                    ("_usd_camera_take", "video_usd_camera")):
+            ticked = getattr(self, variable, None)
+            setattr(self, attribute, camera_take if ticked is not None and ticked.get() else None)
         self._pending_auto_play = project is not None
         # Every take that plays an authored project ends with that shot: the path
         # clamps at its last camera, so nothing further can be captured for it.
@@ -893,6 +950,7 @@ class DollyApp:
                 self._log("Layer alpha saved to " + str(master))
             elif getattr(self, "_active_layer_take", None) is None:
                 self._log("Video saved to " + str(self.video_export.output_path))
+                self._export_camera(self.video_export.output_path, status)
             directory = self._next_take_directory()
             if not directory.is_dir():
                 directory = Path(self.video_path.get()).parent
@@ -906,6 +964,7 @@ class DollyApp:
                 # the selected pass takes start immediately afterwards.
                 self.status_text.set("Color take saved. Recording the selected passes…")
         elif state in ("failed", "cancelled"):
+            self._ae_camera_take = self._usd_camera_take = None
             screenshot_ui.abandon(self)
             layered = self.layer_pipeline.failed()
             if layered:
@@ -1231,6 +1290,8 @@ class DollyApp:
             self._video_operation_done(status)
         if state != previous:
             if state == "completed":
+                if self.busy:
+                    return  # Final camera export needs the operation worker.
                 if (self.clip_audio is not None
                         or getattr(self.video_export, "finish_pending", False) is True):
                     if not self.busy:
@@ -1300,8 +1361,10 @@ class DollyApp:
             if widget is not None:
                 _set_widget_state(widget, combo_state)
         check_state = "disabled" if active or self.busy else "normal"
-        for widget in (self.video_game_audio_check, self.video_reconstructed_audio_check):
-            _set_widget_state(widget, check_state)
+        for widget in (self.video_game_audio_check, self.video_reconstructed_audio_check, getattr(self, "video_ae_camera_check", None),
+                       getattr(self, "video_usd_camera_check", None)):
+            if widget is not None:
+                _set_widget_state(widget, check_state)
         _set_widget_state(self.reshade_configure_button,
                           "normal" if ready and not active and not self.busy and not self.playing
                           else "disabled")
@@ -3736,7 +3799,7 @@ class DollyApp:
         if hasattr(self, "video_pov_controls"):
             single_attach = len(self.project.keyframes) == 1 and self.project.keyframes[0].source == "attach"
             if self.video_source.get() == "Player POV" or single_attach:
-                self.video_pov_controls.pack(fill="x")
+                self.video_pov_controls.pack(fill="x", before=self.video_camera_options)
             else:
                 self.video_pov_controls.pack_forget()
         if hasattr(self, "video_source") and self.video_source.get() == "Player POV":

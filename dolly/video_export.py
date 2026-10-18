@@ -156,8 +156,11 @@ class VideoOptions:
     # Optional hard native admission cap for bounded checks; 0 is unlimited.
     max_frames: int = 0
     players_scratch: "Path | None" = None
+    camera_track: bool = False
 
     def validated(self) -> VideoOptions:
+        if type(self.camera_track) is not bool:
+            raise ValueError("Camera track must be on or off.")
         if type(self.max_frames) is not int or not 0 <= self.max_frames <= 65535:
             raise ValueError("Video frame limit must be an integer between 0 and 65535.")
         if type(self.fps) is not int or self.fps not in (30, 60, 120, 300, 600):
@@ -228,7 +231,7 @@ class VideoOptions:
         result = VideoOptions(path, self.fps, self.bitrate, self.codec, self.quality, self.preset,
                               ffmpeg, self.fixed_step, speed, self.depth, self.depth_exr,
                               self.layers, self.white_clear, self.shot_only,
-                              self.full_resolution or self.depth, self.bundle_audio, self.max_frames, scratch)
+                              self.full_resolution or self.depth, self.bundle_audio, self.max_frames, scratch, self.camera_track)
         if self.depth:
             encoder, _codec_id = resolve_backend(result)
             if encoder != 1:
@@ -504,6 +507,8 @@ class VideoExport:
             mark(True)
         try:
             limited = {"max_frames": options.max_frames} if options.max_frames else {}
+            if options.camera_track:
+                limited["camera_track"] = True
             bridge.start_video(str(color_path), fps=options.fps, bitrate=options.bitrate,
                                encoder=encoder, codec=codec_id, quality=options.quality,
                                preset=options.preset,

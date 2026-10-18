@@ -965,6 +965,30 @@ class EditorSessionTests(unittest.TestCase):
         self.assertFalse(self.app.video_depth.get())
         self.assertFalse(self.app.video_depth_exr.get())
 
+    def test_ae_camera_toggle_syncs_both_directions(self):
+        self.app.native_editor_active = True
+        self.app.video_ae_camera = Value(True)
+        session.configure(self.app)
+        self.assertTrue(self.bridge.configure_editor.call_args.kwargs["video_ae_camera"])
+        self.assertTrue(session.dispatch(self.app, {"action": "set_video_ae_camera", "value": 0}, self.bridge))
+        self.assertFalse(self.app.video_ae_camera.get())
+        self.assertFalse(self.bridge.configure_editor.call_args.kwargs["video_ae_camera"])
+        for invalid in (-1, 2, .5):
+            with self.assertRaises(ValueError):
+                session.dispatch(self.app, {"action": "set_video_ae_camera", "value": invalid}, self.bridge)
+
+    def test_usd_camera_toggle_syncs_both_directions(self):
+        self.app.native_editor_active = True
+        self.app.video_usd_camera = Value(False)
+        session.configure(self.app)
+        self.assertFalse(self.bridge.configure_editor.call_args.kwargs["video_usd_camera"])
+        self.assertTrue(session.dispatch(self.app, {"action": "set_video_usd_camera", "value": 1}, self.bridge))
+        self.assertTrue(self.app.video_usd_camera.get())
+        self.assertTrue(self.bridge.configure_editor.call_args.kwargs["video_usd_camera"])
+        for invalid in (-1, 2, .5):
+            with self.assertRaises(ValueError):
+                session.dispatch(self.app, {"action": "set_video_usd_camera", "value": invalid}, self.bridge)
+
     def test_layer_switches_sync_independently_and_arm_fixed_step(self):
         from dolly.gui import DollyApp
         self.app.native_editor_active = True

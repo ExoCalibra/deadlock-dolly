@@ -11,6 +11,7 @@ older screenshots and per-version notes may show controls that have changed.
 | Use Camera, Follow, Bone Picker, Look, Export, Campaths and the timelines | [In-game editor](UI_REWORK.md) |
 | Attach a camera to a replay participant's bone | [Bone Picker](BONE_PICKER.md) |
 | Record video, choose an encoder, capture audio and use ReShade | [Video and ReShade](VIDEO_AND_RESHADE.md) |
+| Export the recorded camera to After Effects, Blender or other USD apps | [Export the camera](VIDEO_AND_RESHADE.md#export-the-camera) |
 | Export a still, players-only matte or cut-out hero | [Screenshots](SCREENSHOTS.md) |
 | Export Depth, World, Players or Effects, and understand their limits | [Layer export](LAYER_EXPORT.md) |
 | Use paired camera metadata and float depth in compositing | [Camera bundle](CAMERA_BUNDLE.md) |

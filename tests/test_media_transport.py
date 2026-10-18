@@ -47,6 +47,16 @@ class MediaTransportTests(unittest.TestCase):
         self.bridge.release = lambda **_options: None
         self.bridge.close()
 
+    def test_optional_camera_flag_is_explicit_and_keeps_wire_size(self):
+        plain = wire.pack_command(2, 'start_video', path='C:\\Videos\\plain.mp4')
+        enabled = wire.pack_command(2, 'start_video', path='C:\\Videos\\camera.mp4', camera_track=True)
+        self.assertEqual(len(plain), len(enabled))
+        self.assertEqual(wire.COMMAND.unpack(plain)[6] & 32, 0)
+        self.assertEqual(wire.COMMAND.unpack(enabled)[6] & 32, 32)
+        for invalid in (1, 'yes', None):
+            with self.assertRaises(ValueError):
+                wire.pack_command(2, 'start_video', path='C:\\Videos\\bad.mp4', camera_track=invalid)
+
     def test_separate_mapping_and_utf16_command(self):
         path = "C:\\Videos\\Café.mp4"
         result = self.bridge.start_video(path, fps=30)

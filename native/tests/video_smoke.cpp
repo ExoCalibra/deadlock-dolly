@@ -11,6 +11,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <string>
+#include <fstream>
 #include "dolly_video.hpp"
 
 namespace {
@@ -191,12 +192,15 @@ int main(int argc, char** argv) {
             options.fixed_step = fixed;
             options.shot_only = shot_only;
             options.max_frames = 2;
+            options.camera_track = true;
             ok = check(start(options), "bounded recording starts") && ok;
             const auto deadline = GetTickCount64() + 15000;
             double phase = 0;
             while (ok && !terminal(status().state) && GetTickCount64() < deadline) {
                 const float color[] = {0.2f, 0.4f, 0.7f, 1.0f};
                 context->ClearRenderTargetView(view, color);
+                const CameraSample camera{{phase, 2, 3}, {4, 5, 6}, 90};
+                publish_path_replay_time(true, phase, false, &camera);
                 capture(swapchain, device, context, nullptr, phase, true);
                 phase += 1.0 / 60;
                 swapchain->Present(0, 0);
@@ -216,6 +220,17 @@ int main(int argc, char** argv) {
             if (ok)
                 ok = inspect_mp4(capped_path.c_str(), result.frames_written, result.duration_100ns,
                                  fixed ? 60 : 0, shot_only && !fixed ? 190000 : 0);
+            {
+                std::ifstream metadata(capped_path + L".camera-track.json");
+                const std::string camera((std::istreambuf_iterator<char>(metadata)), {});
+                ok = check(camera.find("\"complete\": true") != std::string::npos &&
+                               camera.find("\"frames_written\": 2") != std::string::npos &&
+                               camera.find("\"capture_time\"") != std::string::npos,
+                           "bounded Media Foundation camera matches encoded output") &&
+                     ok;
+            }
+            DeleteFileW((capped_path + L".camera-track.json").c_str());
+            DeleteFileW((capped_path + L".shot.json").c_str());
             DeleteFileW(capped_path.c_str());
         }
         // A take that plays an authored path must not record the hold after that

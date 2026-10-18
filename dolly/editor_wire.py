@@ -14,7 +14,7 @@ STATUS_OFFSET = 2 * 1024 * 1024 + 2048
 EDITOR_ABI = 2
 CONFIG_MAGIC = b"DLYEDIT1"
 STATUS_MAGIC = b"DLYEDS01"
-CONFIG = struct.Struct("<8s10I2d52H96s128s2diIdI2H2H2Bf6s")
+CONFIG = struct.Struct("<8s10I2d52H96s128s2diIdI2H2H2Bf4sBx")
 VIDEO_FPS = (30, 60, 120, 300, 600)
 VIDEO_BITRATE_MBPS = (10, 20, 40)
 VIDEO_CODEC_MAX = 10
@@ -65,6 +65,8 @@ EXTRA_ACTIONS += ("preview_camera_curve_value", "preview_camera_position_tangent
 EXTRA_ACTIONS += ("level_view",)
 # Selected authored camera: value = camera index; pose[0] = list revision (119).
 EXTRA_ACTIONS += ("seek_camera",)
+EXTRA_ACTIONS += ("set_video_ae_camera",)
+EXTRA_ACTIONS += ("set_video_usd_camera",)
 
 # Optional completion signal in the unused mapping tail; existing offsets stay fixed.
 CINEMATIC_OFFSET = 2 * 1024 * 1024 + 60000
@@ -455,13 +457,20 @@ def pack_config(sequence, owner_sequence, ack_event, values):
     for layer in ("world", "players", "effects"):
         if type(values.get("video_layer_" + layer, False)) is not bool:
             raise ValueError("Video layer must be a boolean")
+    if type(values.get("video_ae_camera", False)) is not bool:
+        raise ValueError("After Effects camera export must be a boolean")
+    if type(values.get("video_usd_camera", False)) is not bool:
+        raise ValueError("USD camera export must be a boolean")
+    # The video flags byte is full; further camera formats use their own byte.
+    camera_export_flags = 1 if values.get("video_usd_camera") else 0
     video_flags = ((1 if values.get("video_fixed_step") else 0)
                    | (2 if values.get("video_depth") else 0)
                    | (4 if values.get("video_depth_exr") else 0)
                    | (8 if values.get("video_layer_world") else 0)
                    | (16 if values.get("video_layer_players") else 0)
                    | (32 if values.get("video_layer_effects") else 0)
-                   | (64 if values.get("video_pov") else 0))
+                   | (64 if values.get("video_pov") else 0)
+                   | (128 if values.get("video_ae_camera") else 0))
     video_speed = _finite(values.get("video_speed", 1.0), .05, 4, "video export speed")
     confetti_enabled = values.get("confetti_enabled", False)
     confetti_despawn = values.get("confetti_despawn_on_ground", False)
@@ -486,8 +495,8 @@ def pack_config(sequence, owner_sequence, ack_event, values):
         playback_rate, 0 if reshade is None else reshade.vk,
         0 if reshade is None else reshade.modifiers,
         video_fps, video_bitrate, video_encoder, video_flags, video_speed,
-        struct.pack("<f2x", _finite(values.get("pov_duration", 10), .1, 120, "POV duration"))
-        if values.get("video_pov") else b"\0" * 6)
+        struct.pack("<f", _finite(values.get("pov_duration", 10), .1, 120, "POV duration"))
+        if values.get("video_pov") else b"\0" * 4, camera_export_flags)
 
 
 def unpack_status(data, ack_event=0):

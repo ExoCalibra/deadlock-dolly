@@ -21,7 +21,8 @@ exports retain their documented alpha limitations. See the current
 a matching Dolly update.
 
 [Video and ReShade setup](VIDEO_AND_RESHADE.md) covers output settings, F11,
-installation and current limits. See the [guide index](README.md) for related
+installation and current limits. [Export the camera](VIDEO_AND_RESHADE.md#export-the-camera)
+covers After Effects and USD camera exports. See the [guide index](README.md) for related
 workflows and the [changelog](CHANGELOG.md) for release history.
 
 ## Start here

@@ -625,6 +625,8 @@ EditorSnapshot editor_snapshot() noexcept {
         result.video_layer_world = (c->video_flags & 8) != 0;
         result.video_layer_players = (c->video_flags & 16) != 0;
         result.video_layer_effects = (c->video_flags & 32) != 0;
+        result.video_ae_camera = (c->video_flags & 128) != 0;
+        result.video_usd_camera = (c->camera_export_flags & 1) != 0;
         const auto confetti = c->reserved;
         const auto confetti_height = confetti & 0xffffu;
         result.confetti_enabled = (confetti & (1u << 16)) != 0;
@@ -854,12 +856,16 @@ bool editor_enqueue(EditorAction action, double value, const CameraPose* pose_ov
         return configured() && !gReShadeDeferred.load() &&
                reshade_request_overlay(!reshade_overlay_open());
     // Appended UI actions retain the original action IDs.
-    if (!std::isfinite(value) || std::uint32_t(action) > std::uint32_t(EditorAction::SeekCamera))
+    if (!std::isfinite(value) ||
+        std::uint32_t(action) > std::uint32_t(EditorAction::SetVideoUsdCamera))
         return false;
     const bool preview_action=action==EditorAction::PreviewCameraCurveValue || action==EditorAction::PreviewCameraPositionTangents;
     const bool clear_preview=action==EditorAction::ClearCameraCurvePreview;
     auto state = editor_snapshot();
     if (!state.enabled && !clear_preview)
+        return false;
+    if ((action == EditorAction::SetVideoAeCamera || action == EditorAction::SetVideoUsdCamera) &&
+        (state.busy || pose_override || (value != 0 && value != 1)))
         return false;
     const bool camera_mutation =
         action == EditorAction::Capture || action == EditorAction::Replace ||
@@ -1873,7 +1879,7 @@ void editor_worker_tick(unsigned char* memory, bool connected) noexcept {
                  c.video_fps == 300 || c.video_fps == 600) &&
                 (c.video_bitrate_mbps == 0 || c.video_bitrate_mbps == 10 ||
                  c.video_bitrate_mbps == 20 || c.video_bitrate_mbps == 40) &&
-                c.video_encoder <= 10 && c.video_flags <= 127 && c.video_speed >= 0 &&
+                c.video_encoder <= 10 && (c.camera_export_flags & ~1u) == 0 && c.video_speed >= 0 &&
                 c.video_speed <= 4 && std::memchr(c.shot_name, 0, sizeof(c.shot_name)) &&
                 std::memchr(c.message, 0, sizeof(c.message));
             for (auto& b : c.bindings)

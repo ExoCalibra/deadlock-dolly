@@ -652,6 +652,16 @@ def _dispatch(app, event, bridge, *, publish):
                 raise ValueError("Unknown video encoder.")
             app.video_codec.set(_codec_label(value))
         publish()
+    elif action == "set_video_ae_camera":
+        if event["value"] not in (0, 1):
+            raise ValueError("After Effects camera export must be on or off.")
+        app.video_ae_camera.set(bool(event["value"]))
+        publish()
+    elif action == "set_video_usd_camera":
+        if event["value"] not in (0, 1):
+            raise ValueError("USD camera export must be on or off.")
+        app.video_usd_camera.set(bool(event["value"]))
+        publish()
     elif action == "set_video_fixed_step":
         app.video_fixed_step.set(bool(event["value"]))
         publish()

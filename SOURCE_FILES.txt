@@ -211,6 +211,7 @@ packaging/Portable_Start_Here.txt
 packaging/dolly.spec
 packaging/entrypoint.py
 requirements-build.txt
+tests/test_camera_export.py
 tests/test_aspect_controller.py
 tests/test_aspect_path.py
 tests/test_assert_watcher.py
@@ -468,6 +469,7 @@ docs/internal/UPDATING.md
 dolly/release_launcher.py
 dolly/gui_theme.py
 tests/test_release_launcher.py
+dolly/camera_export.py
 dolly/attach_camera.py
 dolly/bone_picker.py
 tests/test_bone_picker.py
@@ -770,3 +772,4 @@ docs/LAYER_EXPORT.md
 docs/internal/README.md
 docs/RELEASE_NOTES_0.6.58-alpha.md
 docs/RELEASE_NOTES_0.6.59-alpha.md
+docs/RELEASE_NOTES_0.6.60-alpha.md

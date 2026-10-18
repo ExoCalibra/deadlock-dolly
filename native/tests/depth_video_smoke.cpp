@@ -111,13 +111,16 @@ struct Test {
             DestroyWindow(window);
     }
     void present(unsigned id, bool missing = false, bool scaled = false,
-                 bool invalid_calibration = false) {
+                 bool invalid_calibration = false, const video::CameraSample* camera = nullptr,
+                 bool wrong_phase = false) {
         std::array<unsigned char, 640> bytes{};
         const auto put = [&bytes](unsigned offset, float value) {
             std::memcpy(bytes.data() + offset, &value, 4);
         };
         for (unsigned offset : {128u, 148u, 168u, 188u, 192u, 212u, 372u, 436u})
             put(offset, 1);
+        if (camera)
+            put(212, 4.0f / 3.0f); // Match the color canvas for exporter cross-checks.
         const float near_clip = float(id + 7);
         put(236, near_clip);
         put(248, -1);
@@ -165,7 +168,13 @@ struct Test {
         // depth_scene_smoke separately verifies the real draw detours.
         tracker->draw(context.p);
         auto scene = tracker->consume(context.p);
-        video::capture(chain.p, device.p, context.p, missing ? nullptr : &scene, double(id) / 10);
+        // A camera stands in for the bridge's view hook, which publishes the
+        // phase and its applied camera before the frame is presented.
+        if (camera)
+            video::publish_path_replay_time(true, double(id) / 10 + (wrong_phase ? 1 : 0), false,
+                                            camera);
+        video::capture(chain.p, device.p, context.p, missing ? nullptr : &scene, double(id) / 10,
+                       camera != nullptr);
         chain.p->Present(0, 0);
     }
     void wait() {
@@ -189,7 +198,7 @@ int wmain(int argc, wchar_t** argv) {
             fs::path(argv[2]) / (L"depth-video-" + std::to_wstring(GetCurrentProcessId()));
         require(fs::create_directory(root), "Could not create unique output directory");
         Test t;
-        for (unsigned mode = 0; mode < 9; ++mode) {
+        for (unsigned mode = 0; mode < 14; ++mode) {
             // Each take gets its own folder: the depth layer lives beside the
             // color file as <parent>\depth and is never overwritten.
             const fs::path mode_root = root / std::to_wstring(mode);
@@ -204,6 +213,7 @@ int wmain(int argc, wchar_t** argv) {
             options.bitrate = 2000000;
             options.fixed_step = mode != 1;
             options.depth = true;
+            options.camera_track = mode == 0 || (mode >= 9 && mode <= 12);
             options.depth_exr = (mode == 0 || mode == 7);
             if (mode == 5) {
                 // The paired depth master needs the external encoder; a native
@@ -214,6 +224,10 @@ int wmain(int argc, wchar_t** argv) {
                 video::shutdown();
                 video::reset_resources();
                 continue;
+            }
+            if (mode == 11) {
+                std::ofstream foreign(path.wstring() + L".camera-track.json");
+                foreign << "foreign camera";
             }
             require(video::start(options), "Paired recording start failed");
             const auto end = GetTickCount64() + 15000;
@@ -226,7 +240,9 @@ int wmain(int argc, wchar_t** argv) {
                 // paired depth keeps its own size and per-frame TAA jitter.
                 // Mode 8 supplies an unrelated projection and must retain the
                 // calibration error instead of reporting generic pairing failure.
-                t.present(frame % 100 + 1, mode == 6 && frame < 3, mode == 7, mode == 8);
+                const video::CameraSample camera{{0, 0, 0}, {90, 0, -90}, 90};
+                t.present(frame % 100 + 1, mode == 6 && frame < 3, mode == 7, mode == 8,
+                          (mode == 0 || mode >= 10) ? &camera : nullptr, mode == 10);
                 const auto status = video::status();
                 if (status.state == video::State::failed) {
                     if (mode == 8) {
@@ -276,15 +292,18 @@ int wmain(int argc, wchar_t** argv) {
             else if (mode == 4)
                 video::reset_resources();
             else
-                video::stop(mode == 2);
+                video::stop(mode == 2 || mode == 12);
             t.wait();
             const auto status = video::status();
-            const auto expected = mode == 2   ? video::State::cancelled
-                                  : mode == 3 ? video::State::failed
-                                              : video::State::completed;
+            const auto expected = (mode == 2 || mode == 12) ? video::State::cancelled
+                                  : mode == 3               ? video::State::failed
+                                                            : video::State::completed;
             require(status.state == expected, "Unexpected paired recorder final state");
             video::shutdown();
             video::reset_resources();
+            if (expected == video::State::cancelled)
+                require(!fs::exists(path.wstring() + L".camera-track.json"),
+                        "Cancelled take retained camera metadata");
             if (expected == video::State::completed) {
                 require(fs::exists(path) && fs::exists(mode_root / L"depth" / L"manifest.json"),
                         "Completed pair missing output");
@@ -324,9 +343,47 @@ int wmain(int argc, wchar_t** argv) {
                     "\"last_frame\": " + std::to_string(status.frames_written - 1) + ",";
                 require(text.find(last) != std::string::npos,
                         "Shot metadata included an unwritten tail frame");
-                require(text.find("\"clock_fallback_frames\": " +
-                                  std::to_string(status.frames_written) + ",") != std::string::npos,
+                const auto clock = (mode == 0 || mode >= 10) ? "\"clock_native_frames\": "
+                                                             : "\"clock_fallback_frames\": ";
+                require(text.find(clock + std::to_string(status.frames_written) + ",") !=
+                            std::string::npos,
                         "Clock metadata did not match the written frames");
+                // Only the native view clock carries a rendered camera. Its
+                // sidecar has exactly one row per encoded frame.
+                const auto camera_path = fs::path(path.wstring() + L".camera-track.json");
+                if (mode == 0) {
+                    std::ifstream camera_file(camera_path);
+                    const std::string camera((std::istreambuf_iterator<char>(camera_file)), {});
+                    std::size_t rows = 0;
+                    for (auto at = camera.find("\n    ["); at != std::string::npos;
+                         at = camera.find("\n    [", at + 1))
+                        ++rows;
+                    require(camera.find("\"format\": \"deadlock-dolly-camera-track\"") !=
+                                    std::string::npos &&
+                                rows == status.frames_written &&
+                                camera.find("\"complete\": true") != std::string::npos &&
+                                camera.find("\"first_qpc\": " + std::to_string(status.first_qpc)) !=
+                                    std::string::npos,
+                            "Camera metadata did not match the written frames");
+                    video::publish_path_replay_time(false, 0);
+                } else if (mode >= 9 && mode <= 11) {
+                    std::ifstream camera_file(camera_path);
+                    const std::string camera((std::istreambuf_iterator<char>(camera_file)), {});
+                    if (mode == 11)
+                        require(camera == "foreign camera",
+                                "Camera writer overwrote a foreign file");
+                    else
+                        require(camera.find("\"complete\": false") != std::string::npos &&
+                                    camera.find("missing or invalid camera sample") !=
+                                        std::string::npos,
+                                "Missing/stale camera metadata appeared complete");
+                } else {
+                    require(!fs::exists(camera_path),
+                            "Camera metadata collected when not requested");
+                }
+                for (const auto& entry : fs::directory_iterator(mode_root))
+                    require(entry.path().wstring().find(L".pending-") == std::wstring::npos,
+                            "Camera finalization leaked its temporary file");
                 if (mode == 7) {
                     // The paired depth keeps the scene target's size and names
                     // the color recording it belongs to.

@@ -124,6 +124,8 @@ def build_export(app):
         video_reconstructed_audio=app.video_reconstructed_audio,
         video_source=app.video_source,
         video_status_text=app.video_status_text,
+        video_ae_camera=app.video_ae_camera,
+        video_usd_camera=app.video_usd_camera,
         codec_choices=tuple(c[1] for c in CODEC_CHOICES),
         bitrate_choices=tuple(BITRATE_PRESETS),
     )
@@ -169,8 +171,11 @@ def build_export(app):
     app.video_path_entry.bind("<FocusOut>", app._remember_export_folder)
     app.video_path_entry.bind("<Return>", app._remember_export_folder)
     app.video_pov_controls = view.video_pov_controls
+    app.video_camera_options = view.video_camera_options
     app.video_pov_duration_combo = view.video_pov_duration_combo
     app.video_reconstructed_audio_check = view.video_reconstructed_audio_check
+    app.video_ae_camera_check = view.video_ae_camera_check
+    app.video_usd_camera_check = view.video_usd_camera_check
     app.video_source_combo = view.video_source_combo
     app.video_speed_combo = view.video_speed_combo
     app.video_start_button = view.video_start_button

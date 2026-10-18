@@ -160,6 +160,95 @@ require the reviewed scene classes. These checks stop an unsupported take
 instead of presenting it as a complete layer. See [Layer export](LAYER_EXPORT.md)
 for the different requirements.
 
+## Export the camera
+
+When recording, Dolly can save Camera data so that 3D layers, text and
+effects can follow the shot in After Effects, Blender and compatible USD apps.
+
+### Turn it on
+
+Tick **Export After Effects camera (.jsx)**, **Export USD camera (.usda)** or
+both. They're in the **Camera source** card on the desktop **Export** tab and on
+game overlay's Export page. Camera exports work for camera paths, single bone
+cameras and Player POV. The files are written when the recording finishes. Camera export is off by default.
+No depth pass is required.
+
+### Files
+
+| File | What it is |
+| --- | --- |
+| `<video>.mp4.camera-track.json` (or `.mkv.camera-track.json`) | Validated per-frame camera motion and recording identity. |
+| `<video>_camera.jsx` | After Effects script that builds a composition with the camera and video. |
+| `<video>_camera.usda` | USD layer with the camera, for Blender and other apps. |
+
+### After Effects
+
+1. In After Effects, choose **File → Scripts → Run Script File…** and pick the
+   `_camera.jsx`.
+2. The script imports the video from the script's own folder (or asks you to
+   locate it), conforms it to the take's frame rate and builds a comp at the
+   video's size with a **Dolly camera** and the video as its bottom layer.
+   Running it again reuses the imported video.
+
+If After Effects cannot open the footage, the camera still imports at the
+recorded size. The script explains the footage error and keeps that message in
+the composition's comment. For example, FFV1 lossless MKV recordings may need
+conversion to a supported codec/container first. Keep the dimensions, frame count
+and FPS unchanged, then add the converted video at frame 0 of the camera comp.
+Canceling the Locate dialog also imports the camera without video.
+
+### Blender / other USD apps
+
+1. In Blender, choose **File → Import → Universal Scene Description** and pick
+   the `_camera.usda`. Keep **Apply Unit Conversion Scale** on and **Scale** at
+   1, the defaults: the layer is in inches (`metersPerUnit` 0.0254, Z up), and
+   depth of field relies on that conversion.
+2. Set the render resolution to the video's size and the frame rate to the
+   take's FPS.
+3. Add the video as the camera's background (a Movie Clip) and set the clip's
+   **Start Frame** to 0: the USD camera starts at frame 0, Blender's clips at 1.
+
+The camera's frames match the video's frames one for one, so scrub frame by
+frame to check alignment. If the background seems to jump during playback,
+use **Playback → Sync → Play Every Frame**, or a timecode proxy or image
+sequence for frame-exact video.
+
+### Key markers
+
+Each keyframe gets a marker (a guide null in After Effects, an Xform under
+`/Dolly/Keys` in USD) at the camera's actual position when the shot reached
+that key, labelled with its time in the video. Keys the take never reached are
+left out. Player POV takes have no markers.
+
+### Depth of field
+
+Both **Citadel DOF** and **Native DOF** are converted from authored settings,
+rather than measured from the renderer. Native DOF is an approximation. Check the
+imported focus and blur in your app and adjust them as needed.
+
+### Complete data and alignment
+
+Dolly requires a camera sample for every encoded frame and verifies that the
+metadata belongs to this recording. It does not silently substitute authored
+keys for missing camera motion. If camera data is missing, incomplete, too large
+or mismatched, the video is kept and the log explains why camera export failed.
+Existing camera tracks and JSX/USD outputs are never overwritten.
+
+Camera collection is enabled only when either camera export is requested. It
+supports up to 262,144 frames (about 73 minutes at 60 FPS, or 7 minutes at 600 FPS).
+Beyond that, camera export is incomplete and refused; video recording continues.
+
+Both outputs use encoded-frame order at the take's FPS. AE conforms the imported
+footage to that rate. This is a frame-for-frame editing timeline, which can differ
+from original elapsed time in real-time recordings with variable timestamps.
+Capture and encoded timestamps are retained in the track.
+
+For paired depth takes, Dolly cross-checks the hook track against the complete
+renderer camera bundle and uses its calibrated camera. External cameras use the
+stable projection; temporal antialiasing jitter remains in the depth bundle for
+reconstruction. A mismatch is reported rather than choosing a source silently.
+Camera exports contain no map or player geometry, animation or materials.
+
 ## Set up ReShade
 
 1. Obtain a **64-bit ReShade runtime with full add-on support** from the

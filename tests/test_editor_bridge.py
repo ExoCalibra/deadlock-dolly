@@ -406,6 +406,31 @@ class EditorBridgeTests(unittest.TestCase):
                          [("set_video_layer_world", 1), ("set_video_layer_players", 0),
                           ("set_video_layer_effects", 1)])
 
+    def test_ae_camera_flag_and_action_id_are_appended(self):
+        self.bridge.configure_editor(video_ae_camera=True, video_layer_effects=True)
+        config = self.memory[w.CONFIG_OFFSET:w.CONFIG_OFFSET+w.CONFIG.size]
+        self.assertEqual(struct.unpack_from("<B", config, 437)[0], 128 | 32)
+        with self.assertRaises(ValueError):
+            self.bridge.configure_editor(video_ae_camera=1)
+        self.publish([(1, 120, 1), (2, 120, 0)])
+        self.assertEqual([(e["action"], e["value"]) for e in self.bridge.editor_status()["events"]],
+                         [("set_video_ae_camera", 1), ("set_video_ae_camera", 0)])
+
+    def test_usd_camera_uses_its_own_byte_and_appended_action_id(self):
+        self.assertEqual(w.CONFIG.size, 448)
+        self.bridge.configure_editor(video_usd_camera=True, video_pov=True, pov_duration=30.0)
+        config = self.memory[w.CONFIG_OFFSET:w.CONFIG_OFFSET+w.CONFIG.size]
+        # The POV duration keeps its place; the former padding carries the flag.
+        self.assertEqual(struct.unpack_from("<fBB", config, 442), (30.0, 1, 0))
+        self.bridge.configure_editor(video_usd_camera=False, video_pov=False)
+        config = self.memory[w.CONFIG_OFFSET:w.CONFIG_OFFSET+w.CONFIG.size]
+        self.assertEqual(struct.unpack_from("<fBB", config, 442), (0.0, 0, 0))
+        with self.assertRaises(ValueError):
+            self.bridge.configure_editor(video_usd_camera=1)
+        self.publish([(1, 121, 1)])
+        self.assertEqual([(e["action"], e["value"]) for e in self.bridge.editor_status()["events"]],
+                         [("set_video_usd_camera", 1)])
+
     def test_video_export_action_ids_follow_media_actions(self):
         self.publish([(1, 34, 300), (2, 35, 40), (3, 36, 2), (4, 37, 1), (5, 38, .1)])
         events = self.bridge.editor_status()["events"]

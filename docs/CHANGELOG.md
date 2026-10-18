@@ -4,6 +4,20 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.60-alpha
+
+- Add optional After Effects JSX and USD camera exports, based on @SamuelCurrid's
+  [PR #25](https://github.com/cravvnn/deadlock-dolly/pull/25), with recorded camera
+  motion for camera paths, attached cameras and Player POV.
+- Require complete camera coverage matched to the finished recording. Protect
+  existing camera files, bound optional metadata collection and keep valid video
+  when a camera export fails. Run camera conversion on the operation worker.
+- Adapt the existing calibrated depth camera bundle for both exporters, preserving
+  depth reconstruction and reporting the stable external-camera projection policy.
+  Preserve the 0.6.59 replay-seek and Players viewport fixes.
+
+Full details: [0.6.60 release notes](RELEASE_NOTES_0.6.60-alpha.md).
+
 ## 0.6.59-alpha
 
 - Use the completed replay's verified packet boundaries for absolute and relative

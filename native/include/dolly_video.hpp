@@ -68,6 +68,8 @@ struct Options {
     // Matte pass: force every color clear to white so the recorded layer can
     // be combined with its black pass into an alpha channel.
     bool white_clear = false;
+    // Optional per-encoded-frame camera metadata; no collection when off.
+    bool camera_track = false;
     // Hard cap on admitted GPU copies, including paired depth (0 unlimited).
     // Reaching it closes admission and finalizes through the normal drain.
     std::uint32_t max_frames = 0;
@@ -107,12 +109,20 @@ bool wants_shot_only() noexcept;
 void capture(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11DeviceContext* context,
              const depth::SceneFrame* scene = nullptr, double replay_time = -1,
              bool native_clock = false) noexcept;
+// Rendered camera: Position, pitch/yaw/roll in degrees and horizontal FOV
+// Recorded per encoded frame into <video>.camera-track.json.
+struct CameraSample {
+    double position[3]{}, angles[3]{};
+    double horizontal_fov = 0;
+};
 // Latest authored-path replay time from the native view callback. Returns false
 // when no native path evaluated a playing frame on the current view. Layer
 // takes use it so every take starts at the same authored frame.
 bool path_replay_time(double& seconds) noexcept;
-// Bridge-side publication of that clock (called from the native view hook).
-void publish_path_replay_time(bool playing, double phase, bool completed = false) noexcept;
+// Bridge-side publication of that clock (called from the native view hook),
+// with the camera the hook applied for the same phase when one is known.
+void publish_path_replay_time(bool playing, double phase, bool completed = false,
+                              const CameraSample* camera = nullptr) noexcept;
 // Call at a serialized render/resize boundary before releasing the device.
 // Stops an active recording and releases only recorder-owned GPU resources.
 void reset_resources() noexcept;

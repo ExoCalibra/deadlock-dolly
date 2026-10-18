@@ -102,13 +102,13 @@ class MediaTransport:
 
     def start_video(self, path, *, fps=60, bitrate=20000000, encoder=0, codec=0,
                     quality=0, preset=0, ffmpeg_path="", fixed_step=False, depth=False,
-                    depth_exr=False, shot_only=False, white_clear=False, max_frames=0):
+                    depth_exr=False, shot_only=False, white_clear=False, max_frames=0, camera_track=False):
         return self._media_command("start_video", path=str(path), fps=fps, bitrate=bitrate,
                                    encoder=encoder, codec=codec, quality=quality,
                                    preset=preset, ffmpeg_path=str(ffmpeg_path) if ffmpeg_path else "",
                                    fixed_step=bool(fixed_step), depth=bool(depth),
                                    depth_exr=bool(depth_exr), shot_only=bool(shot_only),
-                                   white_clear=bool(white_clear), max_frames=max_frames)
+                                   white_clear=bool(white_clear), max_frames=max_frames, camera_track=camera_track)
 
     def stop_video(self, cancel=False):
         if type(cancel) is not bool:

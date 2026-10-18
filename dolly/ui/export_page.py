@@ -30,6 +30,8 @@ class ExportState:
     video_reconstructed_audio: tk.Variable
     video_source: tk.Variable
     video_status_text: tk.Variable
+    video_ae_camera: tk.Variable
+    video_usd_camera: tk.Variable
     codec_choices: tuple[str, ...]
     bitrate_choices: tuple[str, ...]
 
@@ -70,6 +72,12 @@ class ExportPage:
         ttk.Label(self.video_pov_controls,
                   text="Select a hero with Game Follow or F9, then pause at the start. F8: return to Export. HUD hides automatically.",
                   style="CardMuted.TLabel", wraplength=760).pack(fill="x")
+        camera_options = self.video_camera_options = ttk.Frame(source, style="Card.TFrame")
+        camera_options.pack(anchor="w", pady=(0, GAP))
+        self.video_ae_camera_check = ttk.Checkbutton(camera_options, style="Card.TCheckbutton", text="Export After Effects camera (.jsx)", variable=state.video_ae_camera)
+        self.video_ae_camera_check.pack(side="left", padx=(0, 18))
+        self.video_usd_camera_check = ttk.Checkbutton(camera_options, style="Card.TCheckbutton", text="Export USD camera (.usda)", variable=state.video_usd_camera)
+        self.video_usd_camera_check.pack(side="left")
         destination = card(body, "Destination")
         self.video_destination_card = destination
         self.video_path_entry = field(destination, "Output file", state.video_path)
