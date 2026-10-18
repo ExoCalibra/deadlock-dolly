@@ -22,7 +22,9 @@ Conventions (matrix conventions live in ``docs/CAMERA_BUNDLE.md``):
   edge-on.
 - The view-space point behind a pixel at distance ``d`` follows the stored
   projection: ``vz = -d``, ``cw = P[3][2]*-d + P[3][3]``,
-  ``vx = ndc_x*cw/P[0][0]``, ``vy = ndc_y*cw/P[1][1]``.
+  ``vx = (ndc_x*cw - P[0][2]*vz - P[0][3])/P[0][0]``,
+  ``vy = (ndc_y*cw - P[1][2]*vz - P[1][3])/P[1][1]``. The X/Y projection
+  offsets retain the renderer's bounded temporal jitter.
 - Gradients are central differences across two pixels
   (``P[col+1] - P[col-1]`` and ``P[row+1] - P[row-1]``); the normal is
   ``cross(gradient_down, gradient_right)`` normalized, which faces the viewer
@@ -86,9 +88,9 @@ def view_points(record, distances):
     ndc_y = 1.0 - 2.0 * (np.arange(height) + 0.5) / height
     with np.errstate(invalid="ignore", divide="ignore"):
         cw = -projection[14] * distances + projection[15]
-        vx = ndc_x[None, :] * cw / projection[0]
-        vy = ndc_y[:, None] * cw / projection[5]
         vz = -distances
+        vx = (ndc_x[None, :] * cw - projection[2] * vz - projection[3]) / projection[0]
+        vy = (ndc_y[:, None] * cw - projection[6] * vz - projection[7]) / projection[5]
         points = np.stack([vx, vy, vz], axis=-1)
     valid = (np.isfinite(distances) & (distances > 0) & (cw > 0)
              & np.isfinite(points).all(axis=-1))

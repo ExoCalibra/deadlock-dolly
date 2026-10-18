@@ -80,6 +80,9 @@ per-view constants do. Do not assume one convention for both.
   `inverse_z = [a, b, c, d]` holds that 2×2's ordinary matrix inverse,
   row-major. Non-oblique projections only (`[2][0] [2][1] [3][0] [3][1]` are
   zero: no Z/W dependence on X/Y).
+  Temporal offsets in `[0][2]` and `[1][2]` are retained and validated within
+  one depth pixel per axis, normalized by `[3][2]`. Reconstruction must use
+  the sampled offsets; they do not change the inverse-Z conversion.
 - **Clip → device**: `ndc = (clip.x/clip.w, clip.y/clip.w, clip.z/clip.w)`,
   then `device_z = viewport_min + ndc_z · (viewport_max − viewport_min)`.
 - **Distance**: `linear_z = (device_z − viewport_min) / (viewport_max − viewport_min)`,

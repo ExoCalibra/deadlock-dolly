@@ -20,10 +20,12 @@ reject the sample. Size or shader-slot identity alone is insufficient proof
 that a constant buffer describes the captured scene.
 
 The projection reader checks the viewport, inverse-Z block, view basis,
-position and structural matrix entries. The current reader requires the X/Y
-projection-offset entries to be near zero, which can reject temporally jittered
-projections. A successful Color recording does not establish compatibility for
-every TAA/upscaling configuration.
+position and structural matrix entries. X/Y temporal projection offsets are
+accepted within one depth pixel per axis, normalized by homogeneous clip-W
+scale with a float-rounding margin. The sampled offsets remain in the camera
+bundle. Cross-axis terms and oblique Z/W dependence remain rejected. A
+successful Color recording does not establish compatibility for every
+TAA/upscaling configuration.
 
 Relevant implementation:
 

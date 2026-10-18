@@ -13,6 +13,7 @@
 #include <limits>
 #include <stdexcept>
 #include <cstdio>
+#include <cwchar>
 
 namespace {
 void require(bool value, const char* message) {
@@ -109,7 +110,8 @@ struct Test {
         if (window)
             DestroyWindow(window);
     }
-    void present(unsigned id, bool missing = false, bool scaled = false) {
+    void present(unsigned id, bool missing = false, bool scaled = false,
+                 bool invalid_calibration = false) {
         std::array<unsigned char, 640> bytes{};
         const auto put = [&bytes](unsigned offset, float value) {
             std::memcpy(bytes.data() + offset, &value, 4);
@@ -129,10 +131,24 @@ struct Test {
         put(332, scene_height);
         put(336, 1.0f / scene_width);
         put(340, 1.0f / scene_height);
+        if (scaled) {
+            // Temporal AA shifts the sampled projection by a subpixel amount.
+            // Alternate the shift so stale calibration cannot pass this take.
+            put(200, (id % 2 ? 1.0f : -1.0f) / scene_width);
+            put(216, (id % 2 ? -1.0f : 1.0f) / scene_height);
+        }
+        if (invalid_calibration)
+            put(200, 123);
         put(376, near_clip);
         put(380, std::numeric_limits<float>::infinity());
         put(456, -1);
         context.p->UpdateSubresource(cb.p, 0, nullptr, bytes.data(), 0, 0);
+        if (invalid_calibration) {
+            // Other modes intentionally exercise repeated bindings. This
+            // diagnostic fixture explicitly supplies exactly one candidate.
+            std::array<ID3D11Buffer*, 14> empty{};
+            context.p->VSSetConstantBuffers(0, static_cast<UINT>(empty.size()), empty.data());
+        }
         context.p->VSSetConstantBuffers(id % 2, 1, &cb.p);
         context.p->OMSetDepthStencilState(state.p, 0);
         // The scene pass renders into its own (possibly smaller) color target;
@@ -173,7 +189,7 @@ int wmain(int argc, wchar_t** argv) {
             fs::path(argv[2]) / (L"depth-video-" + std::to_wstring(GetCurrentProcessId()));
         require(fs::create_directory(root), "Could not create unique output directory");
         Test t;
-        for (unsigned mode = 0; mode < 8; ++mode) {
+        for (unsigned mode = 0; mode < 9; ++mode) {
             // Each take gets its own folder: the depth layer lives beside the
             // color file as <parent>\depth and is never overwritten.
             const fs::path mode_root = root / std::to_wstring(mode);
@@ -184,11 +200,11 @@ int wmain(int argc, wchar_t** argv) {
             options.ffmpeg = argv[1];
             options.encoder = video::Encoder::ffmpeg;
             options.codec = video::Codec::lossless;
-            options.fps = 30;
+            options.fps = mode == 7 ? 120 : 30;
             options.bitrate = 2000000;
             options.fixed_step = mode != 1;
             options.depth = true;
-            options.depth_exr = (mode == 0); // Mode 0 also exercises the float EXR sequence.
+            options.depth_exr = (mode == 0 || mode == 7);
             if (mode == 5) {
                 // The paired depth master needs the external encoder; a native
                 // Media Foundation request must be rejected.
@@ -202,14 +218,29 @@ int wmain(int argc, wchar_t** argv) {
             require(video::start(options), "Paired recording start failed");
             const auto end = GetTickCount64() + 15000;
             bool enough = false;
+            bool calibration_rejected = false;
             for (unsigned frame = 0; GetTickCount64() < end; ++frame) {
                 // Mode 6 starts with transition frames that have no verified
                 // scene; they must be skipped, not fail the take. Mode 7
                 // renders the scene below the color size (upscaling), so the
-                // paired depth is captured at the scene's own resolution.
-                t.present(frame % 100 + 1, mode == 6 && frame < 3, mode == 7);
+                // paired depth keeps its own size and per-frame TAA jitter.
+                // Mode 8 supplies an unrelated projection and must retain the
+                // calibration error instead of reporting generic pairing failure.
+                t.present(frame % 100 + 1, mode == 6 && frame < 3, mode == 7, mode == 8);
                 const auto status = video::status();
                 if (status.state == video::State::failed) {
+                    if (mode == 8) {
+                        std::fwprintf(stderr, L"Rejected invalid calibration: 0x%08X %ls\n",
+                                      status.error_code, status.error);
+                        require(status.frames_written == 0 &&
+                                    status.error_code == HRESULT_FROM_WIN32(ERROR_INVALID_DATA),
+                                "Invalid calibration lost its readback HRESULT");
+                        require(std::wcsstr(status.error, L"no valid camera calibration") &&
+                                    std::wcsstr(status.error, L"calibration=0/1"),
+                                "Invalid calibration lost its readback diagnosis");
+                        calibration_rejected = true;
+                        break;
+                    }
                     std::fwprintf(stderr, L"%ls\n", status.error);
                     throw std::runtime_error("Paired recording failed");
                 }
@@ -218,6 +249,16 @@ int wmain(int argc, wchar_t** argv) {
                     break;
                 }
                 Sleep(8);
+            }
+            if (mode == 8) {
+                require(calibration_rejected,
+                        "Invalid calibration was accepted or never diagnosed");
+                t.wait();
+                video::shutdown();
+                video::reset_resources();
+                require(!fs::exists(path) && !fs::exists(mode_root / L"depth"),
+                        "Invalid calibration retained partial paired output");
+                continue;
             }
             if (!enough) {
                 const auto status = video::status();
@@ -259,7 +300,7 @@ int wmain(int argc, wchar_t** argv) {
                 require(bundle.find("\"state\": \"complete\"") != std::string::npos &&
                             bundle.find("\"view\": [") != std::string::npos,
                         "Camera bundle record state missing");
-                if (mode == 0) {
+                if (mode == 0 || mode == 7) {
                     // The float EXR sequence: one file per color frame, named by
                     // the zero-based color index, and recorded in the manifest.
                     require(fs::exists(mode_root / L"depth" / L"exr"),

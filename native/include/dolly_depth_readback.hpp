@@ -37,6 +37,7 @@ public:
     void reset() noexcept;
     std::size_t pending() const noexcept;
     long error() const noexcept;
+    const char* diagnostic() const noexcept;
 
 private:
     struct Impl;

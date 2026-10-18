@@ -4,6 +4,16 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.58-alpha
+
+- Accept bounded temporal projection jitter for paired depth while preserving
+  the actual camera projection and existing invalid/conflicting-sample checks.
+- Retain depth-readback failure details and distinguish frame-pairing mismatches.
+- Include current native arithmetic hardening, Steam discovery and interrupted
+  plugin-cleanup fixes in the Windows package.
+- Refresh the README demo, contributor credits, current guides and portable
+  documentation links; preserve older clients' release-highlight format.
+
 ## 0.6.57-alpha
 
 - Build and tooling release; no app behaviour changes on Windows.

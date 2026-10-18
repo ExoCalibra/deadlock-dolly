@@ -230,6 +230,21 @@ class ReprojectionTests(unittest.TestCase):
         projected = project_point(loaded, loaded.records[0], (0, 0, -7))
         self.assertAlmostEqual(projected.distance, 7.0, places=4)
 
+    def test_subpixel_projection_offsets_preserve_depth_and_pixel_shift(self):
+        projection = [2 * value for value in standard_projection()]
+        projection[2], projection[6] = f32(3 / 2560), f32(2 / 1440)
+        loaded = parse_bundle(bundle([record(
+            projection=projection, inverse_z=[value / 2 for value in standard_inverse()])],
+            width=2560, height=1440, color_width=3840, color_height=2160))
+        self.assertEqual(validate_bundle(loaded), [])
+        item = loaded.records[0]
+        self.assertEqual(item.projection, tuple(projection))
+        projected = project_point(loaded, item, (0, 0, -14))
+        self.assertAlmostEqual(projected.x, 1280 - .75, places=6)
+        self.assertAlmostEqual(projected.y, 720 + .5, places=6)
+        self.assertAlmostEqual(projected.device_z, .5, places=9)
+        self.assertAlmostEqual(projected.distance, 14, places=9)
+
     def test_projection_only_records_cannot_project(self):
         payload = partial_record(0)
         loaded = parse_bundle(bundle([payload], complete=False, partial_reason="missing-view"))
@@ -258,6 +273,29 @@ class ValidationTests(unittest.TestCase):
     def test_valid_bundle_passes(self):
         loaded = parse_bundle(bundle([record(0), record(1)]))
         self.assertEqual(validate_bundle(loaded), [])
+
+    def test_projection_offsets_are_bounded_by_one_depth_pixel(self):
+        for axis, pixels in ((2, 2560), (6, 1440)):
+            for scale in (.5, 1, 2):
+                for shift in (-1, .5, 1, 1.001, 123):
+                    with self.subTest(axis=axis, scale=scale, shift=shift):
+                        projection = [scale * value for value in standard_projection()]
+                        projection[axis] = f32(2 * scale * shift / pixels)
+                        loaded = parse_bundle(bundle([record(
+                            projection=projection,
+                            inverse_z=[value / scale for value in standard_inverse()])],
+                            width=2560, height=1440, color_width=1920, color_height=1080))
+                        issues = validate_bundle(loaded)
+                        if abs(shift) <= 1:
+                            self.assertEqual(issues, [])
+                        else:
+                            self.assertTrue(any('jitter' in issue for issue in issues), issues)
+        for index in (1, 3, 4, 7, 8, 9, 12, 13):
+            with self.subTest(malformed_index=index):
+                projection = standard_projection()
+                projection[index] = 123
+                issues = validate_bundle(parse_bundle(bundle([record(projection=projection)])))
+                self.assertTrue(any('oblique' in issue for issue in issues), issues)
 
     def test_tampering_is_flagged(self):
         cases = {

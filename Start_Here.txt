@@ -1,4 +1,4 @@
-DEADLOCK DOLLY 0.6.57 ALPHA - SOURCE CHECKOUT
+DEADLOCK DOLLY 0.6.58 ALPHA - SOURCE CHECKOUT
 
 SOURCE USERS: run Launch_Dolly.bat or python -m dolly from this folder with
 64-bit Python 3.10+ and Tcl/Tk. The basic editor needs no pip packages. Native
@@ -179,7 +179,7 @@ COMPATIBILITY AND UPDATES
 Dolly carries your installed addon mounts (Deadlock Mod Manager, Grimoire or a manual setup) into
 its temporary game configuration and still restores your original gameinfo.gi
 exactly on exit. Uncompiled Panorama files inside mounted mod folders are still
-refused with their exact path. See docs/RELEASE_NOTES_0.6.57-alpha.md for this version's changes.
+refused with their exact path. See docs/RELEASE_NOTES_0.6.58-alpha.md for this version's changes.
 
 The loading screen shows a Dolly-branded card at the top center through the
 game's Panorama UI, without a duplicate native popup. Automatic replay loading
