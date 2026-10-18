@@ -24,7 +24,7 @@
 Capture the free camera, shape a shot and play it back with animated framing and
 camera variables.
 
-**Current source: 0.6.56-alpha.** The portable Windows build opens through
+**Current source: 0.6.57-alpha.** The portable Windows build opens through
 `Dolly.exe`. Python and Tcl/Tk are bundled; no separate installation is needed.
 
 **THIS MOD INJECTS CODE INTO DEADLOCK — USE AT YOUR OWN RISK.**
@@ -374,7 +374,8 @@ separate terms in [assets/README.md](assets/README.md).
 Recent releases and the complete history live in the [changelog](docs/CHANGELOG.md)
 and the per-version [release notes](docs/).
 
-- **[0.6.56-alpha](docs/RELEASE_NOTES_0.6.56-alpha.md)** — seek to the selected saved camera from the Replay timeline, with explicit seek controls and guarded camera requests.
+- **[0.6.57-alpha](docs/RELEASE_NOTES_0.6.57-alpha.md)** - build and tooling release: the bundled FFmpeg pin was refreshed after the upstream archive was pruned, and the hosted Windows workflow works again. No app behaviour changes.
+- **[0.6.56-alpha](docs/RELEASE_NOTES_0.6.56-alpha.md)** - seek to the selected saved camera from the Replay timeline, with explicit seek controls and guarded camera requests.
 - **[0.6.55-alpha](docs/RELEASE_NOTES_0.6.55-alpha.md)** — restored timeline player selection on the current Deadlock build, smooth Follow slide transitions, and update highlights that accept the published release heading.
 - **[0.6.54-alpha](docs/RELEASE_NOTES_0.6.54-alpha.md)** — startup that waits out a slow shader rebuild, per-frame camera files for paired depth takes, and a float EXR choice that can't be silently dropped.
 - **[0.6.53-alpha](docs/RELEASE_NOTES_0.6.53-alpha.md)** — Deadlock build 6793 support, authored arrival/departure handles with live drag previews, and quieter replay pauses, with Follow held back on that build until its live re-check.

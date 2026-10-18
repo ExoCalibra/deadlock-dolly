@@ -1,5 +1,17 @@
 # Changes
 
+## 0.6.57-alpha
+
+- Build and tooling release; no app behaviour changes on Windows.
+- Refresh the pinned FFmpeg archive: the previous dated autobuild was pruned
+  upstream, so a fresh checkout or hosted build failed with HTTP 404 while
+  preparing the bundled encoder. Same 8.1 LGPL line, shared libraries, encoder
+  set and notices.
+- Fix the hosted Windows workflow: its temporary files no longer go through the
+  runner's 8.3 path alias, the native campaths smoke check measures the frame it
+  actually renders instead of a fixed 1080, and the C++ parity gate probes the
+  available compiler instead of assuming it can build.
+
 ## 0.6.56-alpha
 
 - Seek to the selected saved camera from the Replay timeline using its exact
