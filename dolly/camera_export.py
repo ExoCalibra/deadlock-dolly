@@ -18,6 +18,8 @@ pos:      (x, y, z) -> (x, y, z)
 rotation: rotateXYZ, R = Rz * Ry * Rx
 focal:    (horizontalAperture / 2) / tan(hfov / 2)
 dof:      focusDistance = focus distance, fStop = (focalLength / 10) / aperture diameter
+
+DOF: Citadel DOF exports correctly. Native DOF's ranges are approximate.
 """
 
 from __future__ import annotations
@@ -208,14 +210,49 @@ CITADEL_SWITCHES = ("r_depth_of_field", "r_citadel_depthoffield_enable")
 CITADEL_FOCUS = "r_citadel_depthoffield_focus_distance"
 CITADEL_APERTURE = "r_citadel_depthoffield_aperture_diameter"
 CITADEL_FOCUS_DEFAULT = 200.0  # Dolly's Citadel default when no focus is authored
+NATIVE_RANGES = "r_dof_override_ranges"
+NATIVE_DISTANCES = ("r_dof_override_near_blurry", "r_dof_override_near_crisp",
+                    "r_dof_override_far_crisp", "r_dof_override_far_blurry")
+NATIVE_DEFAULTS = (-100.0, 0.0, 180.0, 2000.0)  # The game's defaults
+NATIVE_CRISP_BLUR = 1 / 1500
+NATIVE_FULL_BLUR = 1 / 50
+
+
+def native_lens(ranges, fov: float):
+    """A lens approximating Native DOF's ranges: (focus distance, aperture) in inches, or None.
+
+    A lens blurs in proportion to |1/focus - 1/distance|. With both sides, the
+    focus sits between the crisp edges and both are just noticeably blurred.
+    With one side, its crisp-to-blurry ramp sets the rate and the focus sits
+    just inside its crisp edge.
+    """
+    near_blurry, near_crisp, far_crisp, far_blurry = ranges
+    near = 0 < near_blurry < near_crisp
+    far = 0 < far_crisp < far_blurry
+    if not (near or far):
+        return None
+    spread = NATIVE_FULL_BLUR - NATIVE_CRISP_BLUR
+    if near and far and near_crisp < far_crisp:
+        inverse = (1 / near_crisp + 1 / far_crisp) / 2
+        rate = NATIVE_CRISP_BLUR / (1 / near_crisp - inverse)
+    elif far:
+        rate = spread / (1 / far_crisp - 1 / far_blurry)
+        inverse = 1 / far_crisp + NATIVE_CRISP_BLUR / rate
+    else:
+        rate = spread / (1 / near_blurry - 1 / near_crisp)
+        inverse = 1 / near_crisp - NATIVE_CRISP_BLUR / rate
+    focus = min(1e6, max(1.0, 1 / inverse if inverse > 0 else 1e6))
+    # Blur as a fraction of the width is aperture / (2 * tan(hfov / 2)) * |1/focus - 1/distance|.
+    return focus, rate * 2 * math.tan(math.radians(fov) / 2)
 
 
 def depth_of_field(project: Project, frames: list[Frame]):
-    """Citadel depth of field for every frame, or None when no frame uses it.
+    """Depth of field for every frame, or None when no frame uses it.
 
     Each entry is (focus distance, aperture diameter) in inches, with aperture 0
     where the lens is off. Values come from the shot at the time each frame
-    rendered.
+    rendered. Citadel DOF exports correctly. Native DOF's ranges are
+    approximate.
     """
     if not project.keyframes:
         return None, []
@@ -230,9 +267,20 @@ def depth_of_field(project: Project, frames: list[Frame]):
             if cvars.get("r_citadel_depthoffield_mode", 0):
                 notes.add("Citadel near-only and far-only modes are exported as normal depth of field.")
             lenses.append((max(1.0, float(cvars.get(CITADEL_FOCUS, CITADEL_FOCUS_DEFAULT))), aperture))
+        elif cvars.get("r_dof_override", 0) and cvars.get("r_depth_of_field", 0):
+            # Four zeros in the combined setting leave the separate distances in charge.
+            ranges = tuple(float(v) for v in cvars.get(NATIVE_RANGES, (0, 0, 0, 0)))
+            if not any(ranges):
+                ranges = tuple(float(cvars.get(name, default))
+                               for name, default in zip(NATIVE_DISTANCES, NATIVE_DEFAULTS))
+            lens = native_lens(ranges, frame.fov)
+            if lens:
+                notes.add("Native DOF is approximated by a lens: focus and the sharp range follow it, "
+                          "but its blur ramp and ground tilt don't.")
+            else:
+                notes.add("Native DOF has no blurry range beyond its crisp range, so it isn't exported.")
+            lenses.append(lens)
         else:
-            if cvars.get("r_dof_override", 0) and cvars.get("r_depth_of_field", 0):
-                notes.add("Native range DOF isn't a lens, so it isn't exported - use Citadel DOF to export it.")
             lenses.append(None)
 
     if not any(lenses):

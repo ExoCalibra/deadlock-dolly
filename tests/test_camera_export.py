@@ -10,7 +10,7 @@ import unittest
 
 from dolly.camera_export import (angle_vectors, ae_rotation, ae_rotations, build_jsx, build_usda,
                                  comp_size, depth_of_field, export_jsx, export_usda, horizontal_fov,
-                                 load_take, sample_camera, sample_camera_data, ae_vector,
+                                 load_take, native_lens, sample_camera, sample_camera_data, ae_vector,
                                  usd_rotation, usd_rotations)
 from dolly.path import AttachKey, CvarTrack, Keyframe, Project, TrackKey
 
@@ -448,12 +448,7 @@ class DepthOfFieldTests(unittest.TestCase):
         stops = usd_samples(build_usda(shot, 10)[0], "float fStop")
         self.assertEqual(stops[15], (0,))
 
-    def test_range_dof_and_unauthored_choices_are_reported(self):
-        ranges = Project(keyframes=[camera(0), camera(1)],
-                         setup_values={"r_depth_of_field": 1, "r_dof_override": 1})
-        lenses, warnings = depth_of_field(ranges, sample_camera(ranges, 10).frames)
-        self.assertIsNone(lenses)
-        self.assertIn("Native range DOF isn't a lens", warnings[0])
+    def test_unauthored_citadel_choices_are_reported(self):
         shot = Project(keyframes=[camera(0), camera(1)],
                        setup_values={"r_depth_of_field": 1, "r_citadel_depthoffield_enable": 1,
                                      "r_citadel_depthoffield_aperture_diameter": .5,
@@ -471,6 +466,81 @@ class DepthOfFieldTests(unittest.TestCase):
         lenses, _ = depth_of_field(citadel_shot(), take.frames)
         self.assertEqual(lenses[5][0], 200)  # Half a second of pre-roll before the shot starts.
         self.assertAlmostEqual(lenses[14][0], 380)
+
+
+def native_shot(ranges=None, **setup):
+    """A 1 s shot with Native DOF on, optionally with the combined ranges setting."""
+    values = {"r_depth_of_field": 1, "r_dof_override": 1, **setup}
+    if ranges is not None:
+        values["r_dof_override_ranges"] = tuple(float(v) for v in ranges)
+    return Project(keyframes=[camera(0), camera(1)], setup_values=values)
+
+
+def blur_px(lens, fov, distance, width=1920):
+    """Blur diameter in pixels of a lens at a distance, as AE and USD render it."""
+    focus, aperture = lens
+    return aperture / (2 * math.tan(math.radians(fov) / 2)) * abs(1 / focus - 1 / distance) * width
+
+
+class NativeDepthOfFieldTests(unittest.TestCase):
+    def lens(self, shot):
+        frames = sample_camera(shot, 10).frames
+        lenses, notes = depth_of_field(shot, frames)
+        return lenses, notes, frames[0].fov
+
+    def test_default_ranges_fit_a_lens_to_the_far_ramp(self):
+        lenses, notes, fov = self.lens(native_shot())  # -100, 0, 180, 2000
+        lens = lenses[0]
+        # Sharp up to 180 inches, fully blurred by 2000, as in the game.
+        self.assertAlmostEqual(blur_px(lens, fov, 180), 1920 / 1500, places=6)
+        self.assertAlmostEqual(blur_px(lens, fov, 2000), 1920 / 50, places=6)
+        self.assertLess(lens[0], 180)
+        self.assertIn("approximated by a lens", notes[0])
+
+    def test_two_sided_ranges_keep_the_sharp_range(self):
+        lenses, _, fov = self.lens(native_shot((50, 100, 300, 1000)))
+        lens = lenses[0]
+        self.assertAlmostEqual(lens[0], 150)  # Between the crisp edges, as a lens focuses.
+        for edge in (100, 300):
+            self.assertAlmostEqual(blur_px(lens, fov, edge), 1920 / 1500, places=6)
+        self.assertLess(blur_px(lens, fov, 120), blur_px(lens, fov, 100))
+
+    def test_four_zeros_leave_the_separate_distances_in_charge(self):
+        separate = {"r_dof_override_near_blurry": 50.0, "r_dof_override_near_crisp": 100.0,
+                    "r_dof_override_far_crisp": 300.0, "r_dof_override_far_blurry": 1000.0}
+        zeros, _, _ = self.lens(native_shot((0, 0, 0, 0), **separate))
+        combined, _, _ = self.lens(native_shot((50, 100, 300, 1000)))
+        self.assertEqual(zeros[0], combined[0])
+        # A non-zero combined setting wins over the separate distances.
+        winner, _, _ = self.lens(native_shot((-100, 0, 180, 2000), **separate))
+        self.assertEqual(winner[0], self.lens(native_shot())[0][0])
+
+    def test_ranges_without_a_blurry_side_are_reported(self):
+        lenses, notes, _ = self.lens(native_shot((-100, 0, 2000, 180)))
+        self.assertIsNone(lenses)
+        self.assertIn("isn't exported", notes[0])
+
+    def test_citadel_wins_when_both_are_on(self):
+        shot = native_shot(r_citadel_depthoffield_enable=1, r_citadel_depthoffield_aperture_diameter=.5,
+                           r_citadel_depthoffield_focus_distance=300.0)
+        lenses, notes, _ = self.lens(shot)
+        self.assertEqual((lenses[0], notes), ((300, .5), []))
+
+    def test_native_lens_reaches_both_exports(self):
+        shot = native_shot()
+        script, warnings = build_jsx(shot, 10)
+        self.assertNotIn("var dof = null;", script)
+        self.assertIn("approximated by a lens", " ".join(warnings))
+        layer, _ = build_usda(shot, 10)
+        self.assertIn("float fStop.timeSamples", layer)
+
+    def test_native_lens_follows_the_frame_fov(self):
+        lens = native_lens((-100, 0, 180, 2000), 90)
+        wide = native_lens((-100, 0, 180, 2000), 120)
+        self.assertEqual(lens[0], wide[0])  # Focus doesn't depend on the lens angle.
+        for candidate, fov in ((lens, 90), (wide, 120)):
+            self.assertAlmostEqual(blur_px(candidate, fov, 2000), 1920 / 50, places=6)
+        self.assertIsNone(native_lens((0, 0, 0, 0), 90))
 
 
 if __name__ == "__main__":
