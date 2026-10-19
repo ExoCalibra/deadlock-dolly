@@ -1350,7 +1350,7 @@ void tick() noexcept {
             status(buf);
         } else if (saved && sequenceV3 && (sequenceCadenceLost || framesWritten != sequenceCap)) {
             status(
-                "failed player capture missed shot frames; keep capture data and retry at a lower FPS or slower recording speed");
+                "failed player capture missed shot frames; keep capture data and retry at a lower FPS or a higher export speed (closer to 1x)");
         } else if (saved) {
             char buf[192];
             std::snprintf(

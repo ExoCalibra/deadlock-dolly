@@ -85,6 +85,14 @@ This corrects framing; it does not reproduce the game's temporal upscaler or
 guarantee identical antialiasing at every edge. Unsupported or changing viewports
 stop the capture rather than silently changing its framing.
 
+Players uses the completed Color take's frame count. Its fixed-step engine clock
+is `Video FPS / Export speed`; keep it at or below about 300 Hz for reliable
+captures (for example 120 FPS at 0.5x = 240 Hz). Dolly rejects clocks above
+600 Hz before recording. If the shot still misses frames, the empty Players
+folder is removed and the operation reports the capture status; retry with a
+lower Video FPS or an Export speed closer to 1x. The scratch capture remains
+for diagnosis.
+
 ## Depth and camera data
 
 Color and depth are copied from the same admitted render sample. Missing or

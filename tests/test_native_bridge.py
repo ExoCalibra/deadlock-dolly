@@ -31,6 +31,18 @@ class Memory(bytearray):
         self.closed += 1
 
 
+class NativeHelperErrorTests(unittest.TestCase):
+    def test_application_control_winerror_survives_a_wrapper(self):
+        cause = OSError(4551, "An Application Control policy has blocked this file")
+        cause.winerror = 4551
+        wrapped = ImportError("Failed to load dynlib/dll")
+        wrapped.__cause__ = cause
+        self.assertEqual(nb._winerror_from(wrapped), 4551)
+
+    def test_missing_winerror_returns_none(self):
+        self.assertIsNone(nb._winerror_from(OSError("not a Windows error")))
+
+
 class NativeBridgeTests(unittest.TestCase):
     def test_cinematic_completion_uses_reserved_tail_and_even_sequence(self):
         from dolly import editor_wire as wire

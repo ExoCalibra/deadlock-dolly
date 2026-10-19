@@ -1383,9 +1383,9 @@ class VideoGuiTests(unittest.TestCase):
 
     def test_players_frame_count_matches_export_speed(self):
         self.app.project = self.two_camera_project()
-        for speed, expected in ((.5, 1200), (1, 600), (2, 300)):
+        for speed, expected in ((.5, 600), (1, 300), (2, 150)):
             with self.subTest(speed=speed):
-                base = VideoOptions(Path(self.folder.name)/"shot.mp4", fps=600, speed=speed)
+                base = VideoOptions(Path(self.folder.name)/"shot.mp4", fps=300, speed=speed)
                 self.assertEqual(self.app._player_layer_frames(base), expected)
 
     def test_players_capture_keeps_a_partial_final_frame_interval(self):

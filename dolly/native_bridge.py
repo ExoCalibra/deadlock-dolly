@@ -71,6 +71,18 @@ CONFETTI_DIAGNOSTIC_FIELDS = ("state", "handles", "starts", "start_failures", "f
                               "stop_create_failed", "state_changes", "max_backward_delta")
 
 
+def _winerror_from(exc):
+    """Find a Windows error code anywhere in a wrapped exception chain."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        code = getattr(exc, "winerror", None)
+        if isinstance(code, int):
+            return code
+        exc = exc.__cause__ or exc.__context__
+    return None
+
+
 def _load_atomic_library():
     """Load the verified Dolly helper, without invoking its game factory.
 
@@ -110,7 +122,23 @@ def _load_atomic_library():
         if protocol() != ABI:
             raise NativeBridgeError("The loaded native camera helper has a different protocol. Restart Dolly with the complete updated package.")
         return library
-    except (OSError, AttributeError) as exc:
+    except (OSError, AttributeError, ImportError) as exc:
+        code = _winerror_from(exc)
+        if code == 4551:
+            raise NativeBridgeError(
+                "Windows Application Control blocked DollyNative.dll (WinError 4551). "
+                "Right-click the Dolly ZIP, choose Properties > Unblock before extracting, "
+                "and extract the complete package again. If it persists, allow Dolly in "
+                "Windows Security or Smart App Control, or use a machine where Application "
+                "Control is not enforced. This is a Windows policy, not a missing Dolly file.") from exc
+        if code == 126:
+            raise NativeBridgeError(
+                f"The native camera helper or one of its dependencies is missing from {dll} "
+                "(WinError 126). Extract the complete Dolly package.") from exc
+        if code == 193:
+            raise NativeBridgeError(
+                f"The native camera helper at {dll} is not a valid Windows x64 DLL "
+                "(WinError 193). Extract the complete package.") from exc
         raise NativeBridgeError(
             f"The native camera helper could not load from {dll}: {exc}. "
             "Rebuild Dolly or extract the complete updated package.") from exc

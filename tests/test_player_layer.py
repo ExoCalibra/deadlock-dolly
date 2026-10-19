@@ -36,6 +36,14 @@ class OwnerOffsetTests(unittest.TestCase):
             player_layer.parse_owner_offset("Class CGameSceneNode\n")
 
 
+class EngineRateTests(unittest.TestCase):
+    def test_players_preflight_rejects_the_1200_hz_slow_motion_clock(self):
+        self.assertEqual(player_layer.validate_engine_rate(120, 0.5), 240.0)
+        with self.assertRaisesRegex(RuntimeError, "1200 frames/s"):
+            player_layer.validate_engine_rate(120, 0.1)
+        self.assertEqual(player_layer.validate_engine_rate(60, 0.1), 600.0)
+
+
 class MarkerTests(unittest.TestCase):
     def test_players_only_marker_has_no_fixed_handles(self):
         self.assertEqual(player_layer.marker_text(408, 120), "color-sequence-v3 0 120 players 408 816\n")

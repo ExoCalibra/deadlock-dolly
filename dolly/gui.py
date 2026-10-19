@@ -1114,6 +1114,7 @@ class DollyApp:
 
     def _player_layer_frames(self, base, *, project=None):
         """Preflight estimate; actual capture uses the completed color take's count."""
+        player_layer.validate_engine_rate(base.fps, base.speed)
         project = project or getattr(self, "_pov_project", None) or self.project
         if project is None or len(project.keyframes) < 2:
             raise RuntimeError("The players layer needs a camera path so its frames match the color take.")
@@ -1133,6 +1134,7 @@ class DollyApp:
         hides the skinned objects, and the capture would then seal no frames.
         """
         base = self._base_capture
+        player_layer.validate_engine_rate(base.fps, base.speed)
         deployment = self.controller.deployment_directory()
         if deployment is None:
             raise RuntimeError("Launch the game through Dolly before recording the players layer.")
@@ -1194,11 +1196,19 @@ class DollyApp:
             player_layer.request_stop(deployment)
         except OSError as exc:
             LOG.warning("Players layer stop request failed: %s", exc)
+        layer_dir = base.path.with_suffix("") / layer
         status = player_layer.wait_for_capture(deployment, timeout=180.0)
         if not status.startswith("complete"):
+            # Do not leave an empty Players folder behind when the capture
+            # aborts before producing a frame. The color take and diagnostics
+            # remain available for a retry.
+            try:
+                if layer_dir.is_dir() and not any(layer_dir.iterdir()):
+                    layer_dir.rmdir()
+            except OSError:
+                pass
             raise RuntimeError("The players layer capture did not finish cleanly: "
                                + (status or "no status was reported"))
-        layer_dir = base.path.with_suffix("") / layer
         ffmpeg = resolve_ffmpeg(base.ffmpeg_path) or bundled_ffmpeg_path()
         if ffmpeg is None:
             raise RuntimeError("The players layer needs ffmpeg for its alpha master.")

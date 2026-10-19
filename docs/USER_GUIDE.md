@@ -841,6 +841,15 @@ initialization or automatically load the replay after a failed confirmation.
 If the editor never opens, send `logs/Dolly_startup.log`. The batch launcher keeps
 the error visible. Runtime details are also in `logs/Dolly.log`.
 
+If Windows shows a **Bad Image** dialog for `DollyNative.dll`, or the log reports
+**WinError 4551: An Application Control policy has blocked this file**, Windows
+Smart App Control or a WDAC policy blocked the unsigned helper. Right-click the
+release ZIP, choose **Properties > Unblock** before extracting, and extract the
+complete package again. If it persists, allow Dolly in **Windows Security > App &
+browser control > Smart App Control** (or your organization's Application Control
+policy), or use a machine where Application Control is not enforced. Dolly cannot
+bypass that Windows policy.
+
 If the game launch changes or breaks after a Deadlock update, the pinned unlocker
 may need a compatible release. Dolly will not silently replace it with a new
 binary. Run recovery as described above if a configuration edit remains pending.

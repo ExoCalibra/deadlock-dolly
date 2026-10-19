@@ -46,6 +46,11 @@ BUNDLE_NAME = "dolly_owner_color_frame.bin"
 META_NAME = "dolly_owner_frame_meta.bin"
 BUNDLE_MAGIC = 0x314641524c4f4344
 MIN_FRAMES, MAX_FRAMES = 2, 2_000_000
+# The native capture supports 600 FPS output. Fixed-step divides that output
+# clock by Export speed, so 120 FPS at 0.1x asks the engine for 1200 frames/s
+# and cannot keep its shot-frame cadence. Keep the hard preflight at the
+# capture's supported ceiling; the status message still explains slower cases.
+MAX_ENGINE_FPS = 600.0
 # Keep small capture reports through deployment cleanup. Never include image
 # bundles, raw process/GPU events, or arbitrary files from the game directory.
 DIAGNOSTIC_NAMES = (STATUS_NAME, MARKER_NAME, "dolly_owner_stall.txt",
@@ -142,6 +147,22 @@ def reference_frame_count(color_path: Path, fps: int) -> int:
     except (OSError, ValueError, TypeError) as exc:
         raise RuntimeError("The players layer needs the completed color take's frame metadata. "
                            "Record a new color take before exporting Players.") from exc
+
+
+def validate_engine_rate(fps: int, speed: float) -> float:
+    """Refuse a Players fixed-step clock the native capture cannot sustain."""
+    if type(fps) is not int or fps not in (30, 60, 120, 300, 600):
+        raise RuntimeError("The Players layer needs a supported video FPS.")
+    if not math.isfinite(speed) or not .05 <= speed <= 4:
+        raise RuntimeError("The Players layer needs a valid export speed.")
+    rate = fps / speed
+    if rate > MAX_ENGINE_FPS:
+        raise RuntimeError(
+            "The Players layer cannot run this fixed-step clock: %d FPS at %.2gx asks "
+            "the engine for %.0f frames/s (limit %.0f). Lower Video FPS or raise Export "
+            "speed closer to 1x, then record a new color take with the new settings."
+            % (fps, speed, rate, MAX_ENGINE_FPS))
+    return rate
 
 
 def check_capture_space(deployment: Path, width: int, height: int, frames: int) -> int:

@@ -18,6 +18,13 @@ setup and operation.
 - **Clearer native-helper load failures.** *Before:* A missing or blocked helper
   only reported a generic load error. *After:* The launch failure includes the
   helper path and the underlying Windows error.
+- **Players layer preflight.** *Before:* 120 FPS at 0.1x could create an empty
+  Players folder after the capture missed shot frames. *After:* Dolly rejects
+  engine clocks above 600 Hz before recording, removes empty layer folders on a
+  failed capture, and points to a lower Video FPS or an Export speed closer to 1x.
+- **Application Control guidance.** *Before:* WinError 4551 looked like a generic
+  native-helper failure. *After:* Dolly names Windows Smart App Control or an
+  Application Control policy and explains the unblock/allow steps.
 - **No manual reconstructed-audio setup.** *Before:* Reconstructed audio
   required users to install Source2Viewer-CLI and set an environment variable.
   *After:* The first reconstructed export offers a one-time download, verifies
