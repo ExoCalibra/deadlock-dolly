@@ -325,7 +325,6 @@ tools/update_game.py
 tools/fetch_ffmpeg.py
 tools/release_files.py
 tools/check_release_notes.py
-tools/publish_release.ps1
 .clang-format
 tools/format_cpp.py
 tools/generate_profile.py
