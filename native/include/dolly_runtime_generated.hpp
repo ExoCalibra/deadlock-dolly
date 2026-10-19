@@ -6,7 +6,7 @@ namespace dolly { namespace reviewed {
 struct CodeSpan { std::uintptr_t rva; std::size_t size; };
 struct NamedRva { const char* name; std::uintptr_t rva; };
 namespace Preload {
-inline constexpr char CLIENT_SHA256[] = "d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460";
+inline constexpr char CLIENT_SHA256[] = "8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c";
 inline constexpr char RESOURCE_SHA256[] = "6ecbaa9d995f203878c2396e8a5849a6b04e862ec0d7579246ba29a6c469aef4";
 inline constexpr std::uintptr_t MANAGER = 0x32f9ab0;
 inline constexpr std::uintptr_t MANAGER_VTABLE = 0x275f488;
@@ -28,7 +28,7 @@ inline constexpr std::uintptr_t INTRO_SIZE = 0x84;
 inline constexpr std::uintptr_t INTRO_PHASE = 0x80;
 }
 namespace ReplayCamera {
-inline constexpr char CLIENT_SHA256[] = "d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460";
+inline constexpr char CLIENT_SHA256[] = "8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c";
 inline constexpr std::uintptr_t MANAGER = 0x37c9930;
 inline constexpr std::uintptr_t MANAGER_VTABLE = 0x2758950;
 inline constexpr std::uintptr_t GAMEPLAY_CAMERA_VTABLE = 0x2760398;
@@ -95,7 +95,7 @@ inline constexpr std::uintptr_t CONTROLLER_PREDICATE_SLOT = 0x4e8;
 inline constexpr std::uintptr_t CONTROLLER_FINAL_DATA = 0x908;
 }
 namespace AttachRuntime {
-inline constexpr char CLIENT_SHA256[] = "d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460";
+inline constexpr char CLIENT_SHA256[] = "8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c";
 inline constexpr std::uintptr_t CLIENT_IMAGE_SIZE = 0x4370000;
 inline constexpr std::uintptr_t INITIALIZER = 0x2136490;
 inline constexpr std::uintptr_t ENTITY_VTABLE = 0x2b97bc0;

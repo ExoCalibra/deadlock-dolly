@@ -21,8 +21,8 @@ REVIEWED_HASH = "5b5c6a369e4572066e3c0d8a0e7f88c33d028bab3ceffc1dc4c0ee679e252b5
 ANCHORS = (("voice_start", 0x96270, 0x120, 14),
            ("voice_stop", 0x98460, 0x120, 13),
            ("voice_map_remove", 0x7bc20, 0x120, 20),
-           ("vmix_start", 0x1a5140, 0x120, 14),
-           ("event_name", 0x1bd480, 91, 6))
+           ("vmix_start", 0x1a5200, 0x120, 14),
+           ("event_name", 0x1bd540, 91, 6))
 
 
 def build_sound_profile(image):
@@ -46,15 +46,17 @@ def build_sound_profile(image):
         for ins in instructions:
             if any(op.type == capstone.x86.X86_OP_MEM and
                    op.mem.base == capstone.x86.X86_REG_RIP and
-                   ins.address + ins.size + op.mem.disp == image.base + 0x658e20
+                   ins.address + ins.size + op.mem.disp == image.base + 0x658e40
                    for op in ins.operands):
                 references.append(dict(symbol=index, offset=ins.address-image.base-rva,
                                        displacement=ins.disp_offset, size=ins.size))
     if {ref["symbol"] for ref in references} != {0, 1, 3}:
         raise ProfileError("Reviewed voice-table references changed")
-    return dict(sha256=image.sha256, image_size=image.image_size, voice_table=0x658e20,
+    return dict(sha256=image.sha256, image_size=image.image_size, voice_table=0x658e40,
                 voice_map_offset=0x100, parameter_volume_offset=0x20, parameter_rate_offset=0x2c,
-                symbols=symbols, table_references=references)
+                symbols=symbols, table_references=references,
+                validation=("6795 live: vmix_start/event_name corrected to 0x1a5200/0x1bd540 "
+                            "and voice table to 0x658e40; source voice log captured."))
 
 
 def _emit_profile(profile):

@@ -13,7 +13,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
 ![License](https://img.shields.io/badge/license-MIT-2ea44f)
-[![Version](https://img.shields.io/badge/version-0.6.60--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.6.61--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
 
 ![Deadlock Dolly demo](assets/dolly-demo.gif)
 
@@ -22,7 +22,7 @@
 Capture views from a local replay, shape a camera path and play it back with
 animated framing and effects. Edit through the desktop or directly in the game.
 
-**Current source: 0.6.60-alpha · Windows x64 · DirectX 11.** The portable app
+**Current source: 0.6.61-alpha · Windows x64 · DirectX 11.** The portable app
 includes Python and Tcl/Tk; no separate installation is needed.
 
 > **Local replays only — use at your own risk.** Dolly injects a native DLL
@@ -62,9 +62,10 @@ See the
   adjust framing, or attach a camera to a selected bone.
 - **Framing and depth of field.** Animate aspect ratio and supported DOF controls
   alongside the camera path.
-- **Video and audio.** Real-time or fixed-step exports, 30–600 FPS output settings,
-  hardware/software H.264 or HEVC, lossless FFV1, and optional game-only audio
-  for real-time recording. Reconstructed clip audio is a separate advanced workflow.
+- **Video and audio.** Real-time or fixed-step exports, 30-600 FPS output settings,
+  hardware/software H.264 or HEVC, lossless FFV1, and optional game or
+  reconstructed audio in both modes. Reconstructed audio installs its verified
+  extractor automatically on first use.
 - **Depth and layers.** Paired depth masters, optional float EXRs and per-frame
   camera metadata, plus World, Players and Effects takes with documented alpha limits.
 - **High-resolution stills.** Plate, players-only matte and cut-out hero presets
@@ -101,8 +102,9 @@ the [maintainer reference](docs/internal/GAME_UPDATES.md) explains compatibility
 
 Dolly is in alpha. High FPS and high-resolution output depend on the game,
 encoder and GPU; the available settings do not guarantee every workload.
-Fixed-step exports are silent; bundled game-only audio is for real-time
-recording. Depth, matte and replay-seeking limits are covered in the guides above.
+Fixed-step Color exports can carry game or reconstructed audio through the
+engine's frame-locked WAV recorder; extra layer takes stay silent. Depth, matte
+and replay-seeking limits are covered in the guides above.
 
 ## Application updates
 
@@ -173,5 +175,5 @@ separate terms in [assets/README.md](assets/README.md).
 ## Releases
 
 - [Downloads and published release notes](https://github.com/cravvnn/deadlock-dolly/releases)
-- [Current source release notes: 0.6.60-alpha](docs/RELEASE_NOTES_0.6.60-alpha.md)
+- [Current source release notes: 0.6.61-alpha](docs/RELEASE_NOTES_0.6.61-alpha.md)
 - [Complete changelog](docs/CHANGELOG.md)

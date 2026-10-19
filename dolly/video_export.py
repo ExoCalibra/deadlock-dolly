@@ -209,9 +209,9 @@ class VideoOptions:
             raise ValueError("Full-resolution export must be on or off.")
         if type(self.bundle_audio) is not bool:
             raise ValueError("Audio folder export must be on or off.")
-        if self.bundle_audio and self.fixed_step:
-            raise ValueError("Audio export needs real-time capture. Turn off Fixed-step and "
-                             "extra layers, or export silent layers separately.")
+        # Fixed-step audio is supported by the engine's wav-only movie recorder:
+        # DollyNative splits its engine-frame clock from its WAV clock, so the
+        # reference is frame-locked to the slow-motion video.
         if type(self.shot_only) is not bool:
             raise ValueError("Shot-only capture must be on or off.")
         if isinstance(self.speed, bool) or not isinstance(self.speed, (int, float)):

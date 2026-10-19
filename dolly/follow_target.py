@@ -12,7 +12,7 @@ from ._runtime_generated import FollowTarget as _profile
 # review must not enable stale player-target data. The FollowTarget group and
 # observer schema were reviewed together for the byte-identical 6793/6794 client;
 # update this pin only with a reviewed target profile and its stock consumers.
-REVIEWED_CLIENT_SHA256 = 'd61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460'
+REVIEWED_CLIENT_SHA256 = '8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c'
 
 TARGET_SPANS = _profile.TARGET_SPANS
 # Exact stock HUD getter chain and its entity predicates. Camera mode alone

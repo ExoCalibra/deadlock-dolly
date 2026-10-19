@@ -84,7 +84,7 @@ constexpr char kBuild6793EngineHash[] =
     "44bb357a1baf4765043042de3234112e18ea0db7e0b637f18385bb21f8338707";
 constexpr char kSound6726Hash[] =
     "a2f20871181b240b994c3a3b9d5a61fcb52392e991b7ce984c06bf1d55fd642c";
-constexpr char kUnlockerHash[] = "5f75ab3dafc73a817bd545a80a7d55110d37ed728f7ad5c0bae8c5a8863106e4";
+constexpr char kUnlockerHash[] = "0705a1623bd88d8c775b93dd6066dc975805cb36aee09d2aaf66af873bcf7285";
 constexpr char kSoundSystemHash[] =
     "5f01b91485f67c980235054c8e1e517b04e34fb53491f26100c8e1c743dd0ba0";
 constexpr char kSeptemberSoundSystemHash[] =
@@ -1562,6 +1562,11 @@ static DWORD WINAPI worker(void*) {
                                   module_matches(sound, kSound6739Hash, 0x6bf000) ||
                                   module_matches(sound, kSound6753Hash, 0x6bf000) ||
                                   module_matches(sound, kSound6793Hash, 0x6bf000));
+        // The movie-WAV clock override is reviewed only for the exact 6793/6795
+        // engine. It leaves real-time movie recording unchanged because it only
+        // returns a positive host_framerate.
+        if (engine6793)
+            movie_audio_install(engine);
         // Hook and original trampoline remain resident until process exit. Losing
         // the editor only releases ownership, avoiding code-unload races in a view.
         std::shared_ptr<const NativeShot> shot;
@@ -1571,6 +1576,7 @@ static DWORD WINAPI worker(void*) {
         HMODULE diagnostic_renderer = nullptr;
         ULONGLONG next_renderer_probe = 0;
         ULONGLONG next_sound_probe = 0;
+        unsigned sound_attempts = 0;
         for (;;) {
             publish_follow_anchor(gMemory);
             if (WaitForSingleObject(gEditor, 0) != WAIT_TIMEOUT) {
@@ -1586,10 +1592,12 @@ static DWORD WINAPI worker(void*) {
             visualization_worker_tick(mapping.c_str(), now_seconds() - gHeartbeatTime.load() < 2.0);
             media_worker_tick(mapping.c_str(), now_seconds() - gHeartbeatTime.load() < 2.0);
             const auto diagnostic_now = GetTickCount64();
-            if (!sound_capture_available() && diagnostic_now >= next_sound_probe) {
-                next_sound_probe = diagnostic_now + 1000;
+            if (!sound_capture_available() && sound_attempts < 8 &&
+                diagnostic_now >= next_sound_probe) {
+                next_sound_probe = diagnostic_now + 2000;
+                ++sound_attempts;
                 const auto module = GetModuleHandleW(L"soundsystem.dll");
-                if (module && module != sound) {
+                if (module) {
                     sound = module;
                     sound_capture_install(
                         module, module_matches(module, kSoundSystemHash, 0x678000) ||

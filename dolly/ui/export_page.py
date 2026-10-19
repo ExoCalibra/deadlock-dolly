@@ -93,6 +93,9 @@ class ExportPage:
             audio_options, style="Card.TCheckbutton", text="Include reconstructed audio",
             variable=state.video_reconstructed_audio)
         self.video_reconstructed_audio_check.pack(side="left")
+        ttk.Label(destination,
+                  text="Reconstructed audio installs a verified helper automatically on first use.",
+                  style="CardMuted.TLabel", wraplength=420).pack(anchor="w", pady=(0, GAP))
         options = ttk.Frame(body)
         options.pack(fill="x", pady=(0, GAP))
         for i in (0, 1):

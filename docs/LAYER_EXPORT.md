@@ -29,8 +29,9 @@ settings. For ordinary recording and ReShade setup, see
 
 **Depth master (.mov)** enables fixed-step by default, but depth alone can also
 be recorded in real time. **EXR sequence (float)** is available only while the
-depth master is selected. Audio requires real-time capture with extra layers
-off; export silent layers separately when you need them.
+depth master is selected. The Color take can carry game or reconstructed audio
+in fixed-step mode through the engine's frame-locked WAV. Extra layer takes stay
+silent; export them separately when you need them.
 
 ## Outputs
 

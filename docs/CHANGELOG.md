@@ -4,6 +4,32 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.61-alpha
+
+- **Deadlock 6796 support.** *Before:* Build 6796 was outside the reviewed client
+  profile, so Native launch and the cvar unlocker could not start. *After:* The
+  client profile, Follow anchor, runtime contract and unlocker hash accept 6796;
+  engine2, tier0 and soundsystem are unchanged. Camera, unlocker, fixed-step
+  game audio and reconstructed audio were validated on the updated build.
+- **Timeline seeking keeps Game Follow.** *Before:* Scrubbing the replay with a
+  stock F9 Game Follow active released the rig and re-entered the native camera
+  at the pre-seek pose. *After:* The stock follow survives the seek and keeps the
+  selected hero instead of snapping back.
+- **Clearer native-helper load failures.** *Before:* A missing or blocked helper
+  only reported a generic load error. *After:* The launch failure includes the
+  helper path and the underlying Windows error.
+- **No manual reconstructed-audio setup.** *Before:* Reconstructed audio
+  required users to install Source2Viewer-CLI and set an environment variable.
+  *After:* The first reconstructed export offers a one-time download, verifies
+  the official CLI by SHA-256, and caches it automatically.
+- **Fixed-step audio.** *Before:* Game and reconstructed audio required
+  real-time capture, so slow-motion exports were silent or had to be muxed by
+  hand. *After:* Fixed-step Color takes use the engine's frame-locked WAV
+  recorder, with its clock split from the slow-motion video, so 0.25x/0.5x  exports keep the selected speed and reconstructed audio is fitted on replay
+  time. Extra layer takes remain silent.
+
+Full details: [0.6.61 release notes](RELEASE_NOTES_0.6.61-alpha.md).
+
 ## 0.6.60-alpha
 
 - Add optional After Effects JSX and USD camera exports, based on @SamuelCurrid's

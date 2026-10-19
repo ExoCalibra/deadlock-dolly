@@ -126,20 +126,25 @@ native output. Keep Deadlock open while the recording is finalizing. Windows N
 editions need Microsoft's Media Feature Pack to record; camera editing remains
 available without it.
 
-Enable **Include game audio** to record Deadlock's sound into a real-time Color
-export. The take folder contains the video with audio and a separate
+Enable **Include game audio** to record Deadlock's sound with the Color export.
+The take folder contains the video with audio and a separate
 `<video-stem>_game_audio.wav`; other desktop audio is excluded.
-**Include reconstructed audio** is experimental and requires a separately
-installed Source 2 Viewer CLI for sound-asset extraction. Its sound files,
+**Include reconstructed audio** is experimental. On the first reconstructed
+export, Dolly downloads a pinned, SHA-256-verified Source 2 Viewer CLI (about
+53 MB) from ValveResourceFormat and caches it locally. No manual install or
+environment variable is needed; advanced users can still set
+`DOLLY_SOURCE2VIEWER` to use an existing CLI. Its sound files,
 `reconstructed.wav` and `usage.csv` are saved under
 `<video-stem>_reconstructed/` beside the Color file.
 
-Audio exports require real-time capture. Dolly refuses audio with **Fixed-step**
-or extra layer takes because their simulation timing can differ from recorded
-audio. Export silent layers separately when using those options. Arbitrary
-output resizing is not included. Paired depth masters and isolated layer takes
-are available; see
-[Layer export](LAYER_EXPORT.md).
+Audio works with both real-time and **Fixed-step** Color exports. Real-time
+audio uses the game process loopback. Fixed-step audio uses the engine's
+frame-locked WAV recorder: DollyNative splits the movie's engine clock from its
+WAV clock, so the reference lasts exactly as long as the slow-motion video and
+keeps the authored replay window. Reconstructed audio is fitted on replay time,
+including at 0.25x/0.5x. Extra layer takes remain silent; export them separately.
+Arbitrary output resizing is not included. Paired depth masters and isolated
+layer takes are available; see [Layer export](LAYER_EXPORT.md).
 
 ## High frame rates and fixed-step
 

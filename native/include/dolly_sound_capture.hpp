@@ -14,6 +14,12 @@ inline bool ui_voice_silenced(std::uint64_t now_qpc, std::uint64_t until_qpc) no
 // check; otherwise all addresses require unique reviewed AOB matches.
 bool sound_capture_install(void* module, bool exact) noexcept;
 bool sound_capture_available() noexcept;
+// Redirect the engine movie recorder's GetFramerate accessor to the current
+// host_framerate while a Dolly fixed-step take is active. The recorder keeps
+// writing its WAV at the requested movie fps, while the engine advances at the
+// fixed-step rate, so the WAV is frame-locked to the slow-motion video.
+bool movie_audio_install(void* engine_module) noexcept;
+bool movie_audio_available() noexcept;
 void sound_capture_clock(std::int32_t tick, double engine_seconds) noexcept;
 bool sound_capture_start(const wchar_t* csv_path) noexcept;
 void sound_capture_stop() noexcept;

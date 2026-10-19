@@ -256,6 +256,9 @@ tests/test_hotkey.py
 tests/test_launcher.py
 tests/test_keyvalues.py
 tests/test_file_ops.py
+tests/test_fit_reference_voices.py
+tests/test_movie_audio.py
+tests/test_source2viewer.py
 tests/test_gameinfo_transaction.py
 tests/test_session_recovery.py
 tests/test_layer_modes.py
@@ -309,6 +312,7 @@ third_party/cvar_unlocker/unlocker-shutdown.patch
 third_party/cvar_unlocker/unlocker-build-6712.patch
 third_party/notices/CS2RemoteConsole-MIT.txt
 third_party/notices/RUNTIME_NOTICES.md
+third_party/notices/ValveResourceFormat-MIT.txt
 third_party/notices/VConsoleLib-python-MIT.txt
 third_party/notices/tcl-license.terms
 third_party/notices/tk-license.terms
@@ -321,6 +325,7 @@ tools/update_game.py
 tools/fetch_ffmpeg.py
 tools/release_files.py
 tools/check_release_notes.py
+tools/publish_release.ps1
 .clang-format
 tools/format_cpp.py
 tools/generate_profile.py
@@ -451,6 +456,7 @@ dolly/gui_layout.py
 dolly/ui/__init__.py
 dolly/ui/controls_page.py
 dolly/ui/binding_capture.py
+dolly/ui/confirm.py
 dolly/ui/widgets.py
 dolly/ui/operations.py
 dolly/ui/shot_commands.py
@@ -499,6 +505,8 @@ native/src/dolly_attach_runtime.hpp
 native/tests/fixtures/attach-shot.bin
 tests/test_rotation_curve.py
 dolly/clip_audio.py
+dolly/movie_audio.py
+dolly/source2viewer.py
 tools/filter_captured_audio_window.py
 tools/fit_reference_voices.py
 
@@ -717,7 +725,10 @@ docs/RELEASE_NOTES_0.6.49-alpha.md
 docs/VIDEO_SCRIPT_0.6.49-alpha.md
 native/profiles/deadlock-2026-10-15-6785-complete.json
 native/profiles/deadlock-2026-10-16-6793-complete.json
+native/profiles/deadlock-2026-10-19-6796-complete.json
 third_party/cvar_unlocker/unlocker-build-6785.patch
+third_party/cvar_unlocker/unlocker-build-6793.patch
+third_party/cvar_unlocker/unlocker-build-6796.patch
 docs/RELEASE_NOTES_0.6.50-alpha.md
 dolly/release_notes.py
 dolly/ui/update_notice.py
@@ -773,3 +784,4 @@ docs/internal/README.md
 docs/RELEASE_NOTES_0.6.58-alpha.md
 docs/RELEASE_NOTES_0.6.59-alpha.md
 docs/RELEASE_NOTES_0.6.60-alpha.md
+docs/RELEASE_NOTES_0.6.61-alpha.md

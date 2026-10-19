@@ -18,6 +18,19 @@ Player capture profiles also keep the scene fingerprint, producer address and
 calling convention, record layout, and exact renderer pairing together. This
 avoids enabling a new scene build with an older producer entry point.
 
+### Build 6796 (2026-10-19)
+
+Build 6796 changed `client.dll` and the unlocker target `server.dll`;
+`engine2.dll`, `tier0.dll`, `soundsystem.dll`, `scenesystem.dll`,
+`resourcesystem.dll` and `rendersystemdx11.dll` are unchanged. All reviewed
+client code/data anchors are byte-identical at their 6793 RVAs. The 6796 client
+profile, Follow anchor, runtime contract and manifest pin were added. The
+reviewed `Source2ServerConfig001` table and method bodies are unchanged from
+6793, so the unlocker accepts 6796 through a hash-only patch of the reviewed
+6793 binary. Live validation on 6796 covered Native camera startup, the cvar
+unlocker, a 0.5x fixed-step game-audio take and a 0.5x reconstructed-audio take;
+no live acceptance is claimed beyond those probes.
+
 Use the unified generator from the repository root:
 
 ```powershell

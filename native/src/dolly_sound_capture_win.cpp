@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -405,12 +406,12 @@ bool resolve_sound_image(void* module, bool exact, dolly_sound_compat::Resolutio
 
 bool sound_capture_install(void* module, bool exact) noexcept {
     if (installed.load()) return true;
-    if (!module) return false;
+    if (!module) { error_code.store(10); return false; }
     const auto base = reinterpret_cast<std::uintptr_t>(module);
     dolly_sound_compat::Resolution symbols{};
     try {
-        if (!resolve_sound_image(module, exact, symbols)) return false;
-    } catch (...) { return false; }
+        if (!resolve_sound_image(module, exact, symbols)) { error_code.store(11); return false; }
+    } catch (...) { error_code.store(11); return false; }
     sound_symbols = symbols;
     sound_base = base;
     event_name = reinterpret_cast<EventNameFn>(base + symbols.functions[4]);
@@ -419,26 +420,33 @@ bool sound_capture_install(void* module, bool exact) noexcept {
     auto remove_entry = reinterpret_cast<void*>(base + symbols.functions[2]);
     auto vmix_entry = reinterpret_cast<void*>(base + symbols.functions[3]);
     if (MH_CreateHook(voice, reinterpret_cast<void*>(voice_start_hook),
-                      reinterpret_cast<void**>(&original_voice_start)) != MH_OK) return false;
+                      reinterpret_cast<void**>(&original_voice_start)) != MH_OK) {
+        error_code.store(12);
+        return false;
+    }
     if (MH_CreateHook(vmix_entry, reinterpret_cast<void*>(vmix_start_hook),
                       reinterpret_cast<void**>(&original_vmix_start)) != MH_OK) {
+        error_code.store(13);
         MH_RemoveHook(voice);
         return false;
     }
     if (MH_CreateHook(stop_entry, reinterpret_cast<void*>(voice_stop_hook),
                       reinterpret_cast<void**>(&original_voice_stop)) != MH_OK) {
+        error_code.store(14);
         MH_RemoveHook(vmix_entry);
         MH_RemoveHook(voice);
         return false;
     }
     if (MH_CreateHook(remove_entry, reinterpret_cast<void*>(voice_map_remove_hook),
                       reinterpret_cast<void**>(&original_voice_map_remove)) != MH_OK) {
+        error_code.store(15);
         MH_RemoveHook(stop_entry);
         MH_RemoveHook(vmix_entry);
         MH_RemoveHook(voice);
         return false;
     }
     if (MH_EnableHook(voice) != MH_OK) {
+        error_code.store(16);
         MH_RemoveHook(remove_entry);
         MH_RemoveHook(stop_entry);
         MH_RemoveHook(vmix_entry);
@@ -446,6 +454,7 @@ bool sound_capture_install(void* module, bool exact) noexcept {
         return false;
     }
     if (MH_EnableHook(vmix_entry) != MH_OK) {
+        error_code.store(17);
         MH_DisableHook(voice);
         MH_RemoveHook(remove_entry);
         MH_RemoveHook(stop_entry);
@@ -454,6 +463,7 @@ bool sound_capture_install(void* module, bool exact) noexcept {
         return false;
     }
     if (MH_EnableHook(stop_entry) != MH_OK) {
+        error_code.store(18);
         MH_DisableHook(vmix_entry);
         MH_DisableHook(voice);
         MH_RemoveHook(remove_entry);
@@ -463,6 +473,7 @@ bool sound_capture_install(void* module, bool exact) noexcept {
         return false;
     }
     if (MH_EnableHook(remove_entry) != MH_OK) {
+        error_code.store(19);
         MH_DisableHook(stop_entry);
         MH_DisableHook(vmix_entry);
         MH_DisableHook(voice);
@@ -473,19 +484,112 @@ bool sound_capture_install(void* module, bool exact) noexcept {
         return false;
     }
     QueryPerformanceFrequency(&frequency);
+    error_code.store(0);
     installed.store(true);
     return true;
 }
 bool sound_capture_available() noexcept { return installed.load(); }
+
+// The Deadlock 6795 engine2 movie recorder owns two clocks:
+//   * the engine frame time, read through this virtual accessor;
+//   * the WAV sample clock, advanced once per rendered frame by the movie
+//     recorder at 1 / movie_fps seconds.
+// Dolly's fixed-step export sets host_framerate to video_fps / speed. If the
+// accessor returns host_framerate while the WAV clock keeps using movie_fps,
+// the WAV lasts exactly as long as the slow-motion video and carries the same
+// authored replay window. No TGA frames are produced because the recorded
+// command asks for the `wav` format only.
+namespace {
+constexpr std::uintptr_t kMovieVtableRva = 0x4f6890;
+constexpr std::uintptr_t kMovieGetFramerateRva = 0xfc7c0;
+constexpr std::uintptr_t kHostFramerateCvarRva = 0x8b4dd8;
+constexpr std::uintptr_t kConVarFloatAccessorRva = 0x3bb60;
+constexpr std::uintptr_t kMovieFramerateOffset = 0xf4;
+
+using ConVarFloatFn = float(__fastcall*)(void*);
+ConVarFloatFn convar_float = nullptr;
+void* host_framerate_cvar = nullptr;
+std::atomic<bool> movie_installed{false};
+
+float movie_framerate(void* self) noexcept {
+    if (self) {
+        const auto value = *reinterpret_cast<const float*>(
+            static_cast<const char*>(self) + kMovieFramerateOffset);
+        if (std::isfinite(value) && value > 0.0f && value <= 10000.0f)
+            return value;
+    }
+    return 0.0f;
+}
+
+float __fastcall movie_get_framerate_hook(void* self) noexcept {
+    if (convar_float && host_framerate_cvar) {
+        const float host = convar_float(host_framerate_cvar);
+        if (std::isfinite(host) && host > 0.0f && host <= 10000.0f)
+            return host;
+    }
+    return movie_framerate(self);
+}
+} // namespace
+
+bool movie_audio_install(void* engine_module) noexcept {
+    if (movie_installed.load(std::memory_order_acquire))
+        return true;
+    if (!engine_module)
+        return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(engine_module);
+    const auto slot = reinterpret_cast<void**>(base + kMovieVtableRva + 0x38);
+    const auto target = reinterpret_cast<void*>(base + kMovieGetFramerateRva);
+    // Exact reviewed accessor: movss xmm0, [rcx+0xf4]; ret.
+    constexpr unsigned char expected[] = {0xF3, 0x0F, 0x10, 0x81, 0xF4, 0x00,
+                                           0x00, 0x00, 0xC3};
+    if (*slot != target ||
+        std::memcmp(reinterpret_cast<const void*>(base + kMovieGetFramerateRva),
+                    expected, sizeof(expected))) {
+        return false;
+    }
+    convar_float = reinterpret_cast<ConVarFloatFn>(base + kConVarFloatAccessorRva);
+    host_framerate_cvar = reinterpret_cast<void*>(base + kHostFramerateCvarRva);
+    DWORD old = 0;
+    if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old))
+        return false;
+    *slot = reinterpret_cast<void*>(&movie_get_framerate_hook);
+    DWORD ignored = 0;
+    VirtualProtect(slot, sizeof(void*), old, &ignored);
+    movie_installed.store(true, std::memory_order_release);
+    // Publish a process-scoped capability marker. The desktop can then refuse a
+    // fixed-step audio take before it records the wrong speed.
+    wchar_t temp[MAX_PATH]{};
+    const DWORD length = GetTempPathW(MAX_PATH, temp);
+    if (length) {
+        const std::wstring marker = std::wstring(temp, length) + L"dolly_movie_audio_" +
+                                    std::to_wstring(GetCurrentProcessId()) + L".ready";
+        HANDLE file = CreateFileW(marker.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE)
+            CloseHandle(file);
+    }
+    return true;
+}
+
+bool movie_audio_available() noexcept {
+    return movie_installed.load(std::memory_order_acquire);
+}
+
 void sound_capture_clock(std::int32_t tick, double engine_seconds) noexcept {
     last_tick.store(tick, std::memory_order_relaxed);
     last_engine_time.store(engine_seconds, std::memory_order_relaxed);
 }
 bool sound_capture_start(const wchar_t* csv_path) noexcept {
-    if (!installed.load() || recording.load() || output != INVALID_HANDLE_VALUE ||
-        state_output != INVALID_HANDLE_VALUE || !csv_path || !*csv_path) {
-        error_code.store(1); return false;
+    if (!installed.load()) {
+        if (error_code.load() == 0) error_code.store(1);
+        return false;
     }
+    if (recording.load() || output != INVALID_HANDLE_VALUE ||
+        state_output != INVALID_HANDLE_VALUE) {
+        error_code.store(2);
+        return false;
+    }
+    if (!csv_path || !*csv_path) { error_code.store(3); return false; }
     output = CreateFileW(csv_path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
     if (output == INVALID_HANDLE_VALUE) { error_code.store(3); return false; }
@@ -589,9 +693,20 @@ bool sound_ui_silence_armed() noexcept {
 }
 const char* sound_capture_error() noexcept {
     switch (error_code.load()) {
-    case 1: return "Verified audio hook is unavailable or a capture is already active.";
+    case 1: return "Verified audio hook is unavailable.";
+    case 2: return "A source-audio capture is already active.";
     case 3: return "Could not create a new source-audio CSV at that path.";
     case 4: return "The source-audio CSV could not be written.";
+    case 10: return "The soundsystem module is not loaded yet.";
+    case 11: return "The soundsystem voice profile did not match this build.";
+    case 12: return "Could not hook the soundsystem voice start.";
+    case 13: return "Could not hook the soundsystem vmix start.";
+    case 14: return "Could not hook the soundsystem voice stop.";
+    case 15: return "Could not hook the soundsystem voice map removal.";
+    case 16: return "Could not enable the soundsystem voice start hook.";
+    case 17: return "Could not enable the soundsystem vmix start hook.";
+    case 18: return "Could not enable the soundsystem voice stop hook.";
+    case 19: return "Could not enable the soundsystem voice map removal hook.";
     default: return "";
     }
 }

@@ -25,9 +25,18 @@ def fit(args):
     if sr != 48000 or reference.shape[1] != 2:
         raise ValueError("Reference must be 48 kHz stereo")
     reference = reference.astype(np.float64)
-    meta = json.loads(args.reference_json.read_text(encoding="utf-8"))
-    origin = meta["first_block_end_monotonic"] - meta["loopback_block_frames"] / sr
-    qpc_frequency = int(meta.get("qpc_frequency", 10_000_000))
+    engine_start = getattr(args, "engine_start", None)
+    speed = float(getattr(args, "speed", 1.0) or 1.0)
+    if engine_start is None:
+        if not getattr(args, "reference_json", None):
+            raise ValueError("A reference JSON is required for loopback audio.")
+        meta = json.loads(args.reference_json.read_text(encoding="utf-8"))
+        origin = meta["first_block_end_monotonic"] - meta["loopback_block_frames"] / sr
+        qpc_frequency = int(meta.get("qpc_frequency", 10_000_000))
+    else:
+        meta = None
+        origin = 0.0
+        qpc_frequency = 10_000_000
     rates = {}
     with args.state_csv.open(newline="", encoding="utf-8") as stream:
         for row in csv.DictReader(stream):
@@ -49,17 +58,37 @@ def fit(args):
                 wave = np.repeat(wave, 2, axis=1)
             cache[asset] = wave[:, :2]
         source = cache[asset]
-        raw = round((int(row["start_qpc"]) / qpc_frequency - origin) * sr)
-        end = (round((int(row["stop_qpc"]) / qpc_frequency - origin) * sr)
-               if row["stop_qpc"] else len(reference))
-        rate = float(np.median(rates.get(row["voice_id"], [1.0])))
-        lo = max(0, raw + round(.015 * sr))
+        if engine_start is not None:
+            start_engine = row.get("start_engine_seconds") or ""
+            if not start_engine:
+                continue
+            raw = round(((float(start_engine) - float(engine_start)) / speed) * sr)
+            stop_engine = row.get("stop_engine_seconds") or ""
+            end = (round(((float(stop_engine) - float(engine_start)) / speed) * sr)
+                   if stop_engine else len(reference))
+            rate = speed
+            # The engine WAV is frame-locked, so the onset can land exactly on
+            # the event sample. Search a little before it instead of assuming
+            # the loopback device's output delay.
+            lo = max(0, raw - round(.015 * sr))
+        else:
+            raw = round((int(row["start_qpc"]) / qpc_frequency - origin) * sr)
+            end = (round((int(row["stop_qpc"]) / qpc_frequency - origin) * sr)
+                   if row["stop_qpc"] else len(reference))
+            rate = float(np.median(rates.get(row["voice_id"], [1.0])))
+            lo = max(0, raw + round(.015 * sr))
         hi = min(len(reference) - 500, raw + round(.16 * sr))
-        if hi <= lo or end < lo:
+        if hi <= lo or (engine_start is None and end < lo):
             continue
         source_offset = max(0, -raw) * rate
-        n = min(end - lo, len(reference) - hi,
-                int((len(source) - source_offset) / rate), round(8 * sr))
+        if engine_start is not None:
+            # One-shot voices can stop on the same engine tick they start. Use
+            # the full source length and let the engine window clip it.
+            n = min(len(reference) - hi,
+                    int((len(source) - source_offset) / rate), round(8 * sr))
+        else:
+            n = min(end - lo, len(reference) - hi,
+                    int((len(source) - source_offset) / rate), round(8 * sr))
         if n < 512:
             continue
         positions = source_offset + np.arange(n) * rate
@@ -178,13 +207,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", type=Path, required=True)
     parser.add_argument("--reference-wav", type=Path, required=True)
-    parser.add_argument("--reference-json", type=Path, required=True)
+    parser.add_argument("--reference-json", type=Path)
     parser.add_argument("--state-csv", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--clip-offset", type=float, default=0.0)
     parser.add_argument("--clip-duration", type=float)
     parser.add_argument("--passes", type=int, default=6)
     parser.add_argument("--max-gain", type=float, default=1.0)
+    parser.add_argument("--engine-start", type=float,
+                        help="Replay seconds at the first movie WAV sample")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="Movie export speed (0.5 = half-speed reference)")
     args = parser.parse_args()
     fit(args)
 

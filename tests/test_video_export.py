@@ -117,13 +117,11 @@ class VideoExportTests(unittest.TestCase):
         self.assertEqual(self.export.output_directory, self.path.parent)
         self.assertEqual(Path(self.bridge.start_video.call_args.args[0]), folder / self.path.name)
 
-    def test_fixed_step_audio_refuses_before_game_changes_or_folder_creation(self):
-        with self.assertRaisesRegex(ValueError, "Audio export needs real-time"):
-            self.export.start(VideoOptions(self.path, fixed_step=True, bundle_audio=True))
-        self.bridge.start_video.assert_not_called()
-        self.controller.set_export_timing.assert_not_called()
-        self.controller.prepare_replay_for_recording.assert_not_called()
-        self.assertFalse(self.path.with_suffix("").exists())
+    def test_fixed_step_audio_uses_movie_wav_timing(self):
+        self.export.start(VideoOptions(self.path, fixed_step=True, bundle_audio=True))
+        self.controller.set_export_timing.assert_called_once_with(60, 1.0)
+        self.assertTrue(self.bridge.start_video.called)
+        self.assertTrue(self.path.with_suffix("").is_dir())
 
     def test_players_low_space_rejected_before_any_take_or_replay_preparation(self):
         ffmpeg = self.path.parent / "ffmpeg.exe"
@@ -740,16 +738,35 @@ class VideoGuiTests(unittest.TestCase):
         self.assertEqual(self.app.app_settings.export_folder, 'D:/Previous exports')
         self.app._error.assert_called_once()
 
-    def test_fixed_step_audio_refuses_before_focus_or_audio_worker(self):
+    def test_reconstructed_audio_offers_one_time_helper_download(self):
+        self.app.root = Mock()
+        self.app.video_reconstructed_audio.set(True)
+        with patch("dolly.gui.find_viewer", return_value=None), \
+                patch("dolly.gui.ask_reconstructed_helper", return_value=False) as prompt:
+            self.app._start_video_recording()
+        prompt.assert_called_once()
+        self.app._submit.assert_not_called()
+        self.assertIn("cancelled", self.app.status_text.get())
+
+    def test_fixed_step_audio_starts_a_movie_wave_take(self):
+        self.app.game_path = Var("C:/Deadlock/game/bin/win64/deadlock.exe")
+        self.app.project = self.two_camera_project()
+        self.app.controller = Mock()
+        self.app.controller.game_pid.return_value = 4321
+        self.app.controller._native_bridge.return_value = Mock()
         self.app.video_fixed_step.set(True)
-        for name in ('video_game_audio', 'video_reconstructed_audio'):
-            with self.subTest(track=name), patch('dolly.gui.focus_window') as focus:
-                self.app.video_game_audio.set(name == 'video_game_audio')
-                self.app.video_reconstructed_audio.set(name == 'video_reconstructed_audio')
-                self.app._start_video_recording()
-                self.app._submit.assert_not_called()
-                focus.assert_not_called()
-                self.assertIn('real-time', str(self.app._error.call_args.args[1]))
+        self.app.video_game_audio.set(True)
+        audio = Mock()
+        with patch("dolly.gui.ClipAudioCapture", return_value=audio), \
+                patch("dolly.gui.validate_game") as validate, \
+                patch("dolly.gui.focus_window"):
+            validate.return_value = Mock(executable=Path("C:/Deadlock/game/bin/win64/deadlock.exe"))
+            self.app._start_video_recording()
+            self.app._submit.call_args.args[1]()
+        self.app._submit.assert_called_once()
+        self.app.video_export.start.assert_called_once()
+        self.assertEqual(self.app.video_export.start.call_args.kwargs["before_record"],
+                         audio.start_movie)
 
     def test_recording_with_a_shot_auto_plays_after_arming(self):
         self.app.project = self.two_camera_project()

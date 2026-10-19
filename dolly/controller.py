@@ -1699,9 +1699,16 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
 
     def _seek_replay_camera(self, target, pose, *, owner='panel', **seek_options):
         intent = self._participant_follow_current()
+        # A stock Game Follow handoff (F9 hero selection) is not a participant
+        # intent, but it must survive a timeline seek just like one. Releasing
+        # the rig here and re-entering native flight with the pre-seek pose is
+        # what makes the camera snap back to its old position after a scrub.
+        game_follow = intent is None and bool(self._follow_active)
         try:
             if intent is not None:
                 self._halt(native_action='release', _preserve_participant=True)
+            elif game_follow:
+                self._halt(native_action='release', preserve_follow=True)
             else:
                 self._halt(native_action='release')
             self._invalidate_paused_camera()
@@ -1710,6 +1717,11 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             settled = self._seek_tick(target, **seek_options)
             self._check_position_cancelled()
             if intent is None:
+                if game_follow:
+                    # Keep the stock rig on the selected hero. The seek already
+                    # paused and settled the replay; no native pose writer is
+                    # allowed to take the camera back.
+                    return settled, True, None
                 frame = self.enter_native_flight(pose=pose, owner=owner)
                 return settled, None, frame
             following = self._resume_participant_follow(intent, pose)

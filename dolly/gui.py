@@ -22,6 +22,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from dolly import attach_camera, dialogs, editor_session, gui_layout, player_layer, screenshot_ui, ui_theme
 from .ui import shot_commands
+from .ui.confirm import ask_reconstructed_helper
 from .ui.widgets import NavigationMarker
 from dolly.editor_actions import ACTION_LABELS, ACTION_ORDER, OBJECT_PICKER_ENABLED, default_action_bindings
 from dolly.replays import discover_replays, find_replay_folder, parse_launch_options
@@ -47,6 +48,7 @@ from dolly.shot_history import ShotHistory
 from dolly.particles import (LABEL_TO_ID, PARTICLE_DEFAULT, PARTICLE_INTENSITY_DEFAULT,
                              PARTICLE_INTENSITY_MAX, PARTICLE_INTENSITY_MIN, PARTICLE_LABELS)
 from dolly.smoothing import smoothing_window
+from dolly.source2viewer import HELP_SIZE_MB, find_viewer
 from dolly.video_export import (ACTIVE_STATES, BITRATE_PRESETS, CODEC_BY_KEY, CODEC_CHOICES,
                                 CODEC_LABEL_TO_KEY, DEFAULT_CODEC_KEY, VideoExport, VideoOptions,
                                 bundled_ffmpeg_path, default_video_path, format_video_status,
@@ -866,8 +868,17 @@ class DollyApp:
             focus_window(game_pid())
         game_audio = self.video_game_audio.get()
         reconstructed = self.video_reconstructed_audio.get()
+        if reconstructed and find_viewer() is None:
+            if not ask_reconstructed_helper(self.root, size_mb=HELP_SIZE_MB):
+                self.status_text.set(
+                    "Reconstructed audio helper download cancelled; the video was not started.")
+                return
         game_executable = self.game_path.get() if game_audio or reconstructed else None
+        start_engine_seconds = (float(project.start_tick) / float(project.tick_rate)
+                                if project is not None else None)
         def start():
+            if options.fixed_step and reconstructed and start_engine_seconds is None:
+                raise RuntimeError("Fixed-step reconstructed audio needs a camera path or POV shot.")
             audio = None
             if game_audio or reconstructed:
                 bridge = self.controller._native_bridge()
@@ -876,10 +887,16 @@ class DollyApp:
                 color = options.path.with_suffix("") / options.path.name
                 audio = ClipAudioCapture(color, game_audio=game_audio, reconstructed=reconstructed,
                                          bridge=bridge, game=validate_game(game_executable).executable,
-                                         game_pid=self.controller.game_pid())
+                                         game_pid=self.controller.game_pid(),
+                                         controller=self.controller, movie_fps=options.fps,
+                                         fixed_step=options.fixed_step,
+                                         speed=options.speed if options.fixed_step else 1.0,
+                                         start_engine_seconds=start_engine_seconds)
                 audio.start()
             try:
-                status = self.video_export.start(options, project=project, frozen=frozen, pov=pov)
+                status = self.video_export.start(
+                    options, project=project, frozen=frozen, pov=pov,
+                    before_record=audio.start_movie if audio is not None else None)
             except BaseException:
                 if audio:
                     if self.video_export.status().get("state") in ACTIVE_STATES:

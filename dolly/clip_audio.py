@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -10,7 +11,10 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 
+from . import source2viewer
 from .runtime import external_program_environment, resource_root
+
+LOG = logging.getLogger("dolly")
 
 
 def _sample_window(offset: float, duration: float, available: int,
@@ -43,17 +47,9 @@ def _ffmpeg() -> Path:
         raise RuntimeError("Audio export needs FFmpeg. Install imageio-ffmpeg or set DOLLY_FFMPEG.") from exc
 
 
-def _viewer() -> Path:
-    configured = os.environ.get("DOLLY_SOURCE2VIEWER")
-    candidates = [Path(configured)] if configured else []
-    found = shutil.which("Source2Viewer-CLI.exe")
-    if found:
-        candidates.append(Path(found))
-    candidates.append(Path.home() / "Tools/ValveResourceFormat-20.0/Source2Viewer-CLI.exe")
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise RuntimeError("Reconstructed audio needs Source2Viewer-CLI.exe. Set DOLLY_SOURCE2VIEWER to its path.")
+def _viewer(progress=None) -> Path:
+    """Return the reconstructed-audio extractor, installing it on first use."""
+    return source2viewer.ensure_viewer(progress=progress)
 
 
 def _mux(video: Path, audios: list[Path], ffmpeg: Path) -> None:
@@ -87,26 +83,56 @@ class ClipAudioCapture:
     """Capture the game process and optional native voice log with video."""
 
     def __init__(self, video: Path, *, game_audio: bool, reconstructed: bool,
-                 bridge, game: Path, game_pid: int):
+                 bridge, game: Path, game_pid: int, controller=None,
+                 movie_fps: int = 60, fixed_step: bool = False,
+                 speed: float = 1.0, start_engine_seconds: float | None = None):
         self.video = video
         self.game_audio = game_audio
         self.reconstructed = reconstructed
         self.bridge = bridge
         self.game = game
         self.game_pid = game_pid
+        self.controller = controller
+        self.movie_fps = int(movie_fps)
+        self.fixed_step = bool(fixed_step)
+        self.speed = float(speed)
+        self.start_engine_seconds = start_engine_seconds
+        self.movie = None
         self.folder = video.with_name(video.stem + "_reconstructed")
         self.ffmpeg = _ffmpeg()
-        self.viewer = _viewer() if reconstructed else None
+        self.viewer = None
+        if reconstructed:
+            last_bucket = -1
+            def viewer_progress(done: int, total: int) -> None:
+                nonlocal last_bucket
+                percent = 0 if total <= 0 else min(100, round(done * 100 / total))
+                bucket = percent // 10
+                if bucket == last_bucket and percent < 100:
+                    return
+                last_bucket = bucket
+                LOG.info("Reconstructed-audio helper download: %s%%", percent)
+                if self.controller is not None:
+                    try:
+                        self.controller._message(
+                            f"Downloading reconstructed-audio helper... {percent}%")
+                    except Exception:
+                        pass
+            self.viewer = _viewer(progress=viewer_progress)
         self.vpk = game.parents[2] / "citadel/pak01_dir.vpk"
         if reconstructed and not self.vpk.is_file():
             raise RuntimeError(f"Deadlock sound archive is missing: {self.vpk}")
         if reconstructed and self.folder.exists():
             raise FileExistsError(f"Reconstructed audio folder already exists: {self.folder}")
-        self.recorder = resource_root() / "native/bin/win64/DollyGameAudio.exe"
-        if not self.recorder.is_file():
-            raise RuntimeError(f"Deadlock-only audio recorder is missing: {self.recorder}")
-        if not isinstance(game_pid, int) or game_pid <= 0:
-            raise RuntimeError("Deadlock is not running")
+        if self.fixed_step:
+            from .movie_audio import MovieWave
+            self.movie = MovieWave(video, game)
+            self.recorder = None
+        else:
+            self.recorder = resource_root() / "native/bin/win64/DollyGameAudio.exe"
+            if not self.recorder.is_file():
+                raise RuntimeError(f"Deadlock-only audio recorder is missing: {self.recorder}")
+            if not isinstance(game_pid, int) or game_pid <= 0:
+                raise RuntimeError("Deadlock is not running")
         self.temporary = tempfile.TemporaryDirectory(prefix="dolly-clip-audio-")
         self.work = Path(self.temporary.name)
         self.voice_log = self.work / "voices.csv"
@@ -115,6 +141,15 @@ class ClipAudioCapture:
         self.voice_started = False
 
     def start(self) -> None:
+        if self.movie is not None:
+            if self.reconstructed:
+                try:
+                    self.bridge.start_source_audio(str(self.voice_log))
+                    self.voice_started = True
+                except BaseException:
+                    self.cancel()
+                    raise
+            return
         self.process = subprocess.Popen(
             [str(self.recorder), str(self.game_pid), str(self.reference)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -130,6 +165,11 @@ class ClipAudioCapture:
             except BaseException:
                 self.cancel()
                 raise
+
+    def start_movie(self) -> None:
+        """Start the engine WAV take after fixed-step timing is armed."""
+        if self.movie is not None:
+            self.movie.start(self.controller, self.movie_fps)
 
     def _end_capture(self) -> None:
         try:
@@ -148,6 +188,8 @@ class ClipAudioCapture:
                     raise RuntimeError(f"Deadlock audio capture failed: {stderr.strip()}")
 
     def finish(self, video_status: dict) -> Path | None:
+        if self.movie is not None:
+            return self._finish_movie(video_status)
         import soundfile as sf
 
         self._end_capture()
@@ -198,7 +240,53 @@ class ClipAudioCapture:
         self.temporary.cleanup()
         return self.folder if self.reconstructed else None
 
+    def _finish_movie(self, video_status: dict) -> Path | None:
+        """Finish a fixed-step take from the engine's frame-locked WAV."""
+        self._end_capture()
+        duration = float(video_status.get("duration", 0))
+        if duration <= 0:
+            raise RuntimeError("Video did not report a duration for its audio.")
+        # The movie WAV starts at the prepared replay time. Its demo clock is
+        # the same clock the native voice log records in engine_seconds; the
+        # project tick is not necessarily the demo clock (replays can start
+        # with an intro/time offset).
+        start_engine = self.movie.movie_engine_seconds
+        if start_engine is None:
+            start_engine = self.start_engine_seconds
+        if self.reconstructed and start_engine is None:
+            raise RuntimeError("Fixed-step reconstructed audio needs a camera path or POV shot.")
+        self.reference = self.movie.finish(self.controller, duration, self.work,
+                                           start_engine, self.speed)
+        tracks = []
+        if self.game_audio:
+            game_clip = self.video.with_name(self.video.stem + "_game_audio.wav")
+            shutil.copy2(self.reference, game_clip)
+            tracks.append(game_clip)
+        if self.reconstructed:
+            from tools.export_captured_audio import export
+            from tools.fit_reference_voices import fit
+
+            sources = self.work / "sources"
+            export(self.voice_log, sources, vpk=self.vpk, viewer=self.viewer, ffmpeg=self.ffmpeg)
+            state = Path(str(self.voice_log) + ".state.csv")
+            if not state.is_file():
+                raise RuntimeError("The native voice-state sidecar is missing")
+            fitted = self.work / "fitted"
+            fit(SimpleNamespace(source_dir=sources, reference_wav=self.reference,
+                                reference_json=None, state_csv=state, output=fitted,
+                                clip_offset=0.0, clip_duration=duration, passes=8,
+                                engine_start=start_engine, speed=self.speed))
+            self.folder.mkdir(parents=True)
+            shutil.move(str(fitted / "sounds"), str(self.folder / "sounds"))
+            shutil.move(str(fitted / "reconstructed.wav"), str(self.folder / "reconstructed.wav"))
+            shutil.move(str(fitted / "fitted_usage.csv"), str(self.folder / "usage.csv"))
+        _mux(self.video, tracks, self.ffmpeg)
+        self.temporary.cleanup()
+        return self.folder if self.reconstructed else None
+
     def cancel(self) -> None:
+        if self.movie is not None:
+            self.movie.cancel(self.controller)
         try:
             if self.voice_started:
                 self.bridge.stop_source_audio()

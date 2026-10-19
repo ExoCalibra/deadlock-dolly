@@ -1,11 +1,11 @@
 {
   "format": 1,
-  "description": "Build 6793 reviewed offline. Stock editing baseline adopted from the 6793 gameinfo with the third-party mod-manager SearchPaths block replaced by the stock shape (optional language glob, citadel and core) and the SwapChainSampleableDepth stock option excluded; Dolly preserves the user's installed addon mounts separately and journaled gameinfo swapping remains. Live acceptance is recorded separately.",
+  "description": "Build 6796 reviewed offline. Client-only update: reviewed camera anchors are byte-identical at their 6793 RVAs; engine2, tier0 and soundsystem are unchanged. Stock editing baseline adopted from the 6793 gameinfo with the third-party mod-manager SearchPaths block replaced by the stock shape (optional language glob, citadel and core) and the SwapChainSampleableDepth stock option excluded; Dolly preserves the user's installed addon mounts separately and journaled gameinfo swapping remains. Live acceptance is recorded separately.",
   "gameinfo_sha256": "e6518881d40cd7dd0af9a48a7aa1976574b5062d2d551807cf7fdd940cc7bade",
   "modules": {
-    "citadel/bin/win64/client.dll": "d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460",
+    "citadel/bin/win64/client.dll": "8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c",
     "bin/win64/engine2.dll": "44bb357a1baf4765043042de3234112e18ea0db7e0b637f18385bb21f8338707",
     "bin/win64/tier0.dll": "ec99a83124781f051cfdc74f536a6462d92cb1fb5d3b7053fe7d1427fa01d45b"
   },
-  "unlocker_server_sha256": "8c67dc79f082a45a69c5eac99bd4cfd9e965d74154f3ce0bdf30a224158b4293"
+  "unlocker_server_sha256": "deba4a4f7742839763b2877ee8d490a0cadb4b626e4af7c85c3ac7ba4bc61a66"
 }

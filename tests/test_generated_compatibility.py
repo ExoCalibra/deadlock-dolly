@@ -125,16 +125,20 @@ class GeneratedCompatibilityTests(unittest.TestCase):
                   for a in self.data['follow_anchors'] for span in a['spans']}
         self.assertEqual(actual,expected)
         anchors={a['build']:a for a in self.data['follow_anchors']}
-        self.assertEqual(set(anchors),{'6722','6723','6726','6793'})
+        self.assertEqual(set(anchors),{'6722','6723','6726','6793','6796'})
         for build in ('6722','6723','6726'):
             self.assertEqual(anchors[build]['values']['observer_services_offset'],'0xe40')
             self.assertNotIn('local_player_table',anchors[build]['values'])
         self.assertEqual(anchors['6793']['values']['observer_services_offset'],'0xe98')
-        player_table=0x2748d20  # Dedicated 6793 review; camera-only updates may retain it.
+        player_table=0x2748d20  # Dedicated current review; camera-only updates may retain it.
         self.assertEqual(int(anchors['6793']['values']['local_player_table'],16),player_table)
+        self.assertEqual(anchors['6796']['values']['observer_services_offset'],'0xe98')
+        self.assertEqual(int(anchors['6796']['values']['local_player_table'],16),player_table)
         loaded,_,_=generate.load_contract(self.root)
-        current=next(a for a in loaded['follow_anchors'] if a['build']=='6793')
-        self.assertEqual(current['_sha256'],'d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460')
+        current=next(a for a in loaded['follow_anchors'] if a['build']=='6796')
+        self.assertEqual(current['_sha256'],'8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c')
+        legacy=next(a for a in loaded['follow_anchors'] if a['build']=='6793')
+        self.assertEqual(legacy['_sha256'],'d61348c564ce931e969996af18dbdec8544643810f28f3d330fb94b33231c460')
         layout=re.search(r'struct FollowAnchorProfile \{(.*?)\};',header,re.S).group(1)
         fields=re.findall(r'std::uintptr_t (\w+);',layout)
         rows=re.findall(r'^\s*\{"[0-9a-f]{64}", (.*?), kFollowCode(\d+)Spans,',header,re.M)
@@ -144,6 +148,7 @@ class GeneratedCompatibilityTests(unittest.TestCase):
         for build in ('6722','6723','6726'):
             self.assertEqual(emitted[build]['local_player_table'],0)
         self.assertEqual(emitted['6793']['local_player_table'],player_table)
+        self.assertEqual(emitted['6796']['local_player_table'],player_table)
 
     def test_follow_anchor_caller_must_end_a_saved_direct_call_to_blend(self):
         original=deepcopy(self.data)
@@ -169,7 +174,7 @@ class GeneratedCompatibilityTests(unittest.TestCase):
                 generate.generated_outputs(self.root)
 
     def reviewed_anchor(self):
-        return next(anchor for anchor in self.data['follow_anchors'] if anchor['build']=='6793')
+        return next(anchor for anchor in self.data['follow_anchors'] if anchor['build']=='6796')
 
     def test_current_follow_anchor_must_match_named_observer_services_field(self):
         original=deepcopy(self.data)

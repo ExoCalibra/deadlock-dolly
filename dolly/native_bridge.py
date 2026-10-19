@@ -86,7 +86,9 @@ def _load_atomic_library():
         metadata = json.loads((native / "build_info.json").read_text(encoding="utf-8"))
         data = dll.read_bytes()
     except (OSError, ValueError) as exc:
-        raise NativeBridgeError("The native camera helper is missing or invalid. Extract the complete Dolly package or rebuild it.") from exc
+        raise NativeBridgeError(
+            f"The native camera helper is missing or invalid at {dll}: {exc}. "
+            "Extract the complete Dolly package or rebuild it.") from exc
     if (not isinstance(metadata, dict) or type(metadata.get("abi")) is not int
             or metadata["abi"] != ABI
             or metadata.get("sha256") != hashlib.sha256(data).hexdigest()):
@@ -109,7 +111,9 @@ def _load_atomic_library():
             raise NativeBridgeError("The loaded native camera helper has a different protocol. Restart Dolly with the complete updated package.")
         return library
     except (OSError, AttributeError) as exc:
-        raise NativeBridgeError("The native camera helper could not load. Rebuild Dolly or extract the complete updated package.") from exc
+        raise NativeBridgeError(
+            f"The native camera helper could not load from {dll}: {exc}. "
+            "Rebuild Dolly or extract the complete updated package.") from exc
 
 
 def _number(value, label, *, positive=False):

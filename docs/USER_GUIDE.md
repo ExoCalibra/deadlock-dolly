@@ -382,8 +382,10 @@ set of markers and always include the selected view. The desktop XY overview
 remains available.
 
 Position, rotation and framing curves are editable on both desktop and the
-in-game timeline. Recording supports real-time game-only audio and a separate
-reconstructed-audio workflow; fixed-step exports are silent. See
+in-game timeline. Recording supports game-only audio and the reconstructed-audio
+workflow in both real-time and fixed-step exports. The first reconstructed
+export installs its verified helper automatically. Fixed-step audio is recorded
+by the engine's frame-locked WAV and keeps the selected slow-motion speed. See
 [Video and ReShade](VIDEO_AND_RESHADE.md) and [layer export](LAYER_EXPORT.md)
 for the output controls and restrictions.
 
@@ -558,8 +560,8 @@ Dolly records each ticked layer in turn, playing
 the shot again for each one. The passes land in subfolders of the take, and you
 do not need to press anything between takes. Press **Finish recording** only to
 end the color take early; the queued passes still follow. **Discard recording**
-drops the current take instead. Layer takes require **Fixed-step export**;
-bundled game-only audio is available for real-time recording instead. See
+drops the current take instead. Layer takes require **Fixed-step export** and
+stay silent; the Color take can carry game or reconstructed audio. See
 [layer export](LAYER_EXPORT.md) and [video settings](VIDEO_AND_RESHADE.md).
 
 A paired depth take also writes **camera.json** beside its frames: the exact

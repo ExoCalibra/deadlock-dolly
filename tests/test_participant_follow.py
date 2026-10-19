@@ -141,6 +141,20 @@ class ParticipantFollowControllerTests(unittest.TestCase):
         self.assertEqual(targets.count('spec_target 76'), 3)
         self.assertEqual(targets.count('spec_target 77'), 1)
 
+    def test_stock_game_follow_survives_replay_seek(self):
+        # F9/stock Game Follow has no participant intent. A timeline seek must
+        # keep the selected hero's rig instead of re-entering native flight at
+        # the pre-seek pose.
+        self.c._follow_active = True
+        self.c._participant_follow = None
+        before = len(self.console.events)
+        result = self.c.seek_replay_tick(200)
+        self.assertEqual(result['tick'], 200)
+        self.assertTrue(self.c._follow_active)
+        self.assertFalse(self.c._native_manual)
+        self.assertNotIn('native.flight', self.console.events[before:])
+        self.assertIn('Following the selected player.', self.c.status()['message'])
+
     def test_real_backlink_resolution_reaches_stock_target_and_refreshes_serial_after_seek(self):
         self.resolver_patch.stop()
         monitor, fields, _, controller = focus_fixtures.ReworkPlayerFocusTests().memory_fixture()
