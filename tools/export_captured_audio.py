@@ -15,18 +15,25 @@ import subprocess
 import tempfile
 import wave
 
+# Dolly runs from a GUI process. Without this flag, every Source2Viewer and
+# FFmpeg invocation opens a console window. Reconstructed audio can extract
+# dozens of assets, which makes the export look like it is spawning cmd.exe
+# forever. CREATE_NO_WINDOW keeps those child processes invisible.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def _convert_asset(asset: str, destination: Path, *, vpk: Path, viewer: Path,
                    ffmpeg: Path, temporary: Path) -> None:
     source_name = asset[:-5] + ".vsnd_c"
     raw = temporary / (hashlib.sha256(asset.encode()).hexdigest()[:16] + ".audio")
     result = subprocess.run([str(viewer), "-i", str(vpk), "-d", "-f", source_name,
-                             "-o", str(raw)], cwd=temporary, capture_output=True, text=True)
+                             "-o", str(raw)], cwd=temporary, capture_output=True, text=True,
+                            creationflags=_CREATE_NO_WINDOW)
     if result.returncode or not raw.is_file():
         raise RuntimeError(f"Source2Viewer could not extract {asset}: {result.stderr or result.stdout}")
     subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
                     "-i", str(raw), "-map", "0:a:0", "-c:a", "pcm_s16le",
-                    str(destination)], check=True)
+                    str(destination)], check=True, creationflags=_CREATE_NO_WINDOW)
 
 
 def _metadata(line: str) -> dict[str, str]:

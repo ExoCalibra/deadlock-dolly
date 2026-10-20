@@ -4,6 +4,22 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.62-alpha
+
+- **Players layer preflight.** *Before:* 120 FPS at 0.1x could create an empty
+  Players folder after the capture missed shot frames. *After:* Dolly rejects
+  engine clocks above 600 Hz before recording, removes empty layer folders on a
+  failed capture, and points to a lower Video FPS or an Export speed closer to 1x.
+- **Application Control guidance.** *Before:* WinError 4551 looked like a generic
+  native-helper failure. *After:* Dolly names Windows Smart App Control or an
+  Application Control policy and explains the unblock/allow steps.
+- **Hidden reconstructed-audio helper windows.** *Before:* Reconstructed audio
+  launched Source2Viewer and FFmpeg once per sound asset, and each child opened a
+  console window. *After:* Both child processes use `CREATE_NO_WINDOW`, so a busy
+  export no longer looks like it is spawning cmd.exe continuously.
+
+Full details: [0.6.62 release notes](RELEASE_NOTES_0.6.62-alpha.md).
+
 ## 0.6.61-alpha
 
 - **Deadlock 6796 support.** *Before:* Build 6796 was outside the reviewed client

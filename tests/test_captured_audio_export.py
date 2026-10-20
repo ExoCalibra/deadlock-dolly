@@ -1,15 +1,41 @@
 """Native voice-log pairing and source WAV deduplication."""
 import csv
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import wave
 
-from tools.export_captured_audio import export
+from tools.export_captured_audio import _convert_asset, export
 
 
 class CapturedAudioExportTests(unittest.TestCase):
+    def test_asset_conversion_children_are_hidden(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            viewer = root / "Source2Viewer-CLI.exe"
+            ffmpeg = root / "ffmpeg.exe"
+            destination = root / "jump.wav"
+            calls = []
+
+            def fake_run(command, **options):
+                calls.append((command, options))
+                if command[0] == str(viewer):
+                    raw = Path(command[command.index("-o") + 1])
+                    raw.write_bytes(b"fake audio")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("tools.export_captured_audio.subprocess.run", side_effect=fake_run):
+                _convert_asset("sounds/jump.vsnd", destination, vpk=root / "assets.vpk",
+                               viewer=viewer, ffmpeg=ffmpeg, temporary=root)
+            self.assertEqual([command[0] for command, _ in calls],
+                             [str(viewer), str(ffmpeg)])
+            expected = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            self.assertTrue(all(options.get("creationflags") == expected
+                                for _, options in calls))
+
     def test_two_uses_one_source_wav_and_distinct_stops(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
