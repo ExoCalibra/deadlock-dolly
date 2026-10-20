@@ -22,6 +22,7 @@ import time
 import zipfile
 
 from . import __version__
+from . import dof_preflight as dof_support
 # Compatibility exports shared with graphics runtime diagnostics.
 from .convar_response import NUMBER, read_cvar_value
 from .path import (Project, Keyframe, validate_cvar_name, STANDARD_ASPECT, ASPECT_MIN, ASPECT_MAX,
@@ -84,6 +85,15 @@ NATIVE_DOF_UNAVAILABLE = (
     "Deadlock. Dolly left Native DOF off. Repair the game files (Steam > Deadlock > "
     "Properties > Installed Files > Verify integrity of game files) to re-enable it, "
     "or use Citadel Depth of Field instead.")
+# Require indexed precompiled support before enabling the override. This check
+# cannot identify the cause of a checkerboard or certify the rendered result.
+NATIVE_DOF_VERIFY_FILES = (
+    "Dolly could not verify this install's precompiled DOF shader and material "
+    "entries, so it left Native Depth of Field off. Check File > Check Native DOF "
+    "support. If files are missing or unreadable, check folder access and repair "
+    "the game files (Steam > Deadlock > Properties > Installed Files > Verify "
+    "integrity of game files), then reconnect and try again. You can also use "
+    "Citadel Depth of Field instead.")
 
 
 def _dof_shader_compile_failed(text):
@@ -268,6 +278,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         self._console_open = None
         self._native_last_status = {}
         self._native_handoff_details = {}
+        self._native_pause_intent = None
         self._console = None
         # Reused across the startup and per-shot replay-camera handoff checks.
         # The reviewed monitor opens a read-only process handle and re-verifies
@@ -326,7 +337,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         self._thread = None
         self._state_lock = threading.RLock()
         self._op_lock = threading.RLock()
-        self._state = dict(connected=False, playing=False, time=0.0, tick=None, total_ticks=None,
+        self._state = dict(connected=False, playing=False, playback_error=None, recording_generation=0,
+                           time=0.0, tick=None, total_ticks=None,
                            paused_camera=False, paused_flight=False, paused_tick=None,
                            startup_stage="not_launched",
                            message="Launch the hideout, connect and initialize the unlocker before loading your replay.")
@@ -1415,9 +1427,33 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         self._player_capture_pending = bool(pending and player_layer)
         was_pending = self._recording_pending
         self._recording_pending = bool(pending)
+        if pending and not was_pending:
+            # This capture owns only failures from its own playback. A prior
+            # failed shot must not abort a new take before its Play request.
+            with self._state_lock:
+                self._state["recording_generation"] += 1
+                self._state["playback_error"] = None
         if was_pending and not pending:
             self._recording_replay = None
             self._recording_warmup = None
+
+    def pending_export_restoration(self):
+        """Labels for retained export state; no game access or cleanup writes."""
+        pending = (
+            ("capture reservation", self._recording_pending),
+            ("native camera", self._native_active),
+            ("camera values", self._restore),
+            ("playback settings", self._playback_restore),
+            ("game UI settings", self._game_ui_restore),
+            ("look controls", self._look_restore),
+            ("replay HUD", self._replay_hud_restore),
+            ("replay speed", self._demo_speed_changed),
+            ("matte settings", getattr(self, "_matte_cvar_restore", None)),
+            ("scene classes", getattr(self, "_layer_hidden", None)),
+            ("export timing", getattr(self, "_export_timing", None)),
+            ("render scale", getattr(self, "_export_resolution", None) is not None),
+        )
+        return [label for label, retained in pending if retained]
 
     def _recorder_active(self):
         if self._recording_pending:
@@ -1963,6 +1999,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             bridge = self._native_bridge()
             if not getattr(self, "_pov_active", False) or bridge is None:
                 raise RuntimeError("Prepare a POV recording before starting the segment.")
+            self._native_pause_intent = None
             try:
                 self._prepare_native_shot_replay()
                 self._wait_for_recorder_ready()
@@ -1973,7 +2010,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._demo_speed_changed = True
                 self._request("demo_timescale " + numeric(speed) + "; demo_resume")
                 self._playback_details = {"project": project.to_dict(), "camera_source": "player_pov", "speed": speed}
-                self._message("Playing POV segment.", playing=True, time=0)
+                self._message("Playing POV segment.", playing=True, playback_error=None, time=0)
                 self._thread = threading.Thread(target=self._run_native,
                     args=(project, 0, speed, 60, False), daemon=True, name="DollyPOVPlayback")
                 self._thread.start()
@@ -2978,6 +3015,28 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         except OSError:
             return []
 
+    def dof_preflight(self, game_path=None):
+        """Report whether this install still has the shipped Native DOF shader.
+
+        Reads directory indexes from the user's own game install only. Safe
+        before or after a launch. An explicitly selected path takes precedence
+        over the last launch; without either, returns ``unknown_install``.
+        """
+        selected = ((self._launch_attempt or {}).get("game_path")
+                    if game_path is None else game_path)
+        raw = str(selected or "").strip()
+        setting = None
+        if self._console is not None and getattr(self._console, "is_connected", False):
+            try:
+                setting = read_cvar_value(
+                    dof_support.DOF_SHADER_SETTING,
+                    self._request(dof_support.DOF_SHADER_SETTING, allow_error=True))
+            except (RuntimeError, ValueError):
+                setting = None
+        report = dof_support.check_installation(raw, renderer="dx11", dynamic_compile=setting)
+        self._startup_evidence["dof_preflight"] = report
+        return report
+
     def ensure_native_dof_shader_support(self, project):
         """Keep the engine able to compile its Native DOF pass in this session.
 
@@ -2993,7 +3052,6 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             return False
         if self._console is None or not self._console.is_connected or not self._alive():
             return False
-        self._dof_shader_checked = True
         evidence = {"settings": {}, "reload": None}
         changed = False
         for name in DOF_SHADER_SETTINGS:
@@ -3014,7 +3072,26 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     evidence["settings"][name] = 0
             except (RuntimeError, ValueError):
                 continue
-        missing = self._missing_dof_compiler_files()
+        try:
+            support = self.dof_preflight()
+        except (OSError, ValueError) as exc:
+            support = {"status": dof_support.VERIFY_FILES,
+                       "problems": ["Native DOF installation check failed: " + type(exc).__name__]}
+        evidence["preflight"] = support
+        if support.get("status") == dof_support.VERIFY_FILES:
+            self._dof_shader_checked = True
+            self._native_dof_unavailable = NATIVE_DOF_VERIFY_FILES
+            LOG.error("Native DOF preflight found a missing shipped shader or material: %s",
+                      support.get("problems"))
+            self._message(NATIVE_DOF_VERIFY_FILES)
+            self._startup_evidence["dof_shader"] = evidence
+            return False
+        missing = (support["dynamic_compile"]["missing"]
+                   if support.get("status") == dof_support.READY
+                   else self._missing_dof_compiler_files())
+        # Latch only a completed check. Unexpected programming failures still
+        # propagate, but must not let the next apply skip verification.
+        self._dof_shader_checked = True
         if missing:
             # Retail Deadlock ships no shader source and no vfx compiler, so
             # ``mat_forcereloadshaders dof`` can only fail and swap in the engine
@@ -3557,6 +3634,111 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._restore_replay_hud()
             raise
 
+    def _check_native_pause_owner(self, intent):
+        with self._state_lock:
+            valid = (self._native_pause_intent is intent
+                     and self._session is intent["session"] and self._demo == intent["demo"]
+                     and self._playback_details is intent["playback"] and self._thread is intent["thread"])
+            if not valid and self._native_pause_intent is intent:
+                self._native_pause_intent = None
+        if not valid:
+            raise RuntimeError("Native pause ownership changed. Pause was not confirmed for this shot.")
+        self._require_connection()
+
+    def _confirm_native_pause(self, bridge, intent):
+        """Settle an owned pause on fresh views and the selected console clock.
+
+        Runs on the operation worker. The first post-command tick can still be
+        a transient value; discard it, then require equal ticks across two more
+        fresh paused views. Render ticks never supply this transaction's bound.
+        """
+        last_frame = intent["frame_count"]
+        last_phase = intent["phase"]
+        previous_tick = None
+        stable = 0
+        reads = 0
+        while time.perf_counter() < intent["deadline"]:
+            if self._stop_event.is_set():
+                with self._state_lock:
+                    if self._native_pause_intent is intent:
+                        self._native_pause_intent = None
+                return None
+            self._check_native_pause_owner(intent)
+            view = bridge.status()
+            if self._stop_event.is_set():
+                continue
+            self._require_native_demo(view)
+            phase = float(view["phase"])
+            frame = int(view["frame_count"])
+            if (not math.isfinite(phase) or phase < last_phase - 1e-5
+                    or phase > intent["duration"] + 1e-5):
+                raise RuntimeError("Native camera time changed unexpectedly during replay pause.")
+            if frame < last_frame:
+                raise RuntimeError("The native view callback restarted during replay pause.")
+            if view.get("paused") is True and frame > last_frame:
+                self._check_native_pause_owner(intent)
+                remaining = intent["deadline"] - time.perf_counter()
+                if remaining <= 0:
+                    break
+                tick = int(self._require_demo(timeout=min(.5, remaining))["tick"])
+                if self._stop_event.is_set():
+                    continue
+                elapsed = max(0, time.perf_counter() - intent["began"])
+                allowed = max(128, intent["tick_rate"] * 2,
+                              elapsed * intent["tick_rate"] * intent["speed"] * 2 + 4)
+                intent["post_pause_ticks"].append(tick)
+                intent["post_pause_frames"].append(frame)
+                del intent["post_pause_ticks"][:-8]
+                del intent["post_pause_frames"][:-8]
+                intent["allowed_ticks"] = allowed
+                if not intent["before_tick"] <= tick <= intent["before_tick"] + allowed:
+                    raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
+                reads += 1
+                if reads > 1:
+                    stable = stable + 1 if tick == previous_tick else 1
+                    previous_tick = tick
+                if stable >= 2:
+                    self._check_native_pause_owner(intent)
+                    if self._stop_event.is_set():
+                        continue
+                    with self._state_lock:
+                        intent.update(state="confirmed", tick=tick, confirmed_frame=frame,
+                                      allowed_ticks=allowed)
+                    return intent
+            last_frame, last_phase = frame, phase
+            self._stop_event.wait(min(.01, max(0, intent["deadline"] - time.perf_counter())))
+        raise RuntimeError("The replay pause was not confirmed by fresh views and a stable selected-replay clock.")
+
+    def _owned_native_pause_clock(self):
+        """Read-only monitor wait; never hold operation/state locks while waiting."""
+        with self._state_lock:
+            intent = self._native_pause_intent
+        if intent is None:
+            return None
+        while True:
+            if self._stop_event.is_set():
+                with self._state_lock:
+                    if self._native_pause_intent is intent:
+                        self._native_pause_intent = None
+                return None
+            self._check_native_pause_owner(intent)
+            remaining = intent["deadline"] - time.perf_counter()
+            if remaining <= 0:
+                with self._state_lock:
+                    if self._native_pause_intent is intent:
+                        self._native_pause_intent = None
+                raise RuntimeError("The owned replay pause did not finish before its confirmation deadline.")
+            with self._state_lock:
+                state = intent["state"]
+                if state == "confirmed":
+                    intent["state"] = "consumed"
+                    self._native_pause_intent = None
+                    return intent
+                error = intent.get("error")
+            if state == "failed":
+                raise RuntimeError(error or "The owned replay pause failed.")
+            self._stop_event.wait(min(.01, remaining))
+
     def toggle_replay(self):
         """Pause/resume replay time without restarting an authored native path.
 
@@ -3565,7 +3747,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         each rendered view even though the replay is not paused.
         """
         with self._op_lock:
-            self._require_demo()
+            replay = self._require_demo()
             bridge = self._native_bridge()
             if bridge is None:
                 raise RuntimeError("In-game replay controls require the native editor.")
@@ -3574,6 +3756,9 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             paused = bool(current["paused"])
             if self._thread and self._thread.is_alive() and (self._playback_details or {}).get("frozen"):
                 raise RuntimeError("Stop the frozen preview before resuming replay time.")
+            if paused:
+                with self._state_lock:
+                    self._native_pause_intent = None
             if paused:
                 self._apply_replay_hud()
             else:
@@ -3594,7 +3779,49 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     self._message("Replay paused. Free camera movement stays active.",
                                   playing=False, paused_flight=True, replay_paused=True)
                 return self.status()
-            self._toggle_replay_time(paused)
+            intent = None
+            if (not paused and self._native_active and self._thread and self._thread.is_alive()
+                    and current.get("state") == "playing"):
+                details = self._playback_details or {}
+                project = details.get("project") or {}
+                began = time.perf_counter()
+                # Take the lower bound immediately before the owned command,
+                # after HUD preparation, rather than from rendered telemetry.
+                replay = self._require_demo()
+                intent = dict(session=self._session, demo=self._demo, playback=self._playback_details,
+                              thread=self._thread, before_tick=int(replay["tick"]),
+                              frame_count=int(current["frame_count"]), phase=float(current["phase"]),
+                              tick_rate=float(project.get("tick_rate", 64)), speed=float(details.get("speed", 1)),
+                              duration=float(project.get("keyframes", [{}])[-1].get("time", current["phase"])),
+                              began=began, deadline=began + 3, state="pending",
+                              post_pause_ticks=[], post_pause_frames=[])
+                with self._state_lock:
+                    self._native_pause_intent = intent
+            try:
+                if intent is not None:
+                    if self._stop_event.is_set():
+                        with self._state_lock:
+                            self._native_pause_intent = None
+                        return self.status()
+                    self._check_native_pause_owner(intent)
+                    if time.perf_counter() >= intent["deadline"]:
+                        raise RuntimeError("The owned replay pause expired before its command could be sent.")
+                self._toggle_replay_time(paused)
+                if intent is not None and self._confirm_native_pause(bridge, intent) is None:
+                    return self.status()
+            except BaseException as exc:
+                with self._state_lock:
+                    if intent is not None and self._native_pause_intent is intent:
+                        intent.update(state="failed", error=str(exc))
+                    if intent is not None and self._playback_details is intent["playback"]:
+                        checks = self._playback_details.setdefault("pause_clock_checks", [])
+                        checks.append(dict(source="owned_pause", before_replay_tick=intent["before_tick"],
+                            before_frame=intent["frame_count"], post_pause_ticks=list(intent["post_pause_ticks"]),
+                            post_pause_frames=list(intent["post_pause_frames"]),
+                            allowed_ticks=intent.get("allowed_ticks"),
+                            accepted=False, error=str(exc)))
+                        del checks[:-8]
+                raise
             self._message("Replay playing." if paused else "Replay paused.", replay_paused=not paused)
             return self.status()
 
@@ -4101,6 +4328,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._stop_before_new_shot(preserve_layers=True)
             else:
                 self._stop_before_new_shot()
+            self._native_pause_intent = None
             # A suppressed health container may intentionally span repeated
             # shots when the original game view has no safe HUD player. Playback
             # only needs the panel hidden, so it does not require the full-HUD
@@ -4261,7 +4489,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                                else "Playing native camera path at render time.")
                     if tick_rate_warning:
                         message += " WARNING: " + tick_rate_warning
-                    self._message(message, playing=True, time=start)
+                    self._message(message, playing=True, playback_error=None, time=start)
                     self._thread = threading.Thread(target=self._run_native,
                         args=(project, start, speed, rate, bool(frozen)), daemon=True, name="DollyNativePlayback")
                     self._thread.start()
@@ -4278,7 +4506,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 message = ("Playing frozen preview." if frozen else "Playing shot with the replay.")
                 if tick_rate_warning:
                     message += " WARNING: " + tick_rate_warning
-                self._message(message, playing=True, time=start)
+                self._message(message, playing=True, playback_error=None, time=start)
                 self._thread = threading.Thread(target=self._run, args=(project, start, speed, rate, frozen, smoothing),
                                                 daemon=True, name="DollyPlayback")
                 self._thread.start()
@@ -4551,6 +4779,26 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 if expected_effects and (status.get("effect_error", 0) or
                         abs(float(status.get("effect_phase", -1)) - phase) > 1e-9):
                     raise RuntimeError("Native effects did not acknowledge the camera phase. Playback stopped.")
+                owned_pause = None
+                if (not frozen and status.get("paused") is True
+                        and self._native_pause_intent is not None):
+                    owned_pause = self._owned_native_pause_clock()
+                    if self._stop_event.is_set():
+                        break
+                    if owned_pause is not None:
+                        paused_clock = (tick, owned_pause["tick"])
+                        tick = paused_clock[1]
+                        if self._playback_details is not None:
+                            checks = self._playback_details.setdefault("pause_clock_checks", [])
+                            checks.append(dict(source="owned_pause", previous_tick=previous_tick,
+                                native_tick=int(status["tick"]), replay_tick=tick,
+                                before_replay_tick=owned_pause["before_tick"], phase=phase,
+                                before_frame=owned_pause["frame_count"],
+                                confirmed_frame=owned_pause["confirmed_frame"],
+                                previous_phase=previous_phase, allowed_ticks=owned_pause["allowed_ticks"],
+                                post_pause_ticks=list(owned_pause["post_pause_ticks"]),
+                                post_pause_frames=list(owned_pause["post_pause_frames"]), accepted=True))
+                            del checks[:-8]
                 if previous_tick is not None:
                     # A live speed change updates the demo timescale; keep the
                     # jump bound scaled to the speed actually playing.
@@ -4565,6 +4813,28 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                                   max(0, now - previous_poll) * project.tick_rate * live_speed * 2 + 4)
                     if status.get("paused") is not True:
                         paused_clock = None
+                    elif owned_pause is not None:
+                        # The owned console transaction supplies both bounds.
+                        # A prior render tick can be ahead of its settled pause.
+                        pass
+                    elif not frozen and previous_paused is False:
+                        # Confirm the pause clock even when its first rendered
+                        # tick looks ordinary. A later paused view can report
+                        # the anomalous tick, after the transition is past.
+                        replay_tick = int(self._require_demo()["tick"])
+                        continuous_pause = previous_tick <= replay_tick <= previous_tick + allowed
+                        check = dict(previous_tick=previous_tick, native_tick=tick,
+                                     replay_tick=replay_tick, phase=phase,
+                                     previous_phase=previous_phase, allowed_ticks=allowed,
+                                     accepted=continuous_pause)
+                        if self._playback_details is not None:
+                            checks = self._playback_details.setdefault("pause_clock_checks", [])
+                            checks.append(check)
+                            del checks[:-8]
+                        if not continuous_pause:
+                            raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
+                        paused_clock = (tick, replay_tick)
+                        tick = replay_tick
                     elif paused_clock is not None:
                         # Never learn an anomalous rendered tick as the replay
                         # clock. Cache the independently confirmed paused tick;
@@ -4575,28 +4845,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                                 raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
                             paused_clock = (tick, replay_tick)
                         tick = paused_clock[1]
-                    if tick < previous_tick or tick - previous_tick > allowed:
-                        # The native path holds its phase during pause. Confirm
-                        # replay continuity independently at that boundary only;
-                        # active jumps, Frozen, stale views and effect failures
-                        # retain their ordinary guards.
-                        continuous_pause = False
-                        if not frozen and previous_paused is False and status.get("paused") is True:
-                            replay_tick = int(self._require_demo()["tick"])
-                            continuous_pause = previous_tick <= replay_tick <= previous_tick + allowed
-                            check = dict(previous_tick=previous_tick, native_tick=tick,
-                                         replay_tick=replay_tick, phase=phase,
-                                         previous_phase=previous_phase, allowed_ticks=allowed,
-                                         accepted=continuous_pause)
-                            if self._playback_details is not None:
-                                checks = self._playback_details.setdefault("pause_clock_checks", [])
-                                checks.append(check)
-                                del checks[:-8]
-                            if continuous_pause:
-                                paused_clock = (tick, replay_tick)
-                                tick = replay_tick
-                        if not continuous_pause:
-                            raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
+                    if owned_pause is None and (tick < previous_tick or tick - previous_tick > allowed):
+                        raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
                     if frozen and tick != previous_tick:
                         raise RuntimeError("The scene resumed during native Frozen preview. Camera playback stopped.")
                 pose = self._native_pose(status)
@@ -4635,7 +4885,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                                 and not frozen and not self._recorder_active())
             restoration = self._finish_native_playback(return_to_flight=return_to_flight)
             if failure or restoration:
-                self._message(" ".join(part for part in (failure, restoration) if part), playing=False)
+                self._message(" ".join(part for part in (failure, restoration) if part),
+                              playing=False, playback_error=failure or restoration)
             elif finished and return_to_flight and self._native_manual:
                 self._message("Cinematic finished. Free camera controls are ready; pause/resume stays available.",
                               playing=False, paused_flight=True)
@@ -4832,7 +5083,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             waiter.close()
             restoration_error = self._finish_playback()
             if failure or restoration_error:
-                self._message(" ".join(part for part in (failure, restoration_error) if part), playing=False)
+                self._message(" ".join(part for part in (failure, restoration_error) if part),
+                              playing=False, playback_error=failure or restoration_error)
             elif finished:
                 self._message("Shot finished. Replay paused and playback settings restored; Stop restores lens/cvar values.", playing=False)
 
@@ -4844,6 +5096,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             else:
                 self.stop_game_follow()
         self._stop_event.set()
+        with self._state_lock:
+            self._native_pause_intent = None
         worker = self._thread
         if worker and worker is not threading.current_thread():
             worker.join(timeout=10)
@@ -5136,6 +5390,10 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                   "game_build": self._game_build,
                   "replay_tick_rate": self.replay_tick_rate(),
                   "runtime_verified_in_Deadlock": False}
+        try:
+            report["dof_preflight"] = self.dof_preflight()
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never fail the export
+            report["dof_preflight_error"] = str(exc)
         bridge = self._native_bridge()
         if bridge is not None and callable(getattr(bridge, "diagnostics", None)):
             # Include current input owner, event queue and overlay availability,

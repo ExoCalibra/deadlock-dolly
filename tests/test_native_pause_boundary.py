@@ -81,6 +81,34 @@ class NativePauseBoundaryTests(unittest.TestCase):
         self.assertTrue(all(sample['tick'] != 6000 for sample in
                             self.controller._playback_samples if sample['paused'] is False))
 
+    def test_delayed_paused_render_anomaly_uses_first_confirmed_replay_tick(self):
+        self.install_transition(raw_tick=116)
+        original_status = self.bridge.status
+        paused_samples = 0
+
+        def status():
+            nonlocal paused_samples
+            result = original_status()
+            if result['paused'] and result['state'] == 'playing':
+                paused_samples += 1
+                if paused_samples == 2:
+                    result['tick'] = 6000
+            return result
+
+        self.bridge.status = status
+        self.run_native()
+        self.assertGreaterEqual(paused_samples, 2)
+        self.assertNotIn('error', self.controller._playback_details)
+        self.assertIn('Native shot finished', self.controller.status()['message'])
+        paused = [sample for sample in self.controller._playback_samples if sample['paused']]
+        self.assertTrue(any(sample['tick'] == 6000 for sample in paused))
+        self.assertTrue(all(sample['monitor_tick'] == 116 for sample in paused))
+
+    def test_real_seek_after_normal_first_pause_is_still_rejected(self):
+        self.install_transition(raw_tick=116, seek_while_paused=True)
+        self.run_native()
+        self.assertIn('replay jumped', self.controller.status()['message'])
+
     def test_real_seek_after_confirmed_pause_still_stops(self):
         self.install_transition(seek_while_paused=True)
         self.run_native()

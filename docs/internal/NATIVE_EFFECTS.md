@@ -90,3 +90,27 @@ The binding was checked against the uploaded tier0 disassembly. The
 provided a reference for setter/filter/callback semantics; it is not used as a
 substitute for this game's verified ABI. No SDK source is bundled in Dolly.
 See VALIDATION.md for test results and the compatibility profile for addresses.
+
+## Preflighted install instead of a shipped compiler
+
+The `r_dof_override` material (`materials/dev/dof1_general.vmat`, shader
+`dof.vfx`) has precompiled bytecode in the reviewed game install:
+
+- `citadel/shaders_pc_000.vpk` carries `shaders/vfx/dof_pc_50_{vs,ps,features}.vcs`
+  and `shaders_vulkan_000.vpk` the matching `dof_vulkan_50_*` set.
+- The reviewed install also has `game/bin/win64/vfx_dx11.dll`, whose static
+  dependency `slang.dll` is absent, preventing that dynamic compiler from loading.
+
+This provides a shipped-bytecode path without a working compiler. Dolly's
+0.6.34 change skips the forced reload when compiler files are missing, preserving
+that path. A checkerboard alone does not establish which shader request failed
+or whether a recompile was forced.
+
+`dolly/dof_preflight.py` reads only the install's directory indexes and reports
+`ready`, `verify_files` (the shader or material entries are missing or unreadable)
+or `unknown_install`. `ready` establishes index presence only; it does not check
+payload integrity, required permutations or GPU output. The check never reads
+game payloads, launches the game or redistributes a Valve binary. The controller
+records the report under `startup_evidence.dof_preflight`, includes it in diagnostics, and
+refuses Native DOF when the shipped shader is missing. **File > Check Native DOF
+support** runs the same check on demand.

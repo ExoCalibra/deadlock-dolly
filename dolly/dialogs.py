@@ -61,6 +61,7 @@ _DT_EXPANDTABS = 0x0040
 _SPI_GETNONCLIENTMETRICS = 0x0029
 _BN_CLICKED = 0
 _SW_SHOW = 5
+_SW_RESTORE = 9
 _DIALOG_CLASS = "#32770"
 
 if sys.platform == "win32":
@@ -69,6 +70,9 @@ if sys.platform == "win32":
     _LRESULT = ctypes.c_ssize_t
     _SUBCLASSPROC = ctypes.WINFUNCTYPE(_LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
                                        wintypes.LPARAM, ctypes.c_size_t, ctypes.c_size_t)
+    class _MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
 
     class _SIZE(ctypes.Structure):
         _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
@@ -190,6 +194,18 @@ def _native_dialog(parent, title: str, message: str, details: str) -> bool:
     # Keep every native dialog operation on its own thread; Tk owns the main
     # thread's modal wait and continues servicing timers and worker results.
     owner = parent.winfo_id()
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetActiveWindow.restype = wintypes.HWND
+    user32.GetFocus.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.IsWindowEnabled.argtypes = [wintypes.HWND]
+    user32.IsChild.argtypes = [wintypes.HWND, wintypes.HWND]
+    user32.SetActiveWindow.argtypes = [wintypes.HWND]
+    user32.SetFocus.argtypes = [wintypes.HWND]
+    active = user32.GetActiveWindow() or user32.GetAncestor(owner, 2) or owner
+    focus = user32.GetFocus()
     finished = threading.Event()
     result = []
     thread_id = []
@@ -225,9 +241,54 @@ def _native_dialog(parent, title: str, message: str, details: str) -> bool:
             # If Tk is shutting down, wake the native pump so its finally
             # block destroys the dialog and releases its callback and font.
             ctypes.WinDLL("user32").PostThreadMessageW(thread_id[0], 0x0012, 0, 0)
+        if finished.is_set() and user32.IsWindow(active) and user32.IsWindowEnabled(active):
+            # Restore the existing UI-thread focus, including native file-picker
+            # controls, without attaching input queues to the dialog worker.
+            user32.SetActiveWindow(active)
+            if (focus and user32.IsWindow(focus) and user32.IsWindowEnabled(focus)
+                    and (focus == active or user32.IsChild(active, focus))):
+                user32.SetFocus(focus)
     if result and isinstance(result[0], Exception):
         raise result[0]
     return bool(result and result[0])
+
+
+def _modal_owner(user32, owner):
+    """Keep an existing native modal picker between the error and its root."""
+    if not owner:
+        return None
+    owner = user32.GetAncestor(owner, 2) or owner
+    visited = set()
+    while owner not in visited and len(visited) < 8:
+        visited.add(owner)
+        if user32.IsWindowEnabled(owner):
+            break
+        popup = user32.GetLastActivePopup(owner)
+        if (popup in visited or user32.GetWindow(popup, 4) != owner
+                or not user32.IsWindowVisible(popup)):
+            break
+        owner = popup
+    return owner
+
+
+def _dialog_placement(user32, owner, width, height):
+    if owner and user32.IsIconic(owner):
+        user32.ShowWindow(owner, _SW_RESTORE)
+    monitor = user32.MonitorFromWindow(owner, 2)  # MONITOR_DEFAULTTONEAREST
+    info = _MONITORINFO()
+    info.cbSize = ctypes.sizeof(info)
+    if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        raise OSError("Could not read the dialog monitor work area")
+    work = info.rcWork
+    width = min(width, work.right - work.left)
+    height = min(height, work.bottom - work.top)
+    anchor = wintypes.RECT(work.left, work.top, work.right, work.bottom)
+    if owner and not user32.GetWindowRect(owner, ctypes.byref(anchor)):
+        raise OSError("Could not read the dialog owner bounds")
+    x = anchor.left + max((anchor.right - anchor.left - width) // 2, 0)
+    y = anchor.top + max((anchor.bottom - anchor.top - height) // 3, 0)
+    return (max(work.left, min(x, work.right - width)),
+            max(work.top, min(y, work.bottom - height)), width, height)
 
 
 def _run_native_dialog(owner, title: str, message: str, details: str) -> bool:
@@ -279,8 +340,17 @@ def _run_native_dialog(owner, title: str, message: str, details: str) -> bool:
 
     user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
     user32.GetAncestor.restype = wintypes.HWND
-    if owner:
-        owner = user32.GetAncestor(owner, 2) or owner  # GA_ROOT: disable the whole Tk window.
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    user32.GetLastActivePopup.argtypes = [wintypes.HWND]
+    user32.GetLastActivePopup.restype = wintypes.HWND
+    user32.IsWindowEnabled.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.MonitorFromWindow.restype = wintypes.HANDLE
+    user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)]
+    owner = _modal_owner(user32, owner)
     scale = 1.0
     try:
         dpi = user32.GetDpiForWindow(owner) if owner else user32.GetDpiForSystem()
@@ -317,12 +387,16 @@ def _run_native_dialog(owner, title: str, message: str, details: str) -> bool:
     user32.AdjustWindowRectEx(ctypes.byref(window_rect), style, False, exstyle)
     window_width = window_rect.right - window_rect.left
     window_height = window_rect.bottom - window_rect.top
-    x = y = 0
-    if owner:
-        owner_rect = wintypes.RECT()
-        user32.GetWindowRect(owner, ctypes.byref(owner_rect))
-        x = owner_rect.left + max((owner_rect.right - owner_rect.left - window_width) // 2, 0)
-        y = owner_rect.top + max((owner_rect.bottom - owner_rect.top - window_height) // 3, 0)
+    try:
+        x, y, bounded_width, bounded_height = _dialog_placement(user32, owner, window_width, window_height)
+    except Exception:
+        gdi32.DeleteObject(font)
+        raise
+    client_width -= window_width - bounded_width
+    client_height -= window_height - bounded_height
+    window_width, window_height = bounded_width, bounded_height
+    content_height = max(1, client_height - pad * 2 - button_height - bottom_margin)
+    text_width = max(1, min(text_width, client_width - pad * 2 - icon_size - int(round(12 * scale))))
 
     module = kernel32.GetModuleHandleW(None)
     window = user32.CreateWindowExW(exstyle, _DIALOG_CLASS, title, style, x, y, window_width, window_height,
@@ -393,9 +467,10 @@ def _run_native_dialog(owner, title: str, message: str, details: str) -> bool:
         return False
     _ACTIVE[int(window)] = callback
 
-    if owner:
-        user32.EnableWindow(owner, False)
+    disabled_owner = False
     try:
+        if owner and user32.IsWindowEnabled(owner):
+            disabled_owner = not bool(user32.EnableWindow(owner, False))
         user32.ShowWindow(window, _SW_SHOW)
         # Keep the error above the game window. A modal dialog centered on a
         # Dolly window that sits behind a fullscreen game must still be visible,
@@ -417,7 +492,7 @@ def _run_native_dialog(owner, title: str, message: str, details: str) -> bool:
     finally:
         if user32.IsWindow(window):
             user32.DestroyWindow(window)
-        if owner:
+        if owner and disabled_owner and user32.IsWindow(owner):
             user32.EnableWindow(owner, True)
             user32.SetForegroundWindow(owner)
         gdi32.DeleteObject(font)

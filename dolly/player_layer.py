@@ -226,11 +226,22 @@ def request_stop(deployment: Path) -> Path:
     return stop
 
 
-def capture_status(deployment: Path) -> str:
+def capture_request_id(deployment: Path) -> str:
+    """Pin the capture identity before asking its native owner to stop."""
+    text = (Path(deployment) / MARKER_NAME).read_text(encoding="ascii")
+    match = re.search(r"\brequest ([0-9a-f]{32})(?=\s|$)", text)
+    if not match:
+        raise RuntimeError("The Players capture request identity is unavailable.")
+    return match[1]
+
+
+def capture_status(deployment: Path, *, request_id: str | None = None) -> str:
     path = Path(deployment) / STATUS_NAME
     if not path.is_file():
         return ""
     text = path.read_text(encoding="ascii", errors="replace").strip()
+    if request_id is not None and "request " + request_id not in text.splitlines():
+        return ""  # A removed/replaced marker cannot authorize another take's status.
     marker = Path(deployment) / MARKER_NAME
     if marker.is_file():
         match = re.search(r" request ([0-9a-f]{32})", marker.read_text(encoding="ascii"))
@@ -243,15 +254,16 @@ def capture_status(deployment: Path) -> str:
     return text
 
 
-def wait_for_capture(deployment: Path, *, timeout: float = 240.0) -> str:
+def wait_for_capture(deployment: Path, *, timeout: float = 240.0,
+                     request_id: str | None = None) -> str:
     """Bounded wait for the native capture to finish; never blocks forever."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        status = capture_status(deployment)
+        status = capture_status(deployment, request_id=request_id)
         if status.startswith(("complete", "failed", "rejected")):
             return status
         time.sleep(0.2)
-    return capture_status(deployment)
+    return capture_status(deployment, request_id=request_id)
 
 
 def iter_frames(bundle: Path):

@@ -62,6 +62,6 @@ void update(ID3D11DeviceContext*, ID3D11Resource*, unsigned, const D3D11_BOX*, c
             unsigned, unsigned, UpdateOriginal) noexcept;
 // Authored-path replay time in seconds, published by the bridge; negative when
 // no path is playing. Used to pair player frames with the recorder's take.
-void publish_replay_time(double seconds) noexcept;
+void publish_replay_time(double seconds, bool completed = false) noexcept;
 double current_replay_time() noexcept;
 }

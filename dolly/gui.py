@@ -20,7 +20,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from dolly import attach_camera, dialogs, editor_session, gui_layout, player_layer, screenshot_ui, ui_theme
+from dolly import attach_camera, dialogs, dof_preflight, editor_session, gui_layout, player_layer, screenshot_ui, ui_theme
 from .ui import shot_commands
 from .ui.confirm import ask_reconstructed_helper
 from .ui.widgets import NavigationMarker
@@ -451,6 +451,7 @@ class DollyApp:
         file_menu.add_separator()
         file_menu.add_command(label="Controls…", command=self._show_keybinds)
         file_menu.add_command(label="Export diagnostics…", command=self._diagnostics)
+        file_menu.add_command(label="Check Native DOF support", command=self._check_dof)
         file_menu.add_command(label="Recover game configuration…", command=self._recover_game_config)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
@@ -767,6 +768,7 @@ class DollyApp:
         if self.busy:
             self.status_text.set("Finish the current operation before starting a recording.")
             return
+        self._playback_failure_recovery_pending = False
         try:
             pov = hasattr(self, "video_source") and self.video_source.get() == "Player POV"
             self._pov_project = None
@@ -1014,23 +1016,71 @@ class DollyApp:
                 self._pending_capture or self._pending_combine)):
             self._bone_take_project = None
 
-    def _restore_scene_state(self):
+    def _restore_scene_state(self, *, strict=False):
+        errors = []
         try:
             self.controller.end_matte_layer()
-        except (RuntimeError, ValueError, OSError):
-            pass
+        except (RuntimeError, ValueError, OSError) as exc:
+            if strict:
+                errors.append("matte settings: " + str(exc))
         try:
             self.controller.reset_layer_modes()
         except (RuntimeError, ValueError, OSError) as exc:
             LOG.warning("Scene classes could not all be restored: %s", exc)
+            if strict:
+                errors.append("scene classes: " + str(exc))
+        if errors:
+            raise RuntimeError(" ".join(errors))
 
     def _clear_layer_pipeline(self):
         self.layer_pipeline.clear()
         self._bone_take_project = None
         screenshot_ui.abandon(self)
 
-    def _recover_export_failure(self):
-        recover_export_failure(self.video_export.stop, self.controller.stop, self._restore_scene_state)
+    def _recover_export_failure(self, *, cancel=False):
+        stop_recording = (lambda: self.video_export.stop(cancel=True)) if cancel else self.video_export.stop
+        restore_scene = (lambda: self._restore_scene_state(strict=True)) if cancel else self._restore_scene_state
+        stop_camera = self.controller.stop
+        if cancel:
+            def guarded(action):
+                def restore():
+                    self.controller._require_demo(require_tick=False)
+                    return action()
+                return restore
+            stop_recording, stop_camera, restore_scene = (
+                guarded(action) for action in (stop_recording, stop_camera, restore_scene))
+        errors = recover_export_failure(stop_recording, stop_camera, restore_scene)
+        if cancel:
+            pending = self.controller.pending_export_restoration()
+            if pending:
+                errors.append("Restoration remains pending: " + ", ".join(pending) + ".")
+        return errors
+
+    def _abort_failed_export(self, reason):
+        """Worker recovery for a camera-thread failure after capture started."""
+        errors = []
+        audio = self.clip_audio
+        if audio is not None:
+            try:
+                # Cancelling movie/source audio can write to the game too.
+                self.controller._require_demo(require_tick=False)
+                audio.cancel()
+            except Exception as exc:
+                LOG.exception("Could not cancel audio after playback failed")
+                errors.append("audio: " + str(exc))
+            else:
+                self.clip_audio = None
+        try:
+            errors.extend(self._recover_export_failure(cancel=True))
+        except Exception as exc:
+            # Reporting recovery failures must preserve the triggering camera
+            # error, including an unexpected failure to inspect its journals.
+            LOG.exception("Could not complete failed-export recovery")
+            errors.append("recovery: " + str(exc))
+        pending = (" Recovery still needs attention: " + " ".join(errors)) if errors else ""
+        raise RuntimeError("Export stopped because camera playback failed: " + str(reason)
+                           + " Completed takes and Players scratch data were kept. "
+                             "Record a new take after correcting the reported problem." + pending)
 
     def _advance_layer_pipeline(self):
         self.layer_pipeline.advance(
@@ -1312,6 +1362,29 @@ class DollyApp:
         status = self.video_export.status()
         state = status.get("state", "idle")
         previous = getattr(self, "_last_video_state", "idle")
+        playback_error = controller_status.get("playback_error")
+        generation = controller_status.get("recording_generation")
+        recovery_pending = (getattr(self, "_playback_failure_recovery_pending", False)
+                            if generation is None else
+                            getattr(self, "_playback_failure_recovery_generation", None) == generation)
+        if (state in ACTIVE_STATES and playback_error and not controller_status.get("playing")
+                and not self.busy and not getattr(self, "_pending_auto_play", False)
+                and not recovery_pending):
+            # The native camera monitor reports failures outside the operation
+            # worker. In particular, a Players capture has no video bridge to
+            # transition it out of 'recording' by itself. Stop that capture and
+            # restore the scene before accepting another camera operation.
+            # Clear queued passes now so the failure cannot advance the run.
+            self._clear_layer_pipeline()
+            self._playback_failure_recovery_pending = True
+            previous_generation = getattr(self, "_playback_failure_recovery_generation", None)
+            self._playback_failure_recovery_generation = generation
+            submitted = self._submit("Restoring failed export",
+                                     lambda reason=str(playback_error): self._abort_failed_export(reason))
+            if submitted is False:
+                self._playback_failure_recovery_pending = False
+                self._playback_failure_recovery_generation = previous_generation
+            return
         if (getattr(self, "_pending_auto_play", False) and state == "recording"
                 and not self.busy):
             self._video_operation_done(status)
@@ -4745,6 +4818,17 @@ class DollyApp:
         if path:
             self._submit("Exporting diagnostics", lambda: self.controller.export_diagnostics(path),
                          lambda result: self.status_text.set(f"Diagnostics exported to {Path(result or path).name}."))
+
+    def _check_dof(self):
+        game_path = self.game_path.get().strip()
+        self._submit("Checking Native DOF support", lambda: self.controller.dof_preflight(game_path),
+                     self._dof_checked)
+
+    def _dof_checked(self, report):
+        if not report:
+            return
+        messagebox.showinfo("Native DOF support", dof_preflight.format_report(report), parent=self.root)
+        self.status_text.set(dof_preflight.summary(report))
 
     def _toggle_log(self):
         if self.show_log.get():

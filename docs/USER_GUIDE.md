@@ -616,6 +616,16 @@ zero produces no lens blur. An explicitly authored aperture remains unchanged.
 While Citadel is active, Dolly suppresses the Native range override at runtime
 and preserves its saved values and curves for switching back.
 
+If Native DOF shows the magenta/black checkerboard, the engine is showing its
+error material. Use **File > Check Native DOF support**: it checks the directory
+entries for the game's precompiled DOF shader and materials. If they are missing
+or unreadable, verify the game files in Steam. Present entries do not prove that
+the payloads, shader permutations or rendered result are correct. If the check
+reports `ready` and the checkerboard persists, use **File > Export diagnostics**
+and include the ZIP with your report. The console history can help identify the
+failed shader request. The shipped shader can run without a compiler; this
+check does not require downloading a DLL.
+
 On **Look**, use **+ Citadel DOF** as a starting point. The preset
 enables the native Citadel DOF controls and creates focus and aperture tracks.
 Select each track and edit its time/value keys. Increase the preset's aperture

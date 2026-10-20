@@ -304,6 +304,50 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.console.values["mat_disable_dynamic_shader_compile"], 1.0)
         self.assertEqual(self.controller._dof_shader_restore, {})
 
+    def test_native_dof_refuses_when_the_shipped_shader_is_missing(self):
+        self.controller._launch_attempt = {"game_path": str(Path("unused") / "Deadlock")}
+        project = make_project()
+        project.setup_values["r_dof_override"] = 1.0
+        with patch("dolly.dof_preflight.check_installation",
+                   return_value={"status": "verify_files", "problems": ["missing dof"]}):
+            self.assertFalse(self.controller.ensure_native_dof_shader_support(project))
+        self.assertIn("precompiled DOF shader", self.controller._native_dof_unavailable or "")
+        self.assertNotIn("mat_forcereloadshaders dof", self.console.requests)
+
+    def test_native_dof_preflight_io_failure_stays_refused_on_later_applies(self):
+        project = make_project()
+        project.setup_values["r_dof_override"] = 1.0
+        with patch("dolly.dof_preflight.check_installation",
+                   side_effect=PermissionError(13, "Permission denied")) as check:
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, "precompiled DOF shader"):
+                    self.controller._require_native_dof_support(project)
+        self.assertEqual(check.call_count, 1)
+        self.assertTrue(self.controller._native_dof_unavailable)
+        self.assertNotIn("mat_forcereloadshaders dof", self.console.requests)
+
+    def test_native_dof_does_not_reload_when_preflight_cannot_verify_the_compiler(self):
+        project = make_project()
+        project.setup_values["r_dof_override"] = 1.0
+        report = {"status": "ready", "dynamic_compile": {"missing": ["vfx_dx11.dll"]}}
+        with patch("dolly.dof_preflight.check_installation", return_value=report):
+            self.controller._require_native_dof_support(project)
+        self.assertFalse(self.controller._native_dof_unavailable)
+        self.assertNotIn("mat_forcereloadshaders dof", self.console.requests)
+
+    def test_recording_generation_changes_only_for_a_new_capture_reservation(self):
+        self.assertEqual(self.controller.status()["recording_generation"], 0)
+        self.controller.mark_recording_pending(True, player_layer=True)
+        self.assertEqual(self.controller.status()["recording_generation"], 1)
+        self.controller._state["playback_error"] = "current take failed"
+        self.controller.mark_recording_pending(True, player_layer=True)
+        self.assertEqual(self.controller.status()["recording_generation"], 1)
+        self.assertEqual(self.controller.status()["playback_error"], "current take failed")
+        self.controller.mark_recording_pending(False)
+        self.controller.mark_recording_pending(True)
+        self.assertEqual(self.controller.status()["recording_generation"], 2)
+        self.assertIsNone(self.controller.status()["playback_error"])
+
     def test_native_dof_reports_checkerboard_risk_when_shader_compiler_is_unavailable(self):
         self.console.values["mat_disable_dynamic_shader_compile"] = 0.0
         self.console.values["mat_forcereloadshaders dof"] = (

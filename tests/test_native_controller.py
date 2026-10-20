@@ -425,6 +425,17 @@ class NativeControllerTests(unittest.TestCase):
         self.run_native()
         self.assertIn("time changed unexpectedly", self.controller.status()["message"])
         self.assertFalse(self.controller.status()["playing"])
+        self.assertIn("time changed unexpectedly", self.controller.status()["playback_error"])
+
+    def test_new_capture_clears_only_stale_playback_failure(self):
+        self.controller._message("Previous shot failed", playback_error="old failure")
+        self.controller.mark_recording_pending(True, player_layer=True)
+        self.assertIsNone(self.controller.status()["playback_error"])
+        self.assertTrue(self.controller._recording_pending)
+        self.assertTrue(self.controller._player_capture_pending)
+        self.controller._message("Current shot failed", playback_error="current failure")
+        self.controller.mark_recording_pending(False)
+        self.assertEqual(self.controller.status()["playback_error"], "current failure")
 
     def test_frozen_native_path_moves_without_resume_and_keeps_demo_tick(self):
         self.prepare(frozen=True)

@@ -38,16 +38,9 @@ def verify_stock_ui_assets(citadel_dir):
         raise ValueError("Deadlock's shader loading UI could not be verified. "
                          "Use a Dolly build reviewed for this game update. " + str(exc)) from exc
 
-def read_vpk_entries(index_path, virtual_paths, *, max_tree_bytes=64*1024*1024,
-                     max_payload_bytes=16*1024*1024):
+def _read_vpk_tree(index_path, max_tree_bytes):
+    """Read one validated VPK directory tree: (header size, tree size, tree)."""
     index = Path(index_path)
-    requested = tuple(virtual_paths)
-    if not requested or len(set(requested)) != len(requested):
-        raise ValueError('Expected distinct named VPK resources.')
-    for name in requested:
-        path = PurePosixPath(name)
-        if not isinstance(name, str) or path.is_absolute() or '..' in path.parts or '\\' in name or str(path) != name:
-            raise ValueError('Invalid VPK resource path.')
     if not index.name.endswith('_dir.vpk'):
         raise ValueError('Expected a VPK directory index.')
     with index.open('rb') as stream:
@@ -63,8 +56,12 @@ def read_vpk_entries(index_path, virtual_paths, *, max_tree_bytes=64*1024*1024,
         tree = stream.read(tree_size)
         if len(tree) != tree_size:
             raise ValueError('Truncated VPK directory tree.')
+    return header_size, tree_size, tree
+
+
+def _iter_vpk_tree(tree):
+    """Yield one ``(key, crc, preload, archive, offset, length)`` per entry."""
     position = 0
-    matches = {}
     def word():
         nonlocal position
         try:
@@ -86,22 +83,67 @@ def read_vpk_entries(index_path, virtual_paths, *, max_tree_bytes=64*1024*1024,
                 preload = tree[position:position+preload_size]
                 position += preload_size
                 key = (directory + '/' if directory != ' ' else '') + name + '.' + extension
-                if key not in requested:
-                    continue
-                if key in matches or length + preload_size > max_payload_bytes:
-                    raise ValueError('Duplicate or oversized named VPK resource.')
-                source = index if archive == 0x7fff else index.with_name(index.name[:-8] + '_' + f'{archive:03d}' + '.vpk')
-                start = offset + header_size + tree_size if archive == 0x7fff else offset
-                if start + length > source.stat().st_size:
-                    raise ValueError('Truncated VPK resource payload.')
-                with source.open('rb') as stream:
-                    stream.seek(start)
-                    payload = preload + stream.read(length)
-                if len(payload) != preload_size + length or binascii.crc32(payload) & 0xffffffff != crc:
-                    raise ValueError('VPK payload CRC mismatch.')
-                matches[key] = payload
-    if position != tree_size:
+                yield key, crc, preload, archive, offset, length
+    if position != len(tree):
         raise ValueError('VPK tree length mismatch.')
+
+
+def list_vpk_entries(index_path, *, prefixes=(), suffixes=(), max_tree_bytes=64*1024*1024,
+                     max_entries=200_000):
+    """Return matching directory entries without reading any payload.
+
+    ``{virtual_path: (archive, offset, length)}``; ``archive`` is ``0x7fff``
+    for payloads stored after the tree in the index file. Directory-only
+    entries are skipped. Filters are required so a caller cannot accidentally
+    materialise a whole game archive; the tree itself is always walked in full
+    so malformed indexes still fail closed.
+    """
+    index = Path(index_path)
+    if not prefixes and not suffixes:
+        raise ValueError('Expected a prefix or suffix filter.')
+    _header, _tree_size, tree = _read_vpk_tree(index, max_tree_bytes)
+    found = {}
+    for key, _crc, _preload, archive, offset, length in _iter_vpk_tree(tree):
+        if prefixes and not key.startswith(tuple(prefixes)):
+            continue
+        if suffixes and not key.endswith(tuple(suffixes)):
+            continue
+        if archive == 0x7fff and length == 0:
+            continue
+        if len(found) >= max_entries:
+            raise ValueError('VPK entry limit exceeded.')
+        found[key] = (archive, offset, length)
+    return found
+
+
+def read_vpk_entries(index_path, virtual_paths, *, max_tree_bytes=64*1024*1024,
+                     max_payload_bytes=16*1024*1024):
+    index = Path(index_path)
+    requested = tuple(virtual_paths)
+    if not requested or len(set(requested)) != len(requested):
+        raise ValueError('Expected distinct named VPK resources.')
+    for name in requested:
+        path = PurePosixPath(name)
+        if not isinstance(name, str) or path.is_absolute() or '..' in path.parts or '\\' in name or str(path) != name:
+            raise ValueError('Invalid VPK resource path.')
+    header_size, tree_size, tree = _read_vpk_tree(index, max_tree_bytes)
+    matches = {}
+    for key, crc, preload, archive, offset, length in _iter_vpk_tree(tree):
+        if key not in requested:
+            continue
+        preload_size = len(preload)
+        if key in matches or length + preload_size > max_payload_bytes:
+            raise ValueError('Duplicate or oversized named VPK resource.')
+        source = index if archive == 0x7fff else index.with_name(index.name[:-8] + '_' + f'{archive:03d}' + '.vpk')
+        start = offset + header_size + tree_size if archive == 0x7fff else offset
+        if start + length > source.stat().st_size:
+            raise ValueError('Truncated VPK resource payload.')
+        with source.open('rb') as stream:
+            stream.seek(start)
+            payload = preload + stream.read(length)
+        if len(payload) != preload_size + length or binascii.crc32(payload) & 0xffffffff != crc:
+            raise ValueError('VPK payload CRC mismatch.')
+        matches[key] = payload
     if set(matches) != set(requested):
         raise ValueError('Named VPK resource missing: ' + ', '.join(sorted(set(requested)-set(matches))))
     return matches

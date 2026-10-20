@@ -4,6 +4,18 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.63-alpha
+
+- **Check Native Depth of Field before use.** *Before:* Native DOF support was harder to diagnose, and the support check could miss a newly selected game folder. *After:* Dolly checks the installed shader and material indexes, explains missing or unreadable files, and offers a local support report from the selected install.
+
+- **Pause shots more reliably.** *Before:* Pausing a fixed-step shot could make Dolly mistake an ordinary render sample for a replay jump and stop the export. *After:* Dolly checks fresh paused views and the stable replay clock against the position recorded before its Pause command. Real timeline jumps and changed replays still stop the shot.
+
+- **Recover interrupted exports.** *Before:* A failed shot could leave Players capture armed, and stopping could discard its last eligible image. *After:* Dolly waits for the matching capture to stop, retains an image already prepared for that stop, and reports the original failure with restoration status. Completed takes and Players scratch data are kept; uncertain recovery remains pending.
+
+- **Keep error dialogs visible.** *Before:* An error could open outside the monitor or leave the wrong window enabled behind a Save dialog. *After:* Dolly keeps error controls on the owner's monitor, restores a minimized owner, and preserves the correct modal ownership and keyboard focus.
+
+Full details: [0.6.63 release notes](RELEASE_NOTES_0.6.63-alpha.md).
+
 ## 0.6.62-alpha
 
 - **Players layer preflight.** *Before:* 120 FPS at 0.1x could create an empty

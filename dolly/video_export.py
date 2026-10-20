@@ -295,6 +295,10 @@ class VideoExport:
         self._start_pending = False
         self._start_ack = None
         self._capture_only = False
+        self._capture_stop_request: str | None = None
+        self._capture_cancel_pending = False
+        session, demo = getattr(controller, "_session", None), getattr(controller, "_demo", None)
+        self._runtime_context = (session, demo) if session is not None and demo is not None else None
         self._depth_options: VideoOptions | None = None
         self._finish_pending = False
         self._finished_status: dict | None = None
@@ -318,6 +322,8 @@ class VideoExport:
             pending, start_ack = self._start_pending, self._start_ack
         if bridge is None:
             if self._capture_only and self.controller.status().get("game_running") is False:
+                if not self._same_export_owner():
+                    return {**last, "error": "Players capture cleanup is pending because its editing session changed."}
                 self._capture_only = False
                 self.controller.mark_recording_pending(False)
                 self._last = {"state": "failed", "error": "Deadlock closed during player capture."}
@@ -451,6 +457,8 @@ class VideoExport:
             self.controller.prepare_pov_recording(project)
         elif callable(prepare):
             prepare(project, frozen=frozen)
+        session, demo = getattr(self.controller, "_session", None), getattr(self.controller, "_demo", None)
+        self._runtime_context = (session, demo) if session is not None and demo is not None else None
         if options.full_resolution:
             self.controller.set_export_resolution()
         # Layered and audio takes keep their video and sidecars in one folder.
@@ -478,10 +486,19 @@ class VideoExport:
                     pass
             raise
         if capture_only:
+            # The arm callback created this request. Pin it now, before a later
+            # marker replacement could be mistaken for this capture at Stop.
+            try:
+                capture_request = player_layer.capture_request_id(
+                    self.controller.deployment_directory())
+            except (RuntimeError, ValueError, OSError, TypeError):
+                capture_request = None
             with self._lock:
                 self._finish_pending = False
                 self._finished_status = None
                 self._capture_only = True
+                self._capture_stop_request = capture_request
+                self._capture_cancel_pending = False
                 self._bridge = None
                 self._last = {"state": "recording", "fps": options.fps}
                 self.output_path = options.path.with_suffix(".mov")
@@ -533,6 +550,73 @@ class VideoExport:
             self._start_pending = False
         return self.status()
 
+    def _same_export_owner(self) -> bool:
+        context = self._runtime_context
+        return (context is not None and getattr(self.controller, "_session", None) is context[0]
+                and getattr(self.controller, "_demo", None) == context[1])
+
+    def _require_export_context(self) -> None:
+        """Never restore this take's runtime values into another session/replay."""
+        if not self._same_export_owner():
+            raise RuntimeError("The recording's editing session or selected replay changed; its runtime restoration is pending.")
+        if self.controller.status().get("game_running") is False:
+            return  # The same originating game exited; its restore methods do no writes.
+        self.controller._require_demo(require_tick=False)
+        if not self._same_export_owner():
+            raise RuntimeError("The recording's editing session or selected replay changed during verification; restoration is pending.")
+        if self._capture_only or self._capture_stop_request is not None:
+            self._require_player_stop_marker(self.controller.deployment_directory())
+
+    def _require_player_stop_marker(self, deployment) -> Path:
+        pending = "Players capture stop is pending: "
+        if deployment is None:
+            raise RuntimeError(pending + "the capture directory is unavailable while Deadlock is running.")
+        if self._capture_stop_request is None:
+            raise RuntimeError(pending + "the request identity was not confirmed when it started.")
+        marker = Path(deployment) / player_layer.MARKER_NAME
+        if marker.is_file():
+            if self._capture_stop_request != player_layer.capture_request_id(deployment):
+                raise RuntimeError(pending + "the request changed; no stop or restoration was sent to the new capture.")
+        return marker
+
+    def _request_player_stop(self, deployment) -> None:
+        marker = self._require_player_stop_marker(deployment)
+        if marker.is_file():
+            player_layer.request_stop(deployment)
+
+    def _confirm_player_cancel(self, timeout: float) -> None:
+        """Keep capture ownership until this request acknowledges cancellation."""
+        from . import player_layer
+
+        self._capture_cancel_pending = True
+        with self._lock:
+            self._finish_pending = True
+
+        def game_exited():
+            try:
+                return self.controller.status().get("game_running") is False
+            except (RuntimeError, ValueError, OSError):
+                return False
+
+        self._require_export_context()
+        if game_exited():
+            return
+        try:
+            deployment = self.controller.deployment_directory()
+            self._request_player_stop(deployment)
+            status = player_layer.wait_for_capture(
+                deployment, timeout=max(0.0, min(float(timeout), 5.0)),
+                request_id=self._capture_stop_request)
+            if not status.startswith(("complete", "failed", "rejected")):
+                raise RuntimeError("The native capture has not acknowledged stop" +
+                                   (": " + status if status else "."))
+        except (RuntimeError, ValueError, OSError) as exc:
+            if game_exited():
+                return
+            raise RuntimeError("Players capture stop is pending: " + str(exc) +
+                               " Raw capture data is kept. Finish or discard again to retry; "
+                               "a new capture is blocked until cleanup is confirmed.") from exc
+
     def stop(self, *, cancel: bool = False, timeout: float = 120.0) -> dict:
         """Request shutdown and wait on the operation worker, never on Tk.
 
@@ -541,17 +625,23 @@ class VideoExport:
         not give up sooner: a shorter window reported "still finishing" on big
         or drop-heavy takes while finalization was still progressing normally.
         """
+        stop_error = None
         try:
             with self._lock:
                 bridge = self._bridge
             if self._capture_only:
-                from . import player_layer
-                deployment = self.controller.deployment_directory()
-                if deployment is not None:
-                    player_layer.request_stop(deployment)
+                self._require_export_context()
+                capture_cancel = cancel or self._capture_cancel_pending
+                if capture_cancel:
+                    self._confirm_player_cancel(timeout)
+                else:
+                    if self.controller.status().get("game_running") is not False:
+                        self._request_player_stop(self.controller.deployment_directory())
+                self._require_export_context()
                 with self._lock:
                     self._capture_only = False
-                    self._last = {"state": "cancelled" if cancel else "completed"}
+                    self._last = {"state": "cancelled" if capture_cancel else "completed"}
+                    self._capture_cancel_pending = False
                 self.controller.mark_recording_pending(False)
                 return self.status()
             current = self.status()
@@ -574,17 +664,37 @@ class VideoExport:
                 if time.monotonic() >= deadline:
                     raise RuntimeError("The video recorder is still finishing. Wait for its status before starting another recording or closing the game.")
                 time.sleep(0.05)
+        except Exception as exc:
+            stop_error = exc
+            raise
         finally:
-            try:
-                self._clear_export_timing(required=True)
-            finally:
+            restorations = [
+                ("timing", lambda: self._clear_export_timing(required=True),
+                 lambda: getattr(self.controller, "_export_timing", None) is not None),
+                ("render scale", self._clear_export_resolution,
+                 lambda: getattr(self.controller, "_export_resolution", None) is not None),
+            ]
+            if getattr(self, "_pov", False):
+                restorations.append(("POV", self.controller.finish_pov_recording,
+                                     lambda: getattr(self.controller, "_pov_active", False)))
+            restoration_errors = []
+            for label, restore, pending in restorations:
                 try:
-                    self._clear_export_resolution()
-                finally:
-                    if getattr(self, "_pov", False):
-                        self.controller.finish_pov_recording()
+                    if pending():
+                        self._require_export_context()
+                    restore()
+                except Exception as exc:
+                    restoration_errors.append(label + ": " + str(exc))
+            if restoration_errors:
+                with self._lock:
+                    self._finish_pending = True
+                message = "Export restoration remains pending: " + " ".join(restoration_errors)
+                if stop_error is not None:
+                    message = str(stop_error) + " " + message
+                raise RuntimeError(message) from stop_error
             with self._lock:
                 if not self._start_pending and self._last.get("state") in TERMINAL_STATES:
+                    self._capture_stop_request = None
                     self._finish_pending = False
 
     def _finish_terminal(self, status: dict, *, cancel: bool) -> dict:

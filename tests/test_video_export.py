@@ -343,8 +343,9 @@ class VideoExportTests(unittest.TestCase):
         self.bridge.start_video.assert_not_called()
 
     def test_capture_only_reserves_playback_without_an_mp4_encoder(self):
+        from dolly import player_layer
         self.controller.deployment_directory.return_value = Path(self.folder.name)
-        armed = Mock()
+        armed = Mock(side_effect=lambda: player_layer.begin_capture(Path(self.folder.name), 48, 8))
         result = self.export.start(VideoOptions(self.path, fps=600, fixed_step=True),
                                    before_record=armed, capture_only=True)
         self.assertEqual(result["state"], "recording")
@@ -1256,6 +1257,217 @@ class VideoGuiTests(unittest.TestCase):
         self.app._submit.reset_mock()
         self.app._refresh_video(READY)
         self.app._submit.assert_not_called()
+
+    def test_async_playback_failure_aborts_players_on_worker_before_showing_original_error(self):
+        self._video_widgets()
+        self.app.controller = Mock(pending_export_restoration=Mock(return_value=[]))
+        self.app.playing = False
+        self.app.video_export.status.return_value = {"state": "recording"}
+        self.app._base_capture = Mock()
+        self.app._active_layer_take = ("players", "capture")
+        self.app._layer_queue = [("effects", "black"), ("effects", "white")]
+        self.app._auto_finish_layered = True
+        self.app._take_playing_seen = True
+        self.app._pending_combine = "effects"
+        self.app._pending_capture = "players"
+        self.app._pipeline_advance = True
+        audio = self.app.clip_audio = Mock()
+        order = []
+        self.app.video_export.stop.side_effect = lambda **kw: order.append(("recording", kw))
+        self.app.controller.stop.side_effect = lambda: order.append("camera")
+        self.app.controller.end_matte_layer.side_effect = lambda: order.append("matte")
+        self.app.controller.reset_layer_modes.side_effect = lambda: order.append("classes")
+        audio.cancel.side_effect = lambda: order.append("audio")
+        reason = "Native playback stalled before the next authored frame"
+
+        self.app._refresh_video({**READY, "playing": False, "playback_error": reason})
+
+        self.app._submit.assert_called_once()
+        self.assertEqual(order, [])  # Polling only schedules the worker.
+        self.assertEqual(self.app._layer_queue, [])
+        self.assertIsNone(self.app._base_capture)
+        self.assertIsNone(self.app._active_layer_take)
+        self.assertIsNone(self.app._pending_combine)
+        self.assertIsNone(self.app._pending_capture)
+        self.assertFalse(self.app._pipeline_advance)
+        self.assertFalse(self.app._auto_finish_layered)
+        self.app._error.assert_not_called()
+        with self.assertRaises(RuntimeError) as raised:
+            self.app._submit.call_args.args[1]()
+        self.assertIn(reason, str(raised.exception))
+        self.assertRegex(str(raised.exception), r"(?i)retry|try.*again|prepare|new take")
+        self.assertEqual([event for event in order if event != "audio"],
+                         [("recording", {"cancel": True}), "camera", "matte", "classes"])
+        audio.cancel.assert_called_once_with()
+        self.assertIsNone(self.app.clip_audio)
+
+    def test_async_playback_failure_waits_for_the_current_worker(self):
+        self._video_widgets()
+        self.app.controller = Mock()
+        self.app.playing = False
+        self.app.video_export.status.return_value = {"state": "recording"}
+        self.app._active_layer_take = ("players", "capture")
+        self.app._layer_queue = [("effects", "black")]
+        self.app.busy = True
+        failed = {**READY, "playing": False, "playback_error": "Replay camera lost"}
+
+        self.app._refresh_video(failed)
+        self.app._submit.assert_not_called()
+        self.assertEqual(self.app._active_layer_take, ("players", "capture"))
+        self.assertEqual(self.app._layer_queue, [("effects", "black")])
+        self.app.video_export.stop.assert_not_called()
+        self.app.controller.stop.assert_not_called()
+
+        self.app.busy = False
+        self.app._refresh_video(failed)
+        self.app._submit.assert_called_once()
+        self.assertEqual(self.app._layer_queue, [])
+
+    def test_failed_recovery_is_not_automatically_repeated_on_every_poll(self):
+        self._video_widgets()
+        self.app.controller = Mock(pending_export_restoration=Mock(return_value=[]))
+        self.app.playing = False
+        self.app.video_export.status.return_value = {"state": "recording"}
+        self.app.video_export.stop.side_effect = RuntimeError("Players capture is still stopping")
+        failed = {**READY, "playing": False, "playback_error": "Original camera failure"}
+        self.app._refresh_video(failed)
+        with self.assertRaisesRegex(RuntimeError, "Original camera failure.*still stopping"):
+            self.app._submit.call_args.args[1]()
+        self.app._submit.reset_mock()
+        self.app._refresh_video(failed)
+        self.app._submit.assert_not_called()
+        self.app.controller.stop.assert_called_once_with()
+
+    def test_async_recovery_reports_all_scene_errors_and_retained_journals(self):
+        from dolly.controller import Controller
+
+        controller = self.app.controller = Controller()
+        controller._require_demo = Mock()
+        controller.stop = Mock()
+        controller._restore = {"fov_desired": "90"}
+        controller._playback_restore = {"host_timescale": "1"}
+        controller._game_ui_restore = {"citadel_hud_visible": "1"}
+        controller._matte_cvar_restore = {"r_effects_bloom": "1"}
+        controller._layer_hidden = {"SkinnedObject"}
+        controller._export_timing = {"restore_pending": True}
+        controller._export_resolution = .6667
+        controller.end_matte_layer = Mock(side_effect=RuntimeError("matte restore rejected"))
+        controller.reset_layer_modes = Mock(side_effect=RuntimeError("class restore rejected"))
+        self.app.video_export.stop.side_effect = RuntimeError("capture stop unconfirmed")
+        audio = self.app.clip_audio = Mock()
+        audio.cancel.side_effect = RuntimeError("audio stop unconfirmed")
+
+        with self.assertRaises(RuntimeError) as raised:
+            self.app._abort_failed_export("Original camera failure")
+
+        text = str(raised.exception)
+        for detail in ("Original camera failure", "matte restore rejected", "class restore rejected",
+                       "capture stop unconfirmed", "audio stop unconfirmed", "camera values",
+                       "playback settings", "game UI settings", "matte settings", "scene classes",
+                       "export timing", "render scale"):
+            self.assertIn(detail, text)
+        controller.stop.assert_called_once_with()
+        controller.end_matte_layer.assert_called_once_with()
+        controller.reset_layer_modes.assert_called_once_with()
+        self.assertEqual(controller._layer_hidden, {"SkinnedObject"})
+        self.assertIs(self.app.clip_audio, audio)
+
+    def test_async_recovery_refuses_every_action_if_the_selected_replay_is_lost(self):
+        from dolly.controller import Controller
+        from test_controller import FakeConsole
+
+        for failure in ("changed", "unreadable", "closed", "disconnected"):
+            with self.subTest(failure=failure):
+                controller = self.app.controller = Controller()
+                console = controller._console = FakeConsole()
+                controller._session = SimpleNamespace(process=SimpleNamespace(poll=lambda: None), pid=1234)
+                controller._demo = Path("example.dem")
+                controller._layer_hidden = {"SkinnedObject"}
+                controller._matte_cvar_restore = {"r_effects_bloom": '"r_effects_bloom" = "1"'}
+                controller._export_timing = {"restore_pending": True}
+                if failure == "changed":
+                    console.demo_name = "other.dem"
+                elif failure == "unreadable":
+                    console.goto_output = "Unknown command: demo_goto"
+                    console.demo_output = "Unknown command: demo_info"
+                elif failure == "closed":
+                    controller._session.process.poll = lambda: 0
+                else:
+                    console.is_connected = False
+                self.app.video_export.stop.reset_mock()
+                audio = self.app.clip_audio = Mock()
+
+                with self.assertRaises(RuntimeError) as raised:
+                    self.app._abort_failed_export("Original camera failure")
+
+                text = str(raised.exception)
+                self.assertIn("Original camera failure", text)
+                self.assertIn("Recovery still needs attention", text)
+                self.assertIn("export timing", text)
+                self.app.video_export.stop.assert_not_called()
+                audio.cancel.assert_not_called()
+                self.assertIs(self.app.clip_audio, audio)
+                self.assertTrue(all(command in ("demo_goto", "demo_info") for command in console.requests))
+                self.assertEqual(controller._layer_hidden, {"SkinnedObject"})
+                self.assertIsNotNone(controller._matte_cvar_restore)
+                self.assertEqual(controller._export_timing, {"restore_pending": True})
+
+    def test_a_new_capture_generation_can_recover_without_a_video_start_callback(self):
+        self._video_widgets()
+        self.app.controller = Mock()
+        self.app.playing = False
+        self.app.video_export.status.return_value = {"state": "recording"}
+        failed = {**READY, "playing": False, "playback_error": "Camera failure", "recording_generation": 1}
+        self.app._refresh_video(failed)
+        self.app._submit.assert_called_once()
+        self.app._submit.reset_mock()
+
+        # An attempted explicit restart cannot retry a still-reserved request.
+        self.app._playback_failure_recovery_pending = False
+        self.app._refresh_video(failed)
+        self.app._submit.assert_not_called()
+
+        # Screenshot/programmatic capture starts do not call the video button.
+        self.app._playback_failure_recovery_pending = True
+        self.app._refresh_video({**failed, "recording_generation": 2})
+        self.app._submit.assert_called_once()
+
+    def test_paused_recording_without_a_playback_error_does_not_abort(self):
+        self._video_widgets()
+        self.app.controller = Mock()
+        self.app.playing = False
+        self.app.video_export.status.return_value = {"state": "recording"}
+        self.app._active_layer_take = ("players", "capture")
+        self.app._layer_queue = [("effects", "black")]
+
+        self.app._refresh_video({**READY, "playing": False, "playback_error": "",
+                                 "message": "Replay paused"})
+
+        self.app._submit.assert_not_called()
+        self.assertEqual(self.app._active_layer_take, ("players", "capture"))
+        self.assertEqual(self.app._layer_queue, [("effects", "black")])
+        self.app.video_export.stop.assert_not_called()
+        self.app.controller.stop.assert_not_called()
+
+    def test_pending_auto_play_cannot_consume_an_earlier_playback_error(self):
+        self._video_widgets()
+        self.app.controller = Mock()
+        self.app.playing = False
+        self.app.video_export.status.return_value = {"state": "recording"}
+        self.app._pending_auto_play = True
+        self.app._active_layer_take = ("players", "capture")
+        self.app._layer_queue = [("effects", "black")]
+        self.app._play = Mock()
+
+        self.app._refresh_video({**READY, "playing": False,
+                                 "playback_error": "Earlier shot failed"})
+
+        self.app._play.assert_called_once_with()
+        self.app._submit.assert_not_called()
+        self.assertEqual(self.app._active_layer_take, ("players", "capture"))
+        self.assertEqual(self.app._layer_queue, [("effects", "black")])
+        self.app.video_export.stop.assert_not_called()
+        self.app.controller.stop.assert_not_called()
 
     def test_async_depth_completion_waits_for_worker_before_advancing_pipeline(self):
         self._video_widgets()

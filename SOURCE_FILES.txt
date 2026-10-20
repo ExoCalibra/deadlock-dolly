@@ -56,6 +56,7 @@ dolly/curve.py
 dolly/desktop.py
 dolly/dialogs.py
 dolly/display.py
+dolly/dof_preflight.py
 dolly/encoder_select.py
 dolly/editor_actions.py
 dolly/editor_session.py
@@ -233,6 +234,7 @@ tests/test_branding.py
 tests/test_camera_position.py
 tests/test_compatibility.py
 tests/test_dialogs.py
+tests/test_dof_preflight.py
 tests/test_console.py
 tests/test_controller.py
 tests/test_convar_response.py
@@ -744,6 +746,7 @@ native/src/dolly_ui_storage.cpp
 dolly/curve_workspace.py
 tests/test_desktop_curve_workspace.py
 tests/test_native_pause_boundary.py
+tests/test_native_owned_pause.py
 
 tests/test_camera_channel_samples.py
 
@@ -785,3 +788,8 @@ docs/RELEASE_NOTES_0.6.59-alpha.md
 docs/RELEASE_NOTES_0.6.60-alpha.md
 docs/RELEASE_NOTES_0.6.61-alpha.md
 docs/RELEASE_NOTES_0.6.62-alpha.md
+tests/test_player_capture_shutdown.py
+docs/RELEASE_NOTES_0.6.63-alpha.md
+native/include/dolly_player_capture_lifecycle.hpp
+native/tests/player_capture_lifecycle_tests.cpp
+tests/test_dialog_owner.py

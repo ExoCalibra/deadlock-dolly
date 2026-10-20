@@ -1215,7 +1215,7 @@ static void on_view(void* self, std::uintptr_t caller) noexcept {
                 {original_angles[0], original_angles[1], original_angles[2]},
                 original_fov};
             video::publish_path_replay_time(true, phase, completed, &rendered);
-            player_capture::publish_replay_time(phase);
+            player_capture::publish_replay_time(phase, completed);
         }
         finish(completed ? State::Completed
                          : (c.mode == std::uint32_t(Mode::Play) ? State::Playing : State::Armed),
@@ -1383,7 +1383,7 @@ static void on_view(void* self, std::uintptr_t caller) noexcept {
                                            {applied[3], applied[4], applied[5]},
                                            fov};
         video::publish_path_replay_time(true, phase, completed, &rendered);
-        player_capture::publish_replay_time(phase);
+        player_capture::publish_replay_time(phase, completed);
     }
     finish(completed ? State::Completed
                      : (c.mode == std::uint32_t(Mode::Play) ? State::Playing : State::Armed),

@@ -80,10 +80,13 @@ class LayerPipeline:
 
 def recover_export_failure(stop_recording, stop_camera, restore_scene):
     """Run on the worker before publishing its error; retain completed files."""
+    errors = []
     for label, restore in (('recording', stop_recording),
                            ('camera control', stop_camera),
                            ('scene layers', restore_scene)):
         try:
             restore()
-        except Exception:
+        except Exception as exc:
+            errors.append(label + ": " + str(exc))
             LOG.exception('Could not restore %s after export failure', label)
+    return errors
