@@ -10,9 +10,9 @@ from ._runtime_generated import FollowTarget as _profile
 
 # Keep this pin independent of the shared replay-camera identity. A camera-only
 # review must not enable stale player-target data. The FollowTarget group and
-# observer schema were reviewed together for the byte-identical 6793/6794 client;
-# update this pin only with a reviewed target profile and its stock consumers.
-REVIEWED_CLIENT_SHA256 = '8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c'
+# observer schema, typed objects and target/health HUD consumers were reviewed
+# together for build 6807. Update only with an independent target review.
+REVIEWED_CLIENT_SHA256 = '96ee2a334a93a6a0f40ed56c0cedf441b882681b9605deeb46d83d62d4a3e4b9'
 
 TARGET_SPANS = _profile.TARGET_SPANS
 # Exact stock HUD getter chain and its entity predicates. Camera mode alone

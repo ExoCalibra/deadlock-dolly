@@ -1,6 +1,7 @@
 """Graphics library, file ownership and actual launcher/recovery boundaries."""
 from dolly import game_processes
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
+import uuid
 
 from dolly import graphics_profiles as gp, launcher, session_cleanup
 from test_launcher import fake_game, editing_fixture, GAMEINFO
@@ -153,7 +155,8 @@ class ProfileTests(unittest.TestCase):
             panel.selected_id()
 
 
-class GraphicsLaunchTests(unittest.TestCase):
+class LegacyGraphicsRecoveryTests(unittest.TestCase):
+    """Retain recovery proof for real journals created by the old swap design."""
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -184,18 +187,84 @@ class GraphicsLaunchTests(unittest.TestCase):
         return p.start()
 
     def launch(self):
-        return launcher.launch(self.paths.root, graphics_profile=self.profile["id"])
+        """Create a historical mounted session through its real file owners.
+
+        New Dolly launches isolate settings instead. This fixture deliberately
+        creates the old on-disk state so its recovery contracts remain tested,
+        without reviving old launch behavior inside production code.
+        """
+        if game_processes._game_is_running(game_processes.running_processes()):
+            raise launcher.LaunchError("Deadlock is already running.")
+        launcher.recover_pending(self.paths.root)
+        original = self.paths.gameinfo.read_bytes()
+        ident = "legacy_" + uuid.uuid4().hex[:10]
+        directory = self.package / "logs" / ident
+        overlay = self.paths.game_dir / ("citadel_dolly_" + ident)
+        patched = launcher.make_gameinfo(original.decode("utf-8"), overlay.name).encode("utf-8")
+        directory.mkdir(parents=True)
+        overlay.mkdir()
+        marker = {"owner": "Deadlock Dolly", "session_dir": str(directory),
+                  "original_gameinfo": str(self.paths.gameinfo),
+                  "original_sha256": hashlib.sha256(original).hexdigest()}
+        launcher._atomic_write(overlay / ".dolly-session.json", json.dumps(marker).encode("utf-8"))
+        target = overlay / "cvar_unlocker/bin/win64/server.dll"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"owned legacy fixture plugin; no game is started")
+        command = launcher.build_command(self.paths, overlay, 29090)
+        mode = stat.S_IMODE(self.paths.gameinfo.stat().st_mode)
+        record = {**marker, "overlay_dir": str(overlay), "backup_name": "original.gameinfo.gi",
+                  "patched_sha256": hashlib.sha256(patched).hexdigest(), "original_mode": mode,
+                  "config_state": "prepared", "command": command, "port": 29090, "protocol": "netcon"}
+        log = directory / "launch.log"
+        log.write_text("Legacy graphics recovery fixture\n", encoding="utf-8")
+        launcher._atomic_write(directory / "original.gameinfo.gi", original)
+        launcher._save_record(directory, record)
+        try:
+            gp.prepare(directory, self.profile["id"])
+            launcher._atomic_write(self.paths.gameinfo, patched, mode)
+            record["config_state"] = "mounted"
+            launcher._save_record(directory, record)
+            gp.apply(directory)
+            process = launcher.subprocess.Popen(command, cwd=str(self.paths.game_dir),
+                stdin=launcher.subprocess.DEVNULL, stdout=launcher.subprocess.DEVNULL,
+                stderr=launcher.subprocess.STDOUT, shell=False)
+            record["pid"] = process.pid
+            launcher._save_record(directory, record)
+            return launcher.Session(process, directory, overlay, log, tuple(command), 29090)
+        except (OSError, launcher.LaunchError) as exc:
+            try:
+                launcher._restore_session_configs(directory)
+                session_cleanup.remove_overlay(overlay, self.paths, directory)
+            except launcher.LaunchError as recovery:
+                raise launcher.LaunchError(f"{exc}\nConfiguration recovery needs attention: {recovery}") from exc
+            if isinstance(exc, launcher.LaunchError):
+                raise
+            raise launcher.LaunchError(str(exc)) from exc
 
     def close(self, session):
         self.process.poll.return_value = 0
         session.close()
 
-    def test_default_launch_never_resolves_or_changes_graphics(self):
-        session = launcher.launch(self.paths.root)
-        self.account.assert_not_called()
-        self.assertFalse((session.session_dir / gp.JOURNAL).exists())
-        self.close(session)
-        self.assertEqual(self.target.read_bytes(), VIDEO)
+    def test_new_default_launch_reads_display_but_never_replaces_player_graphics(self):
+        from dolly import editing_session
+        self.target.chmod(stat.S_IREAD)
+        mode = stat.S_IMODE(self.target.stat().st_mode)
+        try:
+            session = launcher.launch(self.paths.root)
+            self.assertEqual(self.target.read_bytes(), VIDEO)
+            self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), mode)
+            self.assertFalse((session.session_dir / gp.JOURNAL).exists())
+            own = session.session_dir / editing_session.DIRECTORY
+            self.assertEqual(self.popen.call_args.kwargs["env"]["USRLOCAL" + str(self.paths.citadel_dir.resolve())], str(own))
+            descriptor = json.loads((session.session_dir / editing_session.JOURNAL).read_text(encoding="utf-8"))
+            self.assertEqual(descriptor["root"], str(own))
+            self.assertIn("setting.defaultres", descriptor["display_fields_preserved"])
+            self.assertTrue((own / "cfg/video.txt").is_file())
+            self.close(session)
+            self.assertEqual(self.target.read_bytes(), VIDEO)
+            self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), mode)
+        finally:
+            self.target.chmod(stat.S_IREAD | stat.S_IWRITE)
 
     def test_profile_stays_until_exit_and_restores_actual_original_bytes(self):
         session = self.launch()
@@ -325,7 +394,8 @@ class GraphicsLaunchTests(unittest.TestCase):
         self.assertEqual(report["mismatches"], [])
         self.assertEqual(report["unreadable"], [])
         self.assertFalse(report["visual_verified"])
-        self.assertEqual(set(query.call_args.args[0].split("; ")), {"r_citadel_shadow_quality", "r_effects_bloom"})
+        requested = {name for item in query.call_args_list for name in item.args[0].split("; ")}
+        self.assertEqual(requested, {"r_citadel_shadow_quality", "r_effects_bloom"})
         query.return_value = 'r_citadel_shadow_quality = 0\nUnknown command r_effects_bloom'
         report = gp.audit_runtime(session.session_dir, query)
         self.assertEqual(report["mismatches"], ["r_citadel_shadow_quality"])
@@ -432,7 +502,12 @@ class GraphicsLaunchTests(unittest.TestCase):
         self.assertEqual(self.target.read_bytes(), RECORDING)
 
     def test_normal_exit_watcher_restores_graphics(self):
-        session = self.launch()
+        # Exercise the actual current launcher's exit watcher with an existing
+        # legacy transaction, rather than writing a fixture copy of that watcher.
+        session = launcher.launch(self.paths.root)
+        gp.prepare(session.session_dir, self.profile["id"])
+        gp.apply(session.session_dir)
+        self.assertEqual(self.target.read_bytes(), RECORDING)
         self.process.poll.return_value = 0
         self.process.wait.return_value = 0
         with patch.object(launcher, "dismiss_assert_dialogs", return_value=[]):

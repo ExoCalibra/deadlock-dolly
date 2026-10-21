@@ -1,5 +1,6 @@
 """Reviewed data generation must preserve gates and refuse incomplete evidence."""
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -25,6 +26,10 @@ class GeneratedCompatibilityTests(unittest.TestCase):
         (self.root / 'dolly').mkdir()
         for name in ('preload','replay_camera','follow_capabilities','follow_target'):
             shutil.copy2(ROOT/'dolly'/f'{name}.py', self.root/'dolly'/f'{name}.py')
+        self.unlocker = self.root / 'third_party/cvar_unlocker'
+        (self.unlocker / 'bin/win64').mkdir(parents=True)
+        for name in ('THIRD_PARTY.json', 'bin/win64/server.dll'):
+            shutil.copy2(ROOT/'third_party/cvar_unlocker'/name, self.unlocker/name)
         self.path = self.root / generate.CONTRACT
         self.data = generate.read_json(self.path)
 
@@ -34,6 +39,93 @@ class GeneratedCompatibilityTests(unittest.TestCase):
     def test_repository_generated_files_are_current_without_game_access(self):
         with patch.object(generate.camera,'Image',side_effect=AssertionError('No game binary needed')):
             generate.check_generated(ROOT)
+
+    def test_unlocker_metadata_emits_one_artifact_contract_for_both_languages(self):
+        artifact = (self.unlocker/'bin/win64/server.dll').read_bytes()
+        metadata = generate.read_json(self.unlocker/'THIRD_PARTY.json')
+        outputs = generate.generated_outputs(self.root)
+        namespace = {}
+        exec(outputs['dolly/_runtime_generated.py'], namespace)
+        contract = namespace['Unlocker']
+        self.assertEqual(contract.SHA256, hashlib.sha256(artifact).hexdigest())
+        self.assertEqual(contract.SIZE, len(artifact))
+        self.assertEqual(contract.VERSION, metadata['version'])
+        header = outputs['native/include/dolly_runtime_generated.hpp']
+        section = re.search(r'namespace Unlocker \{(.*?)\}', header, re.S).group(1)
+        self.assertIn(f'SHA256[] = "{contract.SHA256}";', section)
+        self.assertIn(f'SIZE = {hex(len(artifact))};', section)
+        self.assertIn(f'VERSION[] = "{metadata["version"]}";', section)
+
+    def test_unlocker_metadata_refuses_other_paths_bad_identity_types_and_bounds(self):
+        path = self.unlocker/'THIRD_PARTY.json'
+        original = generate.read_json(path)
+        cases = (('bundled_file', '../server.dll'), ('bundled_file', 'other.dll'),
+                 ('bundled_file_sha256', 'G'*64), ('bundled_file_sha256', '0'*64),
+                 ('bundled_file_size', True), ('bundled_file_size', 2*1024*1024+1),
+                 ('bundled_file_size', original['bundled_file_size']-1),
+                 ('version', 6805), ('version', 'v1\nforged'), ('version', 'v1'+'x'*80))
+        for field, value in cases:
+            metadata = {**original, field: value}
+            path.write_text(json.dumps(metadata), encoding='utf-8')
+            with self.subTest(field=field, value=value), self.assertRaises(generate.ContractError):
+                generate.generated_outputs(self.root)
+        for content in (b'{"version":"v1","version":"v2"}', b' '*(64*1024+1)):
+            path.write_bytes(content)
+            with self.subTest(content_bytes=len(content)), self.assertRaises(generate.ContractError):
+                generate.generated_outputs(self.root)
+
+    def test_changed_unlocker_artifact_refuses_before_the_real_builder_deletes_previous_outputs(self):
+        import build_native
+        artifact = self.unlocker/'bin/win64/server.dll'
+        artifact.write_bytes(artifact.read_bytes()+b'changed')
+        dll = self.root/'native/bin/win64/DollyNative.dll'
+        dll.parent.mkdir(parents=True)
+        dll.write_bytes(b'previous native DLL, never executable')
+        metadata = self.root/'native/build_info.json'
+        metadata.write_bytes(b'previous build metadata')
+        before = (dll.read_bytes(), metadata.read_bytes())
+        with patch.object(sys, 'platform', 'win32'), \
+                patch.object(build_native.platform, 'machine', return_value='AMD64'), \
+                patch.object(build_native.struct, 'calcsize', return_value=8), \
+                patch('subprocess.run') as run:
+            with self.assertRaisesRegex(generate.ContractError, 'artifact differs'):
+                build_native.build_native(self.root)
+        run.assert_not_called()
+        self.assertEqual(before, (dll.read_bytes(), metadata.read_bytes()))
+        self.assertFalse((self.root/'dolly/_runtime_generated.py').exists())
+
+    def test_unlocker_metadata_change_requires_regeneration(self):
+        outputs = generate.generated_outputs(self.root)
+        for name, text in outputs.items():
+            path = self.root/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding='utf-8')
+        path = self.unlocker/'THIRD_PARTY.json'
+        metadata = generate.read_json(path)
+        metadata['version'] += '-reviewed'
+        path.write_text(json.dumps(metadata), encoding='utf-8')
+        with self.assertRaisesRegex(generate.ContractError, 'Generated compatibility drift'):
+            generate.check_generated(self.root)
+
+    def test_unlocker_contract_refuses_a_linked_artifact_ancestor(self):
+        actual = self.unlocker/'retained-bin'
+        original = self.unlocker/'bin'
+        original.rename(actual)
+        if sys.platform == 'win32':
+            import _winapi
+            _winapi.CreateJunction(str(actual), str(original))
+        else:
+            original.symlink_to(actual, target_is_directory=True)
+        try:
+            retained = (actual/'win64/server.dll').read_bytes()
+            with self.assertRaisesRegex(generate.ContractError, 'ordinary files'):
+                generate.generated_outputs(self.root)
+            self.assertEqual(retained, (actual/'win64/server.dll').read_bytes())
+        finally:
+            if sys.platform == 'win32':
+                original.rmdir()
+            else:
+                original.unlink()
 
     def test_saved_reviews_round_trip_and_keep_every_existing_camera_profile(self):
         before = (self.root/'native/profiles/manifest.json').read_bytes()
@@ -125,7 +217,7 @@ class GeneratedCompatibilityTests(unittest.TestCase):
                   for a in self.data['follow_anchors'] for span in a['spans']}
         self.assertEqual(actual,expected)
         anchors={a['build']:a for a in self.data['follow_anchors']}
-        self.assertEqual(set(anchors),{'6722','6723','6726','6793','6796'})
+        self.assertEqual(set(anchors),{'6722','6723','6726','6793','6796','6801','6803','6805','6806','6807'})
         for build in ('6722','6723','6726'):
             self.assertEqual(anchors[build]['values']['observer_services_offset'],'0xe40')
             self.assertNotIn('local_player_table',anchors[build]['values'])
@@ -134,6 +226,16 @@ class GeneratedCompatibilityTests(unittest.TestCase):
         self.assertEqual(int(anchors['6793']['values']['local_player_table'],16),player_table)
         self.assertEqual(anchors['6796']['values']['observer_services_offset'],'0xe98')
         self.assertEqual(int(anchors['6796']['values']['local_player_table'],16),player_table)
+        self.assertEqual(anchors['6801']['values']['observer_services_offset'],'0xe98')
+        self.assertEqual(int(anchors['6801']['values']['local_player_table'],16),0x276c3d8)
+        self.assertEqual(anchors['6803']['values']['observer_services_offset'],'0xe98')
+        self.assertEqual(int(anchors['6803']['values']['local_player_table'],16),0x276c3d8)
+        self.assertEqual(anchors['6805']['values']['observer_services_offset'],'0xe98')
+        self.assertEqual(int(anchors['6805']['values']['local_player_table'],16),0x276c3d8)
+        self.assertEqual(anchors['6806']['values']['observer_services_offset'],'0xe98')
+        self.assertEqual(int(anchors['6806']['values']['local_player_table'],16),0x276c3d8)
+        self.assertEqual(anchors['6807']['values']['observer_services_offset'],'0xe98')
+        self.assertEqual(int(anchors['6807']['values']['local_player_table'],16),0x276c3d8)
         loaded,_,_=generate.load_contract(self.root)
         current=next(a for a in loaded['follow_anchors'] if a['build']=='6796')
         self.assertEqual(current['_sha256'],'8dff04c139d20b78d8d2c7a3039b691cfc221b8460438ec6fc6107c315741a5c')
@@ -242,10 +344,10 @@ class GeneratedCompatibilityTests(unittest.TestCase):
 
     def test_player_profiles_keep_exact_pairs_and_moved_producer(self):
         scenes = generate.player_scenes(self.root, self.data)
-        self.assertEqual([row['rva'] for row in scenes], [0x564b0, 0x5c8e0, 0x5c8e0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0])
-        self.assertEqual([row['arguments'] for row in scenes], [9, 10, 10, 10, 10, 10, 10, 10, 10, 10])
+        self.assertEqual([row['rva'] for row in scenes], [0x564b0, 0x5c8e0, 0x5c8e0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c8f0, 0x5c9a0])
+        self.assertEqual([row['arguments'] for row in scenes], [9, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10])
         self.assertEqual([row['fields'][1] for row in scenes],
-                         [0x5d4fe8, 0x61e7d0, 0x61e860, 0x61e860, 0x61e860, 0x61e800, 0x61e800, 0x61e800, 0x61e800, 0x61e800])
+                         [0x5d4fe8, 0x61e7d0, 0x61e860, 0x61e860, 0x61e860, 0x61e800, 0x61e800, 0x61e800, 0x61e800, 0x61e800, 0x61e810])
         header = generate.generated_outputs(self.root)['native/include/dolly_player_scene_generated.hpp']
         for scene in scenes:
             self.assertIn(scene['scene_hash'], header)

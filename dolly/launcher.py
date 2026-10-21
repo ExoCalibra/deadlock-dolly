@@ -1,4 +1,4 @@
-﻿"""Windows-only Deadlock development launcher with recoverable config mounting.
+"""Windows-only Deadlock development launcher with recoverable config mounting.
 
 ``game_path`` may be the Deadlock installation root, its ``game`` or ``citadel``
 directory, or ``game/bin/win64/deadlock.exe`` (legacy ``citadel.exe`` is also
@@ -34,6 +34,7 @@ from .file_ops import _atomic_write
 from .keyvalues import _Token, _Entry, _tokens, _parse, _named
 from .runtime import application_root, resource_root, external_program_environment
 from .native_bridge import NativeBridge, ABI as NATIVE_ABI
+from ._runtime_generated import Unlocker as _Unlocker
 from .panorama_assets import verify_stock_ui_assets
 from . import __version__ as DOLLY_VERSION
 from .compatibility import (
@@ -52,7 +53,7 @@ CONFETTI_PACK = NATIVE_ROOT / "assets" / "confetti" / "pak01_dir.vpk"
 CONFETTI_PACK_SHA256 = "99c0325fe333bfa12c3f23a2808767c2fd27b49fe0e5abe4531fa472519f8ae6"
 UI_OVERRIDE_PACK = NATIVE_ROOT / "assets" / "ui" / "pak02_dir.vpk"
 UI_OVERRIDE_PACK_SHA256 = "0af30912a471efc984e653ebc57a4c05f210e07f707f42d3bec997fc945b2fe1"
-UNLOCKER_SHA256 = "0705a1623bd88d8c775b93dd6066dc975805cb36aee09d2aaf66af873bcf7285"
+UNLOCKER_SHA256 = _Unlocker.SHA256
 # Accepted game-module SHA-256 pins come from native/profiles/manifest.json, the
 # single source of truth shared with the native bridge and its build tests.
 try:
@@ -62,8 +63,8 @@ except CompatibilityError:
 STEAM_APP_ID = "1422450"
 # Mod managers (Deadlock Mod Manager, Grimoire, the manual guide) mount their
 # addon folders with ordinary SearchPaths entries. The reviewed editing baseline
-# intentionally omits those retired mounts, so the launcher carries only the
-# installed entries listed here into its temporary session file.
+# omits them. Keep this parser for diagnostics and legacy helper callers;
+# current launches record these entries as excluded and restore exact originals.
 ADDON_MOUNT_KEYS = {
     "game": "Game",
     "mod": "Mod",
@@ -79,43 +80,50 @@ def _quote(value: str) -> str:
     return '"' + value.replace("\\", "/").replace('"', '\\"') + '"'
 
 
-def _editing_gameinfo(paths: GamePaths) -> str:
-    """Verify the camera baseline and its separately reviewed unlocker server.
+def _editing_gameinfo(paths: GamePaths, *, provenance: dict | None = None) -> str:
+    """Verify config consumers, stock provenance and the reviewed unlocker pair.
 
     Competitive gameinfo files can alter much more than ConVars. Never guess
     which entries are stock, or mount an old full gameinfo after a game update.
     This check is separate from, and does not authorize, native injection.
     """
     from .compatibility import CAMERA_MODULE_RELATIVES, hash_file
+    from .stock_provenance import CONFIGURATION_MODULES, verify
     try:
         profile = json.loads((EDITING_ROOT / "profile.json").read_text(encoding="utf-8"))
         data = (EDITING_ROOT / "gameinfo.gi").read_bytes()
         if (profile.get("format") != 1
                 or set(profile.get("modules", {})) != set(CAMERA_MODULE_RELATIVES)
+                or set(profile.get("configuration_modules", {})) != set(CONFIGURATION_MODULES)
                 or hashlib.sha256(data).hexdigest() != profile.get("gameinfo_sha256")):
             raise ValueError("Editing configuration failed its integrity check")
-        for relative in CAMERA_MODULE_RELATIVES:
-            if hash_file(paths.game_dir / relative) != profile["modules"][relative]:
+        for relative in CONFIGURATION_MODULES:
+            expected = profile["configuration_modules"][relative]
+            if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+                raise ValueError("Invalid editing configuration consumer fingerprint")
+            if hash_file(paths.game_dir / relative) != expected:
                 raise LaunchError("Dolly's editing configuration has not been reviewed for this game build. "
                                   "Update Dolly before launching. Your gameinfo.gi was not changed.")
         server_hash = profile.get("unlocker_server_sha256")
-        if server_hash is not None:
-            if not isinstance(server_hash, str) or re.fullmatch(r"[0-9a-f]{64}", server_hash) is None:
-                raise ValueError("Invalid editing unlocker server fingerprint")
-            if hash_file(paths.game_dir / "citadel/bin/win64/server.dll") != server_hash:
-                raise LaunchError("Dolly's cvar unlocker has not been reviewed for this server build. "
-                                  "Update Dolly before launching. Your gameinfo.gi was not changed.")
+        if not isinstance(server_hash, str) or re.fullmatch(r"[0-9a-f]{64}", server_hash) is None:
+            raise ValueError("Invalid editing unlocker server fingerprint")
+        if hash_file(paths.game_dir / "citadel/bin/win64/server.dll") != server_hash:
+            raise LaunchError("Dolly's cvar unlocker has not been reviewed for this server build. "
+                              "Update Dolly before launching. Your gameinfo.gi was not changed.")
         text = data.decode("utf-8")
         roots = _named(_parse(text), "GameInfo")
         if len(roots) != 1 or roots[0].children is None:
             raise ValueError("Invalid editing GameInfo block")
+        receipt = verify(paths, EDITING_ROOT, profile, _steam_roots())
+        if provenance is not None:
+            provenance.update(receipt)
         return text
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         raise LaunchError(f"Could not verify Dolly's editing configuration: {exc}. "
                           "Reinstall or update Dolly. Your gameinfo.gi was not changed.") from exc
 
 
-def make_gameinfo(original: str, overlay_name: str) -> str:
+def make_gameinfo(original: str, overlay_name: str, *, isolated_settings: bool = False) -> str:
     """Temporarily mount the plugin in current FileSystem/SearchPaths only.
 
     The generated overlay name is a restricted, single relative directory.
@@ -124,6 +132,8 @@ def make_gameinfo(original: str, overlay_name: str) -> str:
     """
     if not re.fullmatch(r"citadel_dolly_[a-z0-9_]+", overlay_name):
         raise LaunchError("Invalid temporary plugin directory name.")
+    if not isinstance(isolated_settings, bool):
+        raise LaunchError("Editing settings isolation must be a boolean.")
     roots = _named(_parse(original), "GameInfo")
     if len(roots) != 1 or roots[0].children is None:
         raise LaunchError("Expected one GameInfo block in the current gameinfo.gi.")
@@ -145,6 +155,9 @@ def make_gameinfo(original: str, overlay_name: str) -> str:
     for entry in entries:
         assert entry.value is not None
         raw = entry.value.value.replace("\\", "/")
+        if isolated_settings and entry.key.value.casefold() in {"mod", "write"}:
+            edits.append((entry.key.start, entry.end, "// Dolly session-only settings mount replaces this entry."))
+            continue
         if entry.key.value.casefold() == "game" and raw.strip("/").casefold() == "citadel/cvar_unlocker":
             # Avoid mounting a user's second unlocker in the development session.
             edits.append((entry.key.start, entry.end, "// Existing unlocker mount temporarily replaced by Dolly."))
@@ -157,9 +170,17 @@ def make_gameinfo(original: str, overlay_name: str) -> str:
     indent = prefix if not prefix.strip() else "\t\t\t"
     additions = ["// Dolly temporary development mount; original bytes are backed up in this session's logs."]
     kinds = {entry.key.value.casefold() for entry in entries}
-    if "mod" not in kinds:
+    if isolated_settings:
+        # Defaults can explicitly request MOD, so GAME priority alone cannot
+        # keep modified default bindings/schema out of the editing session.
+        additions.append('Mod\t' + _quote(overlay_name + "/cvar_unlocker"))
         additions.append('Mod\t"citadel"')
-    if "write" not in kinds:
+        # The engine prefixes Write with its game directory; absolute suffixes
+        # are not supported here. Unclassified session files stay in our mount.
+        additions.append('Write\t' + _quote(overlay_name + '/session-files'))
+    elif "mod" not in kinds:
+        additions.append('Mod\t"citadel"')
+    if not isolated_settings and "write" not in kinds:
         additions.append('Write\t"citadel"')
     additions.append('Game\t' + _quote(overlay_name + "/cvar_unlocker"))
     insertion = (newline + indent).join(additions) + newline + indent
@@ -506,12 +527,11 @@ def build_command(paths: GamePaths, overlay_dir: Path, port: int, demo_path: Pat
     _validate_demo(demo_path)
     from .replays import parse_launch_options
     args.extend(parse_launch_options(launch_options))
-    if native:
-        # The native editor and recorder consume DX11 Present callbacks. Without
-        # an explicit renderer the game's saved Vulkan preference can load the
-        # replay successfully but leave those callbacks permanently idle.
-        # Scope this override to our process; do not rewrite the user's settings.
-        args.append("-dx11")
+    # Settings isolation is reviewed against DX11's read/save consumer in both
+    # modes. Native recording additionally needs its Present callbacks. Renderer
+    # launch options are refused by parse_launch_options; ordinary settings are
+    # never rewritten to select this process-scoped renderer.
+    args.append("-dx11")
     return args
 
 
@@ -798,8 +818,10 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         original_text = original_data.decode("utf-8")  # Validate before preparing any replacement.
     except (OSError, UnicodeError) as exc:
         raise LaunchError("Could not read the installed UTF-8 gameinfo.gi; no game files were changed.") from exc
-    addon_mounts = tuple(mod_search_paths(original_text))
-    _refuse_loose_ui_sources(paths, addon_mounts)
+    excluded_mounts = tuple(mod_search_paths(original_text))
+    # User addon mounts can supply startup commands, materials and UI overrides.
+    # Keep them in the exact original backup, outside this editing process.
+    _refuse_loose_ui_sources(paths)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
             # Exclusive bind on Windows prevents claiming another app's listener.
@@ -821,19 +843,24 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
     bridge = None
     ident = time.strftime("%Y%m%d_%H%M%S", time.gmtime()) + "_" + uuid.uuid4().hex[:10]
     overlay = paths.game_dir / ("citadel_dolly_" + ident)
-    editing = _editing_gameinfo(paths)
-    patched_data = make_gameinfo(merge_addon_mounts(original_text, editing), overlay.name).encode("utf-8")
+    configuration_provenance: dict = {}
+    editing = _editing_gameinfo(paths, provenance=configuration_provenance)
+    from . import editing_assets, editing_session
+    config_files = editing_assets.load(EDITING_ROOT)
     session_dir = PACKAGE_ROOT / "logs" / ident
+    patched_data = make_gameinfo(editing, overlay.name, isolated_settings=True).encode("utf-8")
     log_path = session_dir / "launch.log"
     try:
         if native:
             bridge = NativeBridge.create()
         session_dir.mkdir(parents=True, exist_ok=False)
         overlay.mkdir(exist_ok=False)
+        (overlay / 'session-files').mkdir(exist_ok=False)
         marker = {"owner": "Deadlock Dolly", "session_dir": str(session_dir), "original_gameinfo": str(paths.gameinfo), "original_sha256": hashlib.sha256(original_data).hexdigest()}
         (overlay / ".dolly-session.json").write_text(json.dumps(marker, indent=2), encoding="utf-8")
         target = overlay / "cvar_unlocker" / "bin" / "win64"
         target.mkdir(parents=True)
+        editing_assets.deploy(overlay, config_files)
         if native_dll is None:
             shutil.copyfile(dll, target / "server.dll")
         else:
@@ -849,9 +876,11 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
                 f"DOLLY_NATIVE_1\n{bridge.token}\n{bridge.editor_pid}\n",
                 encoding="ascii", newline="\n")
         command = build_command(paths, overlay, port, demo, protocol, launch_options, native=native)
-        metadata = {**marker, "command": command, "selected_demo": str(demo) if demo is not None else None, "port": port, "protocol": protocol, "dolly_version": DOLLY_VERSION, "overlay_dir": str(overlay), "unlocker_version": "v0.5.2-dolly-build-6796", "unlocker_sha256": UNLOCKER_SHA256, "validation": "Windows game startup and selected console protocol require a local probe.", "backup_name": "original.gameinfo.gi", "patched_sha256": hashlib.sha256(patched_data).hexdigest(), "original_mode": stat.S_IMODE(paths.gameinfo.stat().st_mode), "config_state": "prepared"}
+        metadata = {**marker, "command": command, "selected_demo": str(demo) if demo is not None else None, "port": port, "protocol": protocol, "dolly_version": DOLLY_VERSION, "overlay_dir": str(overlay), "unlocker_version": _Unlocker.VERSION, "unlocker_sha256": UNLOCKER_SHA256, "validation": "Windows game startup and selected console protocol require a local probe.", "backup_name": "original.gameinfo.gi", "patched_sha256": hashlib.sha256(patched_data).hexdigest(), "original_mode": stat.S_IMODE(paths.gameinfo.stat().st_mode), "config_state": "prepared", "editing_configuration_provenance": configuration_provenance}
         metadata["editing_gameinfo_sha256"] = hashlib.sha256(editing.encode("utf-8")).hexdigest()
-        metadata["carried_addon_mounts"] = [{"key": key, "path": path} for key, path in addon_mounts]
+        metadata["carried_addon_mounts"] = []
+        metadata["excluded_addon_mounts"] = [{"key": key, "path": path} for key, path in excluded_mounts]
+        metadata["configuration_mode"] = "isolated_editing"
         if native:
             metadata["native_camera"] = {"abi": NATIVE_ABI, "game_sha256": NATIVE_GAME_SHA256,
                                          "dll_sha256": hashlib.sha256(native_dll.read_bytes()).hexdigest()}
@@ -859,9 +888,8 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         _atomic_write(session_dir / "original.gameinfo.gi", original_data)
         _save_record(session_dir, metadata)
         log_path.write_text("Deadlock Dolly development launcher\n" + json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-        if graphics_profile:
-            from . import graphics_profiles
-            graphics_profiles.prepare(session_dir, graphics_profile)
+        settings = editing_session.prepare(session_dir, paths, graphics_profile=graphics_profile,
+                                           editing_root=EDITING_ROOT, launch_options=launch_options)
         # Check again immediately before process creation, after file preparation.
         if _game_is_running(running_processes()):
             raise LaunchError("Deadlock started while Dolly was preparing. Exit it and try again.")
@@ -874,16 +902,15 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
                               "the original was backed up in this session's logs.")
         metadata["config_state"] = "mounted"
         _save_record(session_dir, metadata)
-        if graphics_profile:
-            graphics_profiles.apply(session_dir)
         with (session_dir / "game_stdout.log").open("ab") as output:
             with external_program_environment() as environment:
+                environment = dict(os.environ if environment is None else environment)
+                environment.update(settings["environment"])
                 # Dolly owns the one graphics callback for its optional manual
                 # ReShade runtime. Never install a second automatic DXGI hook.
                 # This environment belongs only to the launched development game.
                 if native:
                     from .settings import reshade_config_path
-                    environment = dict(os.environ if environment is None else environment)
                     environment["RESHADE_DISABLE_GRAPHICS_HOOK"] = "1"
                     environment["RESHADE_BASE_PATH_OVERRIDE"] = str(reshade_config_path().parent)
                     environment["RESHADE_DISABLE_LOADING_CHECK"] = "1"
@@ -943,7 +970,8 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
             bridge.bind_game(process.pid)
         try:
             session.log(f"Created development process PID {session.pid}; -dev and -insecure are mandatory.")
-            session.log("Loaded Dolly's verified editing gameinfo; the user's exact original is backed up for restoration.")
+            session.log("Loaded Dolly's verified stock editing configuration and separate session settings. "
+                        "Normal-play configs and addon mounts are excluded; the exact original gameinfo is backed up.")
             session.log("Replay loading deferred until the controller confirms cvar_unhide in the pre-lobby/hideout.")
             with session._restore_lock:
                 current_record = _load_record(session_dir)
@@ -963,7 +991,11 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
                 except LaunchError as recovery:
                     raise LaunchError(f"{exc}\nConfiguration recovery needs attention: {recovery}") from exc
             if overlay.is_dir() and (overlay / ".dolly-session.json").is_file():
-                shutil.rmtree(overlay, ignore_errors=True)
+                from .session_cleanup import remove_overlay
+                try:
+                    remove_overlay(overlay, paths, session_dir)
+                except (OSError, LaunchError) as cleanup:
+                    raise LaunchError(f"{exc}\nTemporary session files were preserved because cleanup needs attention: {cleanup}") from exc
         if isinstance(exc, LaunchError):
             raise
         if process is not None and process.poll() is None:

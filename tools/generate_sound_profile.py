@@ -13,9 +13,10 @@ import re
 from generate_profile import Image, ProfileError, ROOT, build_signature, resolve_game_dir
 
 LEGACY_PROFILE = ROOT / "native/profiles/soundsystem-2026-09-09.json"
-PROFILE = ROOT / "native/profiles/soundsystem-2026-10-16-6793.json"
+PROFILE = ROOT / "native/profiles/soundsystem-2026-10-20-6801.json"
 HEADER = ROOT / "native/src/dolly_sound_compat_generated.hpp"
-REVIEWED_HASH = "5b5c6a369e4572066e3c0d8a0e7f88c33d028bab3ceffc1dc4c0ee679e252b50"
+REVIEWED_HASH = "4b21d619383dc1e6220bce245861de4f54c2902987d4096074c6cca36cb8801d"
+REVIEWED_VOICE_TABLE = 0x658e00
 # Reviewed prefixes span complete instructions. Stop has split unwind records;
 # its first .pdata entry covers only the prologue, not the function body.
 ANCHORS = (("voice_start", 0x96270, 0x120, 14),
@@ -46,17 +47,18 @@ def build_sound_profile(image):
         for ins in instructions:
             if any(op.type == capstone.x86.X86_OP_MEM and
                    op.mem.base == capstone.x86.X86_REG_RIP and
-                   ins.address + ins.size + op.mem.disp == image.base + 0x658e40
+                   ins.address + ins.size + op.mem.disp == image.base + REVIEWED_VOICE_TABLE
                    for op in ins.operands):
                 references.append(dict(symbol=index, offset=ins.address-image.base-rva,
                                        displacement=ins.disp_offset, size=ins.size))
     if {ref["symbol"] for ref in references} != {0, 1, 3}:
         raise ProfileError("Reviewed voice-table references changed")
-    return dict(sha256=image.sha256, image_size=image.image_size, voice_table=0x658e40,
+    return dict(sha256=image.sha256, image_size=image.image_size, voice_table=REVIEWED_VOICE_TABLE,
                 voice_map_offset=0x100, parameter_volume_offset=0x20, parameter_rate_offset=0x2c,
                 symbols=symbols, table_references=references,
-                validation=("6795 live: vmix_start/event_name corrected to 0x1a5200/0x1bd540 "
-                            "and voice table to 0x658e40; source voice log captured."))
+                validation=("6801 offline: complete voice start/stop/map, VMix, event-name and release bodies "
+                            "are relocation-equivalent to reviewed snapshots, including chained unwind ranges; "
+                            "voice table relocated to 0x658e00. Live audio acceptance is separate."))
 
 
 def _emit_profile(profile):

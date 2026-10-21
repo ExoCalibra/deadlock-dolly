@@ -114,7 +114,7 @@ class GameinfoTransactionTests(unittest.TestCase):
         self.assertTrue(trace['result'])
         self.assertEqual(trace['target'], trace['original'])
         self.assertEqual([entry['path'] for entry in trace['writes']],
-                         ['installation/game/citadel/gameinfo.gi', 'logs/fixture/session.json'])
+                         ['steamapps/common/installation/game/citadel/gameinfo.gi', 'logs/fixture/session.json'])
 
     def test_prepared_and_already_original_only_update_journal(self):
         for scenario in ('prepared', 'already_original'):

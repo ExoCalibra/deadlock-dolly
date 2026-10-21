@@ -97,7 +97,7 @@ class ConvarResponseTests(unittest.TestCase):
         values = {'setting.r_effects_bloom': 'true', 'setting.shaderquality': '2',
                   'setting.r_citadel_shadow_quality': '2'}
         trace = runtime_trace(graphics_profiles, values, 'r_effects_bloom = false')
-        self.assertEqual(trace['query'], ['r_effects_bloom; r_citadel_shadow_quality'])
+        self.assertEqual(trace['query'], ['r_effects_bloom', 'r_citadel_shadow_quality'])
         self.assertEqual(trace['report']['mismatches'], ['r_effects_bloom'])
         self.assertEqual(trace['report']['unreadable'], ['r_citadel_shadow_quality'])
         self.assertEqual(trace['report']['file_only'], ['setting.shaderquality'])

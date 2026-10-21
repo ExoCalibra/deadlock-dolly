@@ -18,6 +18,43 @@ Player capture profiles also keep the scene fingerprint, producer address and
 calling convention, record layout, and exact renderer pairing together. This
 avoids enabling a new scene build with an older producer entry point.
 
+### Build 6807 (2026-10-20)
+
+The next hotfix changes both client and server images. Required camera, startup,
+Follow, gameplay and server-interface consumers are reviewed against the 6806
+checkpoint. Updated code, named schema records and data-table addresses remain
+separate from unchanged field offsets and interface layouts. Earlier profiles
+keep their individual checked bytes and admissions; new hashes alone do not
+qualify a build. The stock engine, Tier0, filesystem, renderer, scene, sound and
+resource files are unchanged.
+
+Stock configuration payloads remain unchanged; provenance records the complete
+current Steam depot map. The exact current unlocker pair and generated Python
+and C++ artifact pins must agree. Console retains its independent configuration
+and server checks while avoiding Native client-layout dependencies.
+
+### Build 6806 (2026-10-20)
+
+The Nurse Harrow update series changed both client and server code. The current
+6806 profile adds reviewed camera, startup, replay, schema and Follow contracts,
+plus separate gameplay-filter and weather entries. Earlier profiles retain their
+own offsets and checked bytes. Scene, sound, resource, renderer, engine and Tier0
+files are unchanged from the reviewed 6805 checkpoint; their admissions remain
+unchanged. The unlocker adds the exact reviewed server/Tier0 pair and retains its
+named interface, table and lifecycle checks.
+
+Stock gameinfo, cfg and video payloads remain unchanged from the 6801 baseline.
+The provenance metadata adds the complete installed 6806 Steam depot map.
+Configuration dependencies are checked independently of Native camera support,
+so Console Legacy can retain its manual route when only the native client layout
+is unsupported. It still requires reviewed configuration and unlocker dependencies.
+The specific early-development warning is disabled only in Dolly's editing
+session; hero announcements and all ordinary readiness checks remain in place.
+
+Offline layout and package checks do not certify runtime output or every new
+hero effect. Bounded replay qualification must identify the actual installed
+build, replay recording build, outputs and restoration result separately.
+
 ### Build 6796 (2026-10-19)
 
 Build 6796 changed `client.dll` and the unlocker target `server.dll`;
@@ -293,3 +330,20 @@ relocated functions, but must not automatically approve an unknown layout.
 Console mode remains a temporary alternative when Native is unavailable.
 It uses console delivery and does not provide native per-render-frame camera
 and DOF synchronization. The bundled unlocker must still work with that build.
+
+Console's primary Play action uses the manual Startup controls rather than the
+private-client automatic preload and replay-camera readers. Its configuration
+admission is separate from camera layout admission: reviewed engine, Tier0,
+filesystem and DX11 settings consumers, bundle integrity, current stock-content
+provenance and the exact server/unlocker pair are still required. Native remains
+blocked on unknown client layouts. Changed configuration content or consumers
+and a changed server ABI remain independent update boundaries.
+
+Dolly's temporary GameInfo sets the stock
+`deadlock_early_development_warning_disabled` preference before the specific
+early-development warning is constructed. The normal interactive intro retains
+its existing verified phase2 advancement. Hero announcements and other prompts
+remain available. If one blocks the hideout, the user dismisses it and
+**Check startup again** reuses the same owned session and all normal checks.
+Dolly does not dispatch input at an unverified screen or load a replay merely
+because a timer elapsed. Normal-play warning preferences stay untouched.

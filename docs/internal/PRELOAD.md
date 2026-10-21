@@ -10,6 +10,13 @@ dispatch it now verifies dashboard map/shader preloading. The game console is
 hidden and Dolly advances Deadlock's normal click-to-continue screen. Dolly
 then opens the selected replay automatically; no extra Load confirmation is needed.
 
+Separately, Dolly's temporary GameInfo sets the stock
+`deadlock_early_development_warning_disabled` value to1, preventing the specific
+early-development warning from being created. This uses the same preference as
+that warning's disable checkbox inside the isolated session; normal-play config
+is preserved. It does not dismiss hero announcements or arbitrary splash popups.
+The normal intro still needs the verified advancement and preload gates below.
+
 The intro panel does not update its cached phase while `citadel_hud_visible` is
 zero. This reproduces a startup timeout with a rendering hideout, equal shader
 counters, no manifest and phase 0. After unlocker initialization, startup reads
@@ -38,9 +45,10 @@ coherent but unstarted at intro phase 0, with no manifest, while the hideout
 renders normally and the HUD is visible. Waiting cannot change that state, so
 automatic startup stops early after a bounded window (`PRELOAD_INTRO_STALL_SECONDS`),
 records the observed last sample and trace under `preload_unavailable`, and
-leaves the game open. The desktop then offers the existing manual **Load replay**
-control, which loads without the preload check and therefore makes no verified
-preload claim. The early stop never fires once a started preload or a nonzero
+leaves the game open. If another game screen needs attention, the desktop offers
+**Check startup again** after the user dismisses it. That action repeats the
+same-session hideout/preload checks before replay loading. The early stop never
+fires once a started preload or a nonzero
 intro phase has been observed; those keep the full gate and its timeout.
 
 The build 6712 intro constructor at client+0x1a82910 stores the object at

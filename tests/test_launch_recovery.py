@@ -9,7 +9,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from dolly.controller import PreloadUnavailableError
+from dolly.controller import PreloadUnavailableError, StartupAcknowledgementRequired
 from dolly.gui import DollyApp
 
 
@@ -21,6 +21,7 @@ class LaunchRecoveryTests(unittest.TestCase):
         self.app.root = object()
         self.status = SimpleNamespace(set=Mock())
         self.app.status_text = self.status
+        self.app.startup_progress = SimpleNamespace(set=Mock())
         self.app._log = Mock()
         self.app._load_replay = Mock()
 
@@ -38,6 +39,31 @@ class LaunchRecoveryTests(unittest.TestCase):
         self.app._load_replay.assert_called_once()
         dialog.assert_not_called()
         self.assertIn("never showed its hideout intro", self.status.set.call_args[0][0])
+
+    def test_game_screen_acknowledgement_keeps_normal_checks_and_shows_no_modal(self):
+        error = StartupAcknowledgementRequired('Dismiss the development screen, then choose Check startup again.')
+        with patch('dolly.gui.messagebox.askyesno') as ask, \
+             patch('dolly.gui.dialogs.show_error') as dialog:
+            self.app._report_operation_error('Starting replay editor', error)
+        self.app._load_replay.assert_not_called()
+        ask.assert_not_called(); dialog.assert_not_called()
+        self.app.startup_progress.set.assert_called_once_with(str(error))
+        self.assertIn('Check startup again', self.status.set.call_args[0][0])
+
+    def test_check_startup_again_submits_same_replay_and_fresh_cancellation(self):
+        self.app.demo_path = SimpleNamespace(get=lambda: 'selected.dem')
+        self.app.controller = SimpleNamespace(resume_startup=Mock())
+        self.app._submit = Mock(return_value=True)
+        self.app._editing_started = Mock()
+        self.app.startup_bar = Mock()
+        self.app._resume_startup()
+        label, operation, callback = self.app._submit.call_args.args
+        self.assertEqual(label, 'Checking startup again')
+        self.assertIs(callback, self.app._editing_started)
+        self.assertFalse(self.app.startup_cancel.is_set())
+        operation()
+        self.app.controller.resume_startup.assert_called_once_with(
+            'selected.dem', cancel_event=self.app.startup_cancel)
 
     def test_declining_the_offer_leaves_the_replay_unloaded(self):
         with patch("dolly.gui.messagebox.askyesno", return_value=False) as ask:

@@ -4,6 +4,18 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.64-alpha
+
+- Update exact camera and server-unlocker compatibility through the Nurse Harrow build 6807 hotfix; retain earlier reviewed profiles.
+- Use verified stock graphics defaults and separate per-session config folders; exclude normal-play ConVars, startup scripts and addon mounts. Named Dolly graphics profiles apply privately.
+- Confirm the live settings root and user-config guard before replay loading.
+- Collect engine-recorded game audio from the same owned editing session and preserve unrelated files during audio cleanup.
+- Preserve unknown files during failed-launch cleanup; retain old graphics-journal recovery.
+- Skip the early-development notice only in Dolly's temporary session; retain automatic intro continuation, hero announcements and same-session startup rechecking.
+- Route Console Legacy through manual Startup controls; qualify its configuration dependencies separately from native camera support.
+
+Full details: [0.6.64 release notes](RELEASE_NOTES_0.6.64-alpha.md).
+
 ## 0.6.63-alpha
 
 - **Check Native Depth of Field before use.** *Before:* Native DOF support was harder to diagnose, and the support check could miss a newly selected game folder. *After:* Dolly checks the installed shader and material indexes, explains missing or unreadable files, and offers a local support report from the selected install.

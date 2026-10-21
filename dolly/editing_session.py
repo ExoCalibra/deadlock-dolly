@@ -1,0 +1,300 @@
+"""Prepare Dolly-owned settings without replacing a player's Steam settings.
+
+The reviewed launcher owns the stock cfg mounts and the engine's
+host_readconfig_ignore_userconfig gate. This module supplies only the private
+USRLOCAL directory and child-process environment; it does not control Steam
+Cloud, mutate the parent environment, or restore files outside the session.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import ntpath
+from pathlib import Path
+import re
+
+from . import gameinfo_transaction, graphics_profiles
+from .file_ops import _atomic_write, _plain_ancestors
+from .game_installation import GamePaths
+from .launch_errors import LaunchError
+from .convar_response import read_cvar_value
+from .runtime import resource_root
+from .replays import parse_launch_options
+from .settings import _unique_object
+
+
+EDITING_ROOT = resource_root(Path(__file__).resolve().parent.parent) / "assets" / "editing"
+DIRECTORY = "editing-config"
+JOURNAL = "editing-session.json"
+MAX_BYTES = 128 * 1024
+EMPTY_CONVARS = b'"config"\n{\n\t"convars"\n\t{\n\t}\n}\n'
+
+# Carry device/display identity only. Performance tiers, rendering quality,
+# upscalers, render scale, commands and all unknown fields remain excluded.
+DISPLAY_FIELDS = {
+    "vendorid": (0, 65535),
+    "deviceid": (0, 65535),
+    "setting.knowndevice": (0, 1),
+    "setting.defaultres": (320, 16384),
+    "setting.defaultresheight": (200, 16384),
+    "setting.refreshrate_numerator": (0, 1_000_000),
+    "setting.refreshrate_denominator": (0, 1_000_000),
+    "setting.fullscreen": (0, 1),
+    "setting.coop_fullscreen": (0, 1),
+    "setting.nowindowborder": (0, 1),
+    "setting.mat_vsync": (0, 1),
+    "setting.fullscreen_min_on_focus_loss": (0, 1),
+    "setting.high_dpi": (0, 1),
+    "setting.monitor_index": (0, 31),
+    "setting.aspectratiomode": (0, 4),
+}
+
+
+def _read(path: Path) -> bytes:
+    if not _plain_ancestors(path) or not path.is_file():
+        raise LaunchError(f"Editing settings must be ordinary local files: {path}")
+    with path.open("rb") as stream:
+        data = stream.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise LaunchError(f"Editing settings exceed {MAX_BYTES // 1024} KiB: {path}")
+    return data
+
+
+def _values(data: bytes) -> dict[str, str]:
+    return {name: entry.value.value for name, entry in graphics_profiles._document(data)[1].items()}
+
+
+def _baseline(editing_root: Path | None = None) -> bytes | None:
+    """A declared baseline must be exact; an absent optional one stays absent."""
+    editing_root = EDITING_ROOT if editing_root is None else Path(editing_root)
+    profile = json.loads(_read(editing_root / "profile.json"), object_pairs_hook=_unique_object)
+    if not isinstance(profile, dict) or profile.get("format") != 1:
+        raise LaunchError("Dolly's editing profile has an unsupported format.")
+    digest = profile.get("video_sha256")
+    path = editing_root / "video.txt"
+    if digest is None and not path.exists():
+        return None
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise LaunchError("Dolly's editing video baseline has no reviewed fingerprint.")
+    data = _read(path)
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise LaunchError("Dolly's editing video baseline failed its SHA-256 check.")
+    values = _values(data)
+    if not graphics_profiles.QUALITY_FIELDS.keys() <= values.keys():
+        raise LaunchError("Dolly's editing video baseline lacks required quality settings.")
+    return data
+
+
+def _display() -> tuple[dict[str, str], str | None]:
+    """Reading an unavailable active Steam profile is optional, never a write."""
+    try:
+        values = _values(graphics_profiles.read_video(graphics_profiles.current_video()))
+        result = {}
+        for name, (minimum, maximum) in DISPLAY_FIELDS.items():
+            value = values.get(name)
+            if value is not None and re.fullmatch(r"[0-9]{1,7}", value) and minimum <= int(value) <= maximum:
+                result[name] = str(int(value))
+        return result, None
+    except (OSError, LaunchError, ValueError, TypeError) as exc:
+        # Do not persist the user's Steam path/account or arbitrary file content.
+        return {}, f"Display settings were unavailable ({type(exc).__name__}); using Dolly/game defaults."
+
+
+def _video(baseline: bytes | None, display: dict[str, str], profile_id: str) -> tuple[bytes | None, dict]:
+    values = _values(baseline) if baseline is not None else {"version": graphics_profiles.VIDEO_VERSION}
+    values.update(display)
+    profile = None
+    if profile_id:
+        if baseline is None:
+            raise LaunchError("A reviewed editing video baseline is required to use a saved graphics profile.")
+        library = graphics_profiles.load_library()
+        profile = next((p for p in library["profiles"] if p["id"] == profile_id), None)
+        if profile is None:
+            raise LaunchError("Selected graphics profile is missing. Choose a profile in Settings.")
+        values.update(profile["values"])
+    if baseline is None and not display:
+        return None, {"baseline": "game_defaults", "quality_values": {}}
+    # Baselines are pinned data, and copied display values are bounded integers.
+    # Escaping also keeps future reviewed flat video values in their own token.
+    def quote(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    data = ('"video.cfg"\n{\n' + "".join(
+        f"\t{quote(name)}\t{quote(value)}\n" for name, value in values.items()) + "}\n").encode("utf-8")
+    _values(data)
+    audit = {
+        "baseline": "reviewed" if baseline is not None else "game_defaults_with_display",
+        "quality_values": {key: value for key, value in values.items() if key in graphics_profiles.QUALITY_FIELDS},
+    }
+    if profile is not None:
+        audit["profile"] = {"id": profile["id"], "name": profile["name"]}
+    return data, audit
+
+
+def _environment(paths: GamePaths, directory: Path) -> dict[str, str]:
+    # The installed engine forms USRLOCAL%s from its initialized -game value.
+    # Dolly supplies an absolute -game path. Include slash spelling and the
+    # stock short name too; the runtime gate must confirm the selected root.
+    game = str(paths.citadel_dir.resolve())
+    suffixes = (game, game.replace("\\", "/"), "citadel", "")
+    additions = {"USRLOCAL" + suffix: str(directory) for suffix in suffixes}
+    if any("=" in name or "\0" in name for name in additions):
+        raise LaunchError("The game path cannot be represented by Dolly's isolated settings environment.")
+    return additions
+
+
+def descriptor(session_dir: Path) -> dict:
+    """Read only the settings record belonging to this ordinary owned session."""
+    gameinfo_transaction.load_record(session_dir)
+    data = json.loads(_read(session_dir / JOURNAL), object_pairs_hook=_unique_object)
+    expected = session_dir / DIRECTORY
+    if (not isinstance(data, dict) or type(data.get('format')) is not int or data['format'] != 1
+            or data.get('owner') != 'Deadlock Dolly'
+            or Path(data.get('root', '')).resolve() != expected.resolve()
+            or not _plain_ancestors(expected)):
+        raise LaunchError("Dolly's isolated editing settings record does not match this session.")
+    return data
+
+
+def verify_runtime(session_dir: Path, query, *, pid: int) -> dict:
+    """Confirm the live engine's settings root and config gate before replay load.
+
+    Preparation is not runtime proof. Read the normal console's filesystem
+    search paths and current ConVar value; no game or Steam settings are set.
+    """
+    record = descriptor(session_dir)
+    record['runtime_verified'] = False
+    _atomic_write(session_dir / JOURNAL, (json.dumps(record, indent=2) + '\n').encode('utf-8'))
+    try:
+        gate = read_cvar_value('host_readconfig_ignore_userconfig',
+                               query('host_readconfig_ignore_userconfig'))
+        if gate != 1:
+            raise LaunchError('Deadlock did not keep user configuration disabled for this Dolly session.')
+        output = query('path')
+        expected = ntpath.normcase(ntpath.normpath(str((session_dir / DIRECTORY).resolve())))
+        roots = _user_settings_roots(output)
+        if not roots or set(roots) != {expected}:
+            raise LaunchError("Deadlock's USRLOCAL search path could not be confirmed as Dolly's separate settings folder. "
+                              "The replay was not opened; close this session and export diagnostics.")
+        record.update(runtime_verified=True, pid=pid, user_configuration_value=gate,
+                      search_paths_sha256=hashlib.sha256(output.encode('utf-8')).hexdigest())
+        record.pop('runtime_error', None)
+    except (OSError, ValueError, RuntimeError) as exc:
+        record['runtime_error'] = str(exc)
+        _atomic_write(session_dir / JOURNAL, (json.dumps(record, indent=2) + '\n').encode('utf-8'))
+        raise LaunchError(f"Dolly's editing configuration check failed: {exc}") from exc
+    _atomic_write(session_dir / JOURNAL, (json.dumps(record, indent=2) + '\n').encode('utf-8'))
+    return record
+
+
+def _user_settings_roots(output: str) -> list[str]:
+    """Read path IDs as tokens, outside quoted directory names."""
+    roots = []
+    in_block = False
+    for original in output.splitlines():
+        line = original.strip()
+        if line.startswith('[FileSystem]'):
+            line = line[len('[FileSystem]'):].strip()
+        registration = re.fullmatch(r'"?USRLOCAL"?(?:\s*[:=])?(?:\s+(.*))?', line, re.I)
+        if registration:
+            raw = (registration.group(1) or '').strip()
+            in_block = not raw
+        elif in_block:
+            if (not ntpath.isabs(line.strip('"'))
+                    and re.match(r'^"?[A-Za-z][A-Za-z0-9_]*"?(?:\s*:|\s+)', line)):
+                in_block = False
+                continue
+            raw = line
+        else:
+            continue
+        if not raw:
+            continue
+        quoted = re.fullmatch(r'"([^"]+)"', raw)
+        if quoted:
+            raw = quoted.group(1)
+        if not ntpath.isabs(raw) or '"' in raw:
+            raise LaunchError('The live USRLOCAL search-path listing could not be read safely.')
+        roots.append(ntpath.normcase(ntpath.normpath(raw)))
+    return roots
+
+
+def preview_video(profile_id: str = '') -> tuple[bytes | None, dict]:
+    """Describe the clean settings for a future session without writing files."""
+    display, warning = _display()
+    video, audit = _video(_baseline(), display, profile_id)
+    if warning:
+        audit['warning'] = warning
+    return video, audit
+
+
+def prepare(session_dir: Path, paths: GamePaths, *, graphics_profile: str = "",
+            editing_root: Path | None = None, launch_options: str = "") -> dict:
+    """Return child environment additions and a durable settings descriptor.
+
+    Call after the original gameinfo journal exists and before replacing the
+    installed gameinfo or starting a process. Every write belongs to this new
+    session. The ordinary user's saved settings are only optionally read.
+    """
+    try:
+        session_dir = Path(session_dir)
+        if not session_dir.is_absolute() or not _plain_ancestors(session_dir):
+            raise LaunchError("The editing session directory must be an ordinary absolute path.")
+        record = gameinfo_transaction.load_record(session_dir)
+        if Path(record["original_gameinfo"]).resolve() != paths.gameinfo.resolve():
+            raise LaunchError("The editing settings journal belongs to another game installation.")
+        if not isinstance(graphics_profile, str):
+            raise LaunchError("The selected graphics profile must be text.")
+        directory = session_dir / DIRECTORY
+        journal = session_dir / JOURNAL
+        if directory.exists() or directory.is_symlink() or journal.exists() or journal.is_symlink():
+            raise LaunchError("This session already has editing settings; existing files were left untouched.")
+        environment = _environment(paths, directory)
+        baseline = _baseline(editing_root)
+        display, warning = _display()
+        options = parse_launch_options(launch_options)
+        if '-windowed' in options:
+            display.update({'setting.fullscreen': '0', 'setting.coop_fullscreen': '0'})
+        if '-fullscreen' in options:
+            display.update({'setting.fullscreen': '1', 'setting.coop_fullscreen': '0',
+                            'setting.nowindowborder': '0'})
+        if '-noborder' in options:
+            display['setting.nowindowborder'] = '1'
+        for flag, field in (('-w', 'setting.defaultres'), ('-h', 'setting.defaultresheight')):
+            if flag in options:
+                display[field] = options[options.index(flag) + 1]
+        if '-refresh' in options:
+            display['setting.refreshrate_numerator'] = options[options.index('-refresh') + 1]
+            display['setting.refreshrate_denominator'] = '1'
+        video, video_audit = _video(baseline, display, graphics_profile)
+        files = {
+            "cfg/machine_convars.vcfg": EMPTY_CONVARS,
+            "cfg/user_convars_0_slot0.vcfg": EMPTY_CONVARS,
+        }
+        if video is not None:
+            files["cfg/video.txt"] = video
+        directory.mkdir(exist_ok=False)
+        cfg = directory / "cfg"
+        cfg.mkdir(exist_ok=False)
+        if not _plain_ancestors(cfg):
+            raise LaunchError("The editing settings directory became linked during preparation.")
+        for relative, data in files.items():
+            target = directory / relative
+            _atomic_write(target, data)
+            if _read(target) != data:
+                raise LaunchError("Dolly's isolated editing settings did not read back correctly.")
+        audit = {
+            "format": 1,
+            "owner": "Deadlock Dolly",
+            "root": str(directory),
+            "environment_keys": sorted(environment),
+            "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
+            "display_fields_preserved": sorted(display),
+            "user_configuration_gate": "host_readconfig_ignore_userconfig",
+            "runtime_verified": False,
+            **video_audit,
+        }
+        if warning is not None:
+            audit["warning"] = warning
+        _atomic_write(journal, (json.dumps(audit, indent=2) + "\n").encode("utf-8"))
+        return {"environment": environment, "audit": audit}
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise LaunchError(f"Could not prepare Dolly's isolated editing settings: {exc}") from exc

@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from dolly.controller import Controller, PreloadUnavailableError, StartupTimeout
+from dolly.controller import (Controller, PreloadUnavailableError, StartupAcknowledgementRequired,
+                              StartupTimeout)
 from tests.test_native_flight_controller import configured_controller
 
 
@@ -107,6 +108,76 @@ class AutoStartupTests(unittest.TestCase):
         evidence = self.controller._startup_evidence["automatic_readiness"]
         self.assertGreater(evidence["rendered_frame"], evidence["initial_frame"])
         self.assertIn("renderer", self.controller._startup_evidence)
+
+    def require_startup_acknowledgement(self):
+        self.preload.sample.return_value = {
+            'coherent': True, 'started': False, 'completed': 10, 'total': 10,
+            'intro_phase': 0, 'scheduled': False, 'job_complete': False,
+            'resource_complete': True, 'job_active': False, 'ready': False}
+        with patch('dolly.controller.PRELOAD_INTRO_STALL_SECONDS', 0):
+            with self.assertRaises(StartupAcknowledgementRequired):
+                self.start()
+        self.assertEqual(self.controller.status()['startup_stage'], 'waiting_game_screen')
+        self.assertFalse(any(c.startswith('playdemo ') for c in self.console.sent))
+
+    def test_acknowledgement_rechecks_same_session_before_one_replay_dispatch(self):
+        self.require_startup_acknowledgement()
+        self.preload.sample.return_value = {'coherent': True, 'started': True,
+            'completed': 14, 'total': 14, 'intro_phase': 3, 'ready': True}
+        with patch('dolly.controller.launcher.launch', side_effect=AssertionError('No relaunch')):
+            result = self.controller.resume_startup(self.demo)
+        self.assertEqual(result['startup_stage'], 'editing_ready')
+        self.assertEqual(self.console.events.count('cvar_unhide'), 1)
+        self.assertEqual(len([c for c in self.console.sent if c.startswith('playdemo ')]), 1)
+        self.assertTrue(self.controller._startup_evidence['preload']['ready'])
+        self.assertEqual(self.preload.close.call_count, 2)
+
+    def test_acknowledgement_that_was_not_dismissed_still_never_loads_replay(self):
+        self.require_startup_acknowledgement()
+        with patch('dolly.controller.PRELOAD_INTRO_STALL_SECONDS', 0):
+            with self.assertRaises(StartupAcknowledgementRequired):
+                self.controller.resume_startup(self.demo)
+        self.assertEqual(self.controller.status()['startup_stage'], 'waiting_game_screen')
+        self.assertFalse(any(c.startswith('playdemo ') for c in self.console.sent))
+        self.preload.advance_intro.assert_not_called()
+
+    def test_acknowledgement_resume_cancelled_before_any_new_command(self):
+        self.require_startup_acknowledgement()
+        sent = list(self.console.sent)
+        requests = list(self.console.requests)
+        cancel = threading.Event(); cancel.set()
+        with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+            self.controller.resume_startup(self.demo, cancel_event=cancel)
+        self.assertEqual(self.console.sent, sent)
+        self.assertEqual(self.console.requests, requests)
+
+    def test_acknowledgement_resume_rejects_changed_replay_and_ended_session(self):
+        for scenario in ('changed replay', 'ended session', 'changed pid', 'replay requested'):
+            with self.subTest(scenario=scenario):
+                # Each rejection starts from an actual pending startup owner.
+                self.controller, self.console, self.bridge = configured_controller()
+                self.session = self.controller._session
+                self.controller._session = None; self.controller._console = None
+                self.controller._unlocker_pid = None
+                self.console.demo_output = 'Error - Not currently playing back a demo.'
+                self.console.complete_replay_on_send = True
+                self.console.values['status'] = 'Server: Active\nClient: Connected'
+                self.require_startup_acknowledgement()
+                selected = self.demo
+                if scenario == 'changed replay':
+                    selected = Path(self.temp.name)/'another.dem'; selected.write_bytes(b'other')
+                elif scenario == 'ended session': self.session.process.poll = lambda: 0
+                elif scenario == 'changed pid': self.controller._startup_evidence['pid'] = self.session.pid + 1
+                else: self.controller._replay_requested = True
+                sent = list(self.console.sent)
+                sampled = self.preload.sample.call_count
+                with patch('dolly.controller.PRELOAD_INTRO_STALL_SECONDS', 0):
+                    with self.assertRaises(RuntimeError):
+                        self.controller.resume_startup(selected)
+                self.assertEqual(self.console.sent, sent)
+                self.assertEqual(self.preload.sample.call_count, sampled)
+                if scenario == 'changed replay':
+                    self.assertEqual(self.controller.status()['startup_stage'], 'waiting_game_screen')
 
     def test_native_renderer_evidence_records_engine_answers(self):
         self.controller._startup_evidence = {}
@@ -216,7 +287,7 @@ class AutoStartupTests(unittest.TestCase):
             "intro_phase": 0, "scheduled": False, "job_complete": False,
             "resource_complete": True, "job_active": False, "ready": False}
         with patch('dolly.controller.PRELOAD_INTRO_STALL_SECONDS', 0):
-            with self.assertRaisesRegex(PreloadUnavailableError, 'never showed its hideout intro'):
+            with self.assertRaisesRegex(StartupAcknowledgementRequired, 'hideout intro has not started'):
                 self.controller._wait_dashboard_preload(0, None)
         evidence = self.controller._startup_evidence['preload_unavailable']
         self.assertEqual(evidence['reason'], 'intro_never_started')

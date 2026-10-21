@@ -4,23 +4,30 @@
 
 ## Replay graphics profiles
 
-In **Settings > Replay graphics profiles**, save your current graphics under a
-name such as Recording, or import a saved `video.txt`. Close Deadlock before
-using **Save current graphics**. The preview lists the quality values to keep
-and the fields excluded from the profile. Choose a profile for the next Dolly
-replay launch; **Use current game settings** is the default.
+Every new Dolly replay session uses its own clean settings folder. Normal-play
+saved ConVars, bindings, startup commands and addon mounts are excluded. The
+reviewed stock baseline retains fog and shadows; Dolly's clean video settings
+start at 100% render scale with upscaling off. Normal-play files stay untouched.
+
+In **Settings > Replay graphics profiles**, **Clean Dolly settings (default)**
+uses this baseline. To choose your own quality settings, use **Save normal-play
+graphics...** with Deadlock closed, or import a saved `video.txt`. The preview
+lists the reviewed quality values; the named profile applies only to the next
+Dolly session's separate file.
 
 Profiles include supported shadow, fog, occlusion, texture, shader, bloom,
 anti-aliasing, motion blur and related quality controls. They preserve the
-destination's resolution, display mode, GPU information, upscaler, render scale
-and unrecognized settings. Use **Display launch options** for window size.
-There are no generated Ultra presets: save settings you have chosen in the
-game. Imported values are checked for format, not certified for every GPU.
+normal-play resolution, display mode and GPU identity through a read-only
+allowlist. Performance tiers, upscalers, render scale and unrecognized fields
+are not imported. **Display launch options** override the copied window size
+and mode. Imported quality values are checked for format, not certified for
+every GPU. In-game changes last for that Dolly session.
 
-Dolly finds the signed-in Steam user's `video.txt`, previews changes, backs up
-the actual pre-launch bytes, and applies the selected values only for its replay
-session. The file is restored after Deadlock exits, including when Dolly closes
-first. Interrupted sessions are recovered on the next launch or through
+Dolly checks the engine's actual settings root and user-config guard before it
+opens the replay. It refuses an unconfirmed or additional USRLOCAL root. The
+normal-play file does not need to be replaced or restored for new sessions.
+Older versions' interrupted graphics transactions are still recovered through
+the original exact-byte path on the next launch or through
 **Settings > Troubleshooting & recovery > Recover configuration**. Never delete
 the session logs while recovery is pending: they contain the originals.
 
@@ -28,8 +35,8 @@ Unexpected edits to `video.txt` are preserved and reported with the backup path;
 compare those files before resolving the conflict. Dolly does not overwrite an
 unknown newer configuration. A game update that changes the video format or
 removes a profile field requires a new supported profile. Profiles do not swap
-arbitrary `gameinfo.gi` files or repair mods; Dolly retains its reviewed editing
-configuration and existing compatibility checks.
+arbitrary `gameinfo.gi` files or repair modified game assets. Dolly uses its
+reviewed stock configuration and excludes user addon mounts for editing.
 
 The camera support check also records available profile render controls in
 diagnostics. Differences or unreadable values produce a warning without writing

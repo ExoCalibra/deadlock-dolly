@@ -20,14 +20,21 @@ additional redistribution rights are asserted here.
 
 ## Editing game configuration
 
-`editing/gameinfo.gi` carries the September 29, 2026 game-specific configuration
-with the established editing mounts, addon enablement and sampleable-depth
-setting retained from Andrew's supplied editing baseline. Its settings paths,
-render modes and engine/resource defaults were refreshed together; competitive
-presets were not copied from older session backups. Updated-game replay startup
-and camera controls passed bounded live tests; export validation is ongoing. It is game
-configuration data, not Dolly source code; the Dolly license does not confer
-rights to Valve content. `editing/profile.json` pins its exact bytes and the
-three installed module hashes. Refresh the configuration and pins together
-after checking a game update. Do not copy the native manifest's entire accepted
-hash list: that list does not establish compatibility with this configuration.
+`editing/gameinfo.gi` uses stock configuration verified against build 6807
+Steam depot content. Dolly's scoped changes disable standard user config
+reads/writes, keep legacy settings lookup in its isolated USRLOCAL root and
+disable the specific early-development warning for the editing session. Normal
+intro continuation and hero announcements retain their existing behavior.
+The launcher adds only its own temporary mounts, with clean defaults for
+both Game and Mod lookups and an owned relative write directory.
+
+`editing/cfg/` contains the current stock configuration/input defaults plus
+Dolly's empty autoexec/config entry points. `cfg-manifest.json` records every
+payload hash and stock provenance; `profile.json` pins that manifest, gameinfo,
+video baseline and the reviewed installed modules/server. Refresh these pins
+only with corresponding semantic compatibility evidence. The separate video
+baseline imports no competitive quality values, upscaler or render scale.
+
+These are game configuration data, not Dolly source code. The Dolly license
+does not confer rights to Valve content. Runtime confirmation and visual checks
+remain separate from stock-byte and offline module proof.

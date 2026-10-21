@@ -1,8 +1,9 @@
-"""Local quality presets and recoverable, session-only video.txt transactions.
+"""Local quality presets and recovery for older video.txt transactions.
 
 Profiles copy a small allowlist of quality values from an existing video.cfg.
 They never replay gameinfo, commands, device IDs or display/upscaler settings.
-The journal is separate from gameinfo: video must stay mounted until game exit.
+New launches apply presets inside editing_session's separate settings folder.
+Legacy journals remain recoverable until the older owned game process exits.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ VIDEO_VERSION = "20"
 JOURNAL = "graphics-session.json"
 ORIGINAL = "original.video.txt"
 APPLIED = "applied.video.txt"
-CURRENT = "Use current game settings"
+CURRENT = "Clean Dolly settings (default)"
 # Values are copied, not synthesized. Validation below bounds syntax and size;
 # it does not claim to know every engine build's accepted quality enum values.
 QUALITY_FIELDS = {
@@ -366,16 +367,26 @@ def audit_runtime(session: Path, query) -> dict | None:
     Non-render settings are file-only evidence. Matching CVARs do not establish
     visual correctness. The controller treats failures here as diagnostic only.
     """
-    if not (session / JOURNAL).exists():
+    if (session / 'editing-session.json').exists() and not (session / JOURNAL).exists():
+        from .editing_session import descriptor
+        record = descriptor(session)
+        values = _quality(record['quality_values'])
+        profile_name = record.get('profile', {}).get('name', CURRENT)
+    elif (session / JOURNAL).exists():
+        # Retain exact recovery and diagnostics for older versions' transactions.
+        record, _target, _original, _applied = _transaction(session)
+        values = record["profile"]["values"]
+        profile_name = record['profile']['name']
+    else:
         return None
-    record, _target, _original, _applied = _transaction(session)
-    values = record["profile"]["values"]
     names = {key.removeprefix("setting."): value for key, value in values.items() if key.startswith("setting.r_")}
-    report = {"profile": record["profile"]["name"], "observed": {}, "mismatches": [], "unreadable": [],
+    report = {"profile": profile_name, "observed": {}, "mismatches": [], "unreadable": [],
               "file_only": sorted(key for key in values if not key.startswith("setting.r_")),
               "visual_verified": False}
-    output = query("; ".join(names)) if names else ""
     for name, value in names.items():
+        # Keep each observation tied to its own console request. A partial
+        # multi-command reply must not hide otherwise readable trailing values.
+        output = query(name)
         try:
             actual = read_cvar_value(name, output)
         except ValueError:

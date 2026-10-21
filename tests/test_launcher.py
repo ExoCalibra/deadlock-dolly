@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import socket
+import shutil
 import stat
 import struct
 from pathlib import Path
@@ -12,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from dolly import launcher
 from dolly import panorama_assets
 from test_panorama_assets import write_vpk
+from test_stock_provenance import install_provenance_fixture, video_fixture
 
 
 GAMEINFO = '''\ufeff"GameInfo"
@@ -62,6 +64,8 @@ HYPERLINE_GAMEINFO = GAMEINFO.replace('Game "citadel"', '''// HYPERLINE PANORAMA
 
 
 def fake_game(root: Path, executable_name: str = "citadel.exe") -> launcher.GamePaths:
+    if root.parent.name != 'common' or root.parent.parent.name != 'steamapps':
+        root = root.parent / 'steamapps/common' / root.name
     exe = root / "game/bin/win64" / executable_name
     exe.parent.mkdir(parents=True)
     exe.write_bytes(b"test executable")
@@ -75,23 +79,53 @@ def fake_game(root: Path, executable_name: str = "citadel.exe") -> launcher.Game
 
 def editing_fixture(paths, folder):
     from dolly.compatibility import CAMERA_MODULE_RELATIVES
+    from dolly.stock_provenance import CONFIGURATION_MODULES
     root = folder / "editing-resources"
     root.mkdir(exist_ok=True)
     (root / "gameinfo.gi").write_bytes(GAMEINFO.encode("utf-8"))
     modules = {}
-    for relative in CAMERA_MODULE_RELATIVES:
+    for relative in set(CAMERA_MODULE_RELATIVES) | set(CONFIGURATION_MODULES):
         path = paths.game_dir / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_bytes(("editing test " + relative).encode("ascii"))
         modules[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    assets = Path(__file__).resolve().parents[1] / 'assets/editing'
+    for name in ('cfg-manifest.json', 'video.txt'):
+        shutil.copyfile(assets / name, root / name)
+    shutil.copytree(assets / 'cfg', root / 'cfg', dirs_exist_ok=True)
     (root / "profile.json").write_text(json.dumps({"format": 1,
         "gameinfo_sha256": hashlib.sha256(GAMEINFO.encode("utf-8")).hexdigest(),
-        "modules": modules}), encoding="utf-8")
+        "cfg_manifest_sha256": hashlib.sha256((root / 'cfg-manifest.json').read_bytes()).hexdigest(),
+        "video_sha256": hashlib.sha256((root / 'video.txt').read_bytes()).hexdigest(),
+        "modules": {name: modules[name] for name in CAMERA_MODULE_RELATIVES},
+        "configuration_modules": {name: modules[name] for name in CONFIGURATION_MODULES},
+        "unlocker_server_sha256": hashlib.sha256((paths.game_dir/'citadel/bin/win64/server.dll').read_bytes()).hexdigest()}), encoding="utf-8")
+    install_provenance_fixture(paths, root)
     return root
 
 
 class GameInfoTests(unittest.TestCase):
+    def test_clean_baseline_keeps_stock_visuals_and_disables_user_config_io(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / 'assets/editing/gameinfo.gi').read_text(encoding='utf-8')
+        game = launcher._named(launcher._parse(text), 'GameInfo')[0]
+        def values(name):
+            return {entry.key.value: entry for entry in launcher._named(game.children, name)[0].children}
+        scene = values('SceneSystem')
+        for name, expected in [('CSMCascadeResolution', '2048'), ('CubemapFog', '1'),
+                               ('VolumetricFog', '1'), ('NonTexturedGradientFog', '1')]:
+            self.assertEqual(scene[name].value.value, expected, name)
+        convars = values('ConVars')
+        self.assertNotIn('mat_max_lighting_complexity', convars)
+        self.assertNotIn('sc_clutter_enable', convars)
+        self.assertEqual(convars['host_readconfig_ignore_userconfig'].value.value, '1')
+        warning = convars.get('deadlock_early_development_warning_disabled')
+        self.assertEqual(warning.value.value if warning else None, '1')
+        filesystem = values('FileSystem')
+        self.assertEqual(filesystem['UserSettingsPathID'].value.value, 'USRLOCAL')
+        self.assertEqual(filesystem['LegacyUserSettingsPathID'].value.value, 'USRLOCAL')
+
     def test_bundled_editing_configuration_integrity_and_mount_shape(self):
         from dolly.compatibility import CAMERA_MODULE_RELATIVES, load_manifest
         root = Path(__file__).resolve().parents[1]
@@ -275,18 +309,83 @@ class LauncherTests(unittest.TestCase):
         session.restore_gameinfo()
         self.assertEqual(self.paths.gameinfo.read_bytes(), original)
 
-    def test_editing_profile_verifies_camera_modules_only(self):
-        from dolly.compatibility import CAMERA_MODULE_RELATIVES, MODULE_RELATIVES
-        self.assertGreater(len(MODULE_RELATIVES), len(CAMERA_MODULE_RELATIVES))
+    def test_editing_configuration_is_independent_of_private_client_layout(self):
+        (self.paths.game_dir/'citadel/bin/win64/client.dll').write_bytes(b'client-only update')
         self.assertEqual(launcher._editing_gameinfo(self.paths), GAMEINFO)
 
     def test_editing_profile_mismatch_refuses_before_mount(self):
         before = self.paths.gameinfo.read_bytes()
-        (self.paths.game_dir / 'citadel/bin/win64/client.dll').write_bytes(b'game update')
+        (self.paths.game_dir / 'bin/win64/engine2.dll').write_bytes(b'game update')
         with self.assertRaisesRegex(launcher.LaunchError, 'not been reviewed'):
             self._launched_session()
         self.assertEqual(self.paths.gameinfo.read_bytes(), before)
         self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
+
+    def test_unknown_client_console_launch_keeps_user_cfg_exact_and_uses_private_root(self):
+        (self.paths.game_dir/'citadel/bin/win64/client.dll').write_bytes(b'unknown private camera layout')
+        cfg = self.paths.citadel_dir/'cfg'; cfg.mkdir()
+        user = cfg/'autoexec.cfg'; user.write_bytes(b'exec nested/competitive\r\nfog_enable 0\r\n')
+        original = self.paths.gameinfo.read_bytes()
+        before = (user.read_bytes(), stat.S_IMODE(user.stat().st_mode), dict(os.environ))
+        with patch.object(launcher, '_verified_native') as native:
+            session = self._launched_session()
+        native.assert_not_called()
+        self.assertIsNone(session.native)
+        record = json.loads((session.session_dir/'session.json').read_text(encoding='utf-8'))
+        provenance = record['editing_configuration_provenance']
+        self.assertEqual(provenance['basis'], 'reviewed_installed_depots')
+        self.assertEqual(provenance['depots'], [{'depot': '1422456', 'manifest': '1'}])
+        profile = json.loads((self.editing/'profile.json').read_text(encoding='utf-8'))
+        self.assertEqual(provenance['stock_provenance_sha256'], profile['stock_provenance_sha256'])
+        self.assertIn('-dx11', record['command'])
+        self.assertIn('-dev', record['command']); self.assertIn('-insecure', record['command'])
+        settings = json.loads((session.session_dir/'editing-session.json').read_text(encoding='utf-8'))
+        self.assertTrue(Path(settings['root']).is_relative_to(session.session_dir))
+        self.assertNotIn('graphics_profile', record)
+        session.restore_gameinfo()
+        session.process.poll.return_value = 0
+        self.assertTrue(session.close())
+        self.assertEqual(self.paths.gameinfo.read_bytes(), original)
+        self.assertEqual((user.read_bytes(), stat.S_IMODE(user.stat().st_mode), dict(os.environ)), before)
+
+    def test_each_configuration_consumer_refuses_before_new_journal_or_popen(self):
+        from dolly.stock_provenance import CONFIGURATION_MODULES
+        before = self.paths.gameinfo.read_bytes()
+        for relative in CONFIGURATION_MODULES:
+            path = self.paths.game_dir/relative; raw = path.read_bytes()
+            with self.subTest(relative=relative):
+                path.write_bytes(b'unreviewed config consumer')
+                with patch.object(launcher.subprocess, 'Popen') as popen:
+                    with self.assertRaisesRegex(launcher.LaunchError, 'not been reviewed'):
+                        self._launched_session()
+                    popen.assert_not_called()
+                self.assertEqual(self.paths.gameinfo.read_bytes(), before)
+                self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
+                self.assertFalse((self.package/'logs').exists())
+                path.write_bytes(raw)
+
+    def test_changed_current_stock_refuses_before_new_journal_or_mount(self):
+        from test_stock_provenance import manifest_bytes
+        files, _app, cache = install_provenance_fixture(self.paths, self.editing, gid=2)
+        files['game/citadel/gameinfo.gi'] += b' new stock setting'
+        cache.write_bytes(manifest_bytes(files, gid=2))
+        before = self.paths.gameinfo.read_bytes()
+        with self.assertRaisesRegex(launcher.LaunchError, 'stock GameInfo/cfg changed'):
+            self._launched_session()
+        self.assertEqual(self.paths.gameinfo.read_bytes(), before)
+        self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
+        self.assertFalse((self.package/'logs').exists())
+
+    def test_new_depot_identity_with_unchanged_stock_saves_cache_receipt(self):
+        _files, _app, cache = install_provenance_fixture(self.paths, self.editing, gid=2)
+        session = self._launched_session()
+        record = json.loads((session.session_dir/'session.json').read_text(encoding='utf-8'))
+        receipt = record['editing_configuration_provenance']
+        self.assertEqual(receipt['basis'], 'current_cached_manifests')
+        self.assertEqual(receipt['depots'], [{'depot': '1422456', 'manifest': '2',
+            'sha256': hashlib.sha256(cache.read_bytes()).hexdigest()}])
+        session.restore_gameinfo(); session.process.poll.return_value = 0
+        self.assertTrue(session.close())
 
     def test_editing_unlocker_server_mismatch_refuses_before_mount(self):
         profile_path=self.editing/'profile.json'
@@ -353,27 +452,27 @@ class LauncherTests(unittest.TestCase):
         self.assertTrue(session.overlay_dir.exists())
         session.restore_gameinfo()
 
-    def test_stale_panorama_inside_mounted_addons_refuses_before_mount(self):
+    def test_excluded_addon_panorama_does_not_block_stock_editing(self):
         before = DMM_GAMEINFO.encode("utf-8")
         self.paths.gameinfo.write_bytes(before)
         layout = self.paths.citadel_dir / 'addons/panorama/layout'
         layout.mkdir(parents=True)
         (layout / 'hud.xml').write_text('<root/>', encoding='utf-8')
-        with self.assertRaisesRegex(launcher.LaunchError, 'addons/panorama/layout/hud.xml'):
-            self._launched_session()
+        session = self._launched_session()
+        self.assertNotIn('citadel/addons', self.paths.gameinfo.read_text(encoding='utf-8'))
+        session.restore_gameinfo()
         self.assertEqual(self.paths.gameinfo.read_bytes(), before)
-        self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
 
-    def test_launch_mounts_installed_mod_paths_and_restores_them(self):
+    def test_launch_excludes_installed_mod_paths_and_restores_original_exactly(self):
         original = DMM_GAMEINFO.encode("utf-8")
         self.paths.gameinfo.write_bytes(original)
         session = self._launched_session()
         mounted = self.paths.gameinfo.read_text(encoding="utf-8")
-        self.assertIn('Game\t"citadel/addons"', mounted)
-        self.assertIn('Mod\t"citadel"', mounted)
+        self.assertNotIn('Game\t"citadel/addons"', mounted)
         self.assertIn(session.overlay_dir.name, mounted)
         record = json.loads((session.session_dir / "session.json").read_text())
-        self.assertIn({"key": "Game", "path": "citadel/addons"}, record["carried_addon_mounts"])
+        self.assertEqual(record["carried_addon_mounts"], [])
+        self.assertIn({"key": "Game", "path": "citadel/addons"}, record["excluded_addon_mounts"])
         self.assertEqual((session.session_dir / 'original.gameinfo.gi').read_bytes(), original)
         session.restore_gameinfo()
         self.assertEqual(self.paths.gameinfo.read_bytes(), original)
@@ -472,7 +571,7 @@ class LauncherTests(unittest.TestCase):
         for protocol, flags in [("netcon", ["-netconport", "29090"]), ("vconsole", ["-vconsole", "-vconport", "29090"])]:
             with self.subTest(protocol=protocol):
                 command = launcher.build_command(self.paths, overlay, 29090, demo, protocol)
-                self.assertEqual(command, [str(self.paths.executable), "-dev", "-insecure", "-console", *flags, "-game", str(self.paths.citadel_dir)])
+                self.assertEqual(command, [str(self.paths.executable), "-dev", "-insecure", "-console", *flags, "-game", str(self.paths.citadel_dir), "-dx11"])
                 self.assertNotIn(str(overlay), command)
                 self.assertNotIn(str(demo), command)
                 self.assertFalse(any("playdemo" in arg or "cvar_unhide" in arg for arg in command))
@@ -484,7 +583,7 @@ class LauncherTests(unittest.TestCase):
         self.assertNotIn("-vconsole", command)
         self.assertEqual(launcher.Session.__dataclass_fields__["protocol"].default, "netcon")
 
-    def test_native_renderer_is_explicit_for_both_console_transports(self):
+    def test_reviewed_renderer_is_explicit_for_both_backends_and_transports(self):
         overlay = self.paths.game_dir / "citadel_dolly_test"
         for protocol in ("netcon", "vconsole"):
             for native in (False, True):
@@ -492,14 +591,15 @@ class LauncherTests(unittest.TestCase):
                     command = launcher.build_command(
                         self.paths, overlay, 29090, protocol=protocol,
                         launch_options="-windowed -w 1920 -h 1080", native=native)
-                    self.assertEqual(command.count("-dx11"), int(native))
+                    self.assertEqual(command.count("-dx11"), 1)
                     self.assertNotIn("-vulkan", command)
                     self.assertIn("-dev", command)
                     self.assertIn("-insecure", command)
                     self.assertEqual(command[command.index("-w") + 1], "1920")
-        with self.assertRaises(ValueError):
-            launcher.build_command(self.paths, overlay, 29090,
-                                   launch_options="-vulkan", native=True)
+        for native in (False, True):
+            with self.assertRaises(ValueError):
+                launcher.build_command(self.paths, overlay, 29090,
+                                       launch_options="-vulkan", native=native)
 
     def test_deferred_demo_still_must_exist(self):
         with self.assertRaisesRegex(launcher.LaunchError, "existing, extracted"):
@@ -672,6 +772,22 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse(list(self.paths.game_dir.glob("citadel_dolly_*")))
         self.assertEqual(self.paths.gameinfo.read_bytes(), before)
 
+    def test_failed_creation_preserves_unknown_files_after_exact_config_restore(self):
+        before = self.paths.gameinfo.read_bytes()
+        def failed(*_args, **_kwargs):
+            overlay = next(self.paths.game_dir.glob('citadel_dolly_*'))
+            (overlay / 'unexpected-user-file.txt').write_bytes(b'user data')
+            raise OSError('fake start failure')
+        with patch.object(launcher, '_check_runtime'), \
+                patch.object(launcher, 'running_processes', return_value={'steam.exe'}), \
+                patch.object(launcher, 'PACKAGE_ROOT', self.package), \
+                patch.object(launcher.subprocess, 'Popen', side_effect=failed):
+            with self.assertRaisesRegex(launcher.LaunchError, 'preserved'):
+                launcher.launch(self.paths.root)
+        overlay = next(self.paths.game_dir.glob('citadel_dolly_*'))
+        self.assertEqual((overlay / 'unexpected-user-file.txt').read_bytes(), b'user data')
+        self.assertEqual(self.paths.gameinfo.read_bytes(), before)
+
     def test_game_starting_during_preparation_is_refused(self):
         before = self.paths.gameinfo.read_bytes()
         for name in ("citadel.exe", "deadlock.exe", "Citadel.EXE", "Deadlock.EXE"):
@@ -809,7 +925,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(dll.read_bytes()).hexdigest(), meta["bundled_file_sha256"])
         self.assertEqual(meta["bundled_file_sha256"], launcher.UNLOCKER_SHA256)
         self.assertEqual(meta["license"], "MIT")
-        self.assertEqual(meta["version"], "v0.5.2-dolly-build-6796")
+        self.assertEqual(meta["version"], "v0.5.2-dolly-build-6807")
         self.assertEqual(dll.stat().st_size, meta["bundled_file_size"])
         self.assertIn("unlocker-build-6712.patch", meta["patches"])
         self.assertIn("unlocker-build-6722.patch", meta["patches"])
@@ -851,7 +967,7 @@ class LauncherTests(unittest.TestCase):
         editing_fixture(self.paths, self.folder)
         stock = {name: ('reviewed stock UI fixture ' + name).encode('ascii')
                  for name in panorama_assets.STOCK_UI_SHA256}
-        write_vpk(self.paths.citadel_dir / 'pak01_dir.vpk', stock)
+        write_vpk(self.paths.citadel_dir / 'pak01_dir.vpk', {**stock, **video_fixture()})
         stock_pins = {name: hashlib.sha256(payload).hexdigest() for name, payload in stock.items()}
         stock_patch = patch.object(panorama_assets, 'STOCK_UI_SHA256', stock_pins)
         stock_patch.start(); self.addCleanup(stock_patch.stop)
@@ -903,9 +1019,9 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse(self.package.exists())
         self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
 
-    def test_native_game_hash_mismatch_is_refused_before_any_recovery_or_mount(self):
+    def test_unknown_client_native_refuses_before_any_recovery_or_mount(self):
         native_root, pins, dll = self._native_fixture()
-        (self.paths.game_dir / next(iter(pins))).write_bytes(b"new Steam build")
+        (self.paths.game_dir / "citadel/bin/win64/client.dll").write_bytes(b"new Steam build")
         before = self.paths.gameinfo.read_bytes()
         with patch.object(launcher, "_check_runtime"), patch.object(launcher, "running_processes", return_value={"steam.exe"}), patch.object(launcher, "NATIVE_ROOT", native_root), patch.object(launcher, "NATIVE_GAME_SHA256", pins), patch.object(launcher, "PACKAGE_ROOT", self.package), patch.object(launcher, "recover_pending") as recover, patch.object(launcher.subprocess, "Popen") as popen, patch.object(launcher.NativeBridge, "create") as bridge:
             with self.assertRaisesRegex(launcher.LaunchError, "does not support"):

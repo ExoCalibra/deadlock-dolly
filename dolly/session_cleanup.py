@@ -39,7 +39,7 @@ GENERATED_FILES = frozenset({
     "cvar_unlocker/pak01_dir.vpk",
     "cvar_unlocker/pak02_dir.vpk",
 })
-GENERATED_DIRS = frozenset({"cvar_unlocker", "cvar_unlocker/bin", "cvar_unlocker/bin/win64"})
+GENERATED_DIRS = frozenset({"cvar_unlocker", "cvar_unlocker/bin", "cvar_unlocker/bin/win64", "session-files"})
 
 
 def _owned_location(overlay: Path, paths) -> bool:
@@ -131,6 +131,13 @@ def remove_overlay(overlay: Path, paths, session_dir: Path | None = None) -> boo
     # not follow a replaced cvar_unlocker directory or remove extra user files.
     files: list[Path] = []
     directories: list[Path] = []
+    generated_files = set(GENERATED_FILES)
+    generated_dirs = set(GENERATED_DIRS)
+    config_dir = overlay / 'cvar_unlocker' / 'cfg'
+    if config_dir.exists() or config_dir.is_symlink():
+        from .editing_assets import load
+        generated_dirs.add('cvar_unlocker/cfg')
+        generated_files.update('cvar_unlocker/cfg/' + name for name in load())
     preserved_artifact: Path | None = None
     pending = [overlay]
     while pending:
@@ -148,15 +155,16 @@ def remove_overlay(overlay: Path, paths, session_dir: Path | None = None) -> boo
             if not plain:
                 raise LaunchError(f"Temporary plugin directory contains a link; left untouched: {child}")
             if ((child.is_dir() and relative == "cvar_unlocker/replays") or
-                    (child.is_file() and relative == "cvar_unlocker/panorama_debugger.cfg")):
+                    (child.is_file() and relative == "cvar_unlocker/panorama_debugger.cfg") or
+                    (child.is_dir() and relative == "session-files" and any(child.iterdir()))):
                 # Sessions can leave replay/settings data in the temporary mount.
                 # It is not ours to delete or traverse. Ownership and actual
                 # SearchPaths were verified above. Inspect other entries too.
                 preserved_artifact = child
-            elif child.is_dir() and relative in GENERATED_DIRS:
+            elif child.is_dir() and relative in generated_dirs:
                 directories.append(child)
                 pending.append(child)
-            elif child.is_file() and relative in GENERATED_FILES:
+            elif child.is_file() and relative in generated_files:
                 files.append(child)
             elif not child.exists():
                 continue

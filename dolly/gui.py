@@ -28,7 +28,8 @@ from dolly.editor_actions import ACTION_LABELS, ACTION_ORDER, OBJECT_PICKER_ENAB
 from dolly.replays import discover_replays, find_replay_folder, parse_launch_options
 from dolly.bindings import CaptureBinding, DEFAULT_BINDING
 from dolly.branding import apply_window_icon
-from dolly.controller import Controller, PreloadUnavailableError, tick_rate_advice, tick_rates_match
+from dolly.controller import (Controller, PreloadUnavailableError, StartupAcknowledgementRequired,
+                              tick_rate_advice, tick_rates_match)
 from dolly.clip_audio import ClipAudioCapture
 from dolly.curve import AspectCurve, PositionCurve, POSITION_CHANNELS, POSITION_LIMIT, RotationCurve, TimelineView
 from dolly.curve_workspace import CameraCurveColumn, CameraCurveWorkspace
@@ -2131,6 +2132,8 @@ class DollyApp:
 
     def _start_editing_session(self):
         def operation():
+            if self.controller.status().get("startup_stage") == "waiting_game_screen":
+                return self._resume_startup()
             game, demo = self.game_path.get().strip(), self.demo_path.get().strip()
             if not game or not demo:
                 raise ValueError("Choose your Deadlock executable and a .dem replay first.")
@@ -2149,17 +2152,46 @@ class DollyApp:
             self._disable_external_input()
             self.attach_fields = None
             def start():
+                if not native and cancel.is_set():
+                    raise RuntimeError("Console startup cancelled before launch.")
                 save_settings(settings)
-                return self.controller.start_editing(game, demo, protocol=protocol, native=native,
-                    launch_options=options, cancel_event=cancel, **graphics_options)
+                if native:
+                    return self.controller.start_editing(game, demo, protocol=protocol, native=True,
+                        launch_options=options, cancel_event=cancel, **graphics_options)
+                if cancel.is_set():
+                    raise RuntimeError("Console startup cancelled before launch.")
+                return self.controller.launch(game, demo, protocol=protocol, native=False,
+                    launch_options=options, **graphics_options)
             def complete(result):
                 self.app_settings = settings
-                self._editing_started(result)
+                if native:
+                    self._editing_started(result)
+                else:
+                    self.startup_cancel = None
+                    self.startup_bar.stop()
+                    self._session_result(result)
+                    self._open_advanced_startup()
+                    message = ("Console startup cancelled. The launched game remains open."
+                               if cancel.is_set() else
+                               "Console startup: wait for the hideout, then Connect, Initialize unlocker, "
+                               "Load replay and Check camera support in Startup controls.")
+                    self.startup_progress.set(message)
+                    self.status_text.set(message)
             if self._submit("Starting replay editor", start, complete):
                 self.startup_cancel = cancel
                 self.startup_progress.set("Launching Deadlock and preparing the hideout…")
                 self.startup_bar.start(15)
         self._guard("Start replay editor", operation)
+
+    def _resume_startup(self):
+        cancel = threading.Event()
+        demo = self.demo_path.get().strip()
+        if self._submit("Checking startup again",
+                        lambda: self.controller.resume_startup(demo, cancel_event=cancel),
+                        self._editing_started):
+            self.startup_cancel = cancel
+            self.startup_progress.set("Rechecking the existing hideout and preload…")
+            self.startup_bar.start(15)
 
     def _editing_started(self, result):
         self.startup_cancel = None
@@ -3015,6 +3047,7 @@ class DollyApp:
                 "not_launched": "Game not launched",
                 "waiting_hideout": "Waiting for hideout",
                 "waiting_preload_intro": "Preparing Deadlock intro",
+                "waiting_game_screen": "Dismiss the game screen, then check startup again",
                 "preload_unavailable": "Deadlock intro/preload not detected",
                 "waiting_replay_camera": "Waiting for replay intro camera",
                 "preloading": "Preloading map and shaders",
@@ -3040,6 +3073,8 @@ class DollyApp:
                 _set_var(self.startup_progress, str(status.get("message") or session_label))
             _set_widget_state(self.play_replay_button,
                               "normal" if not self.busy and not self.playing else "disabled")
+            self.play_replay_button.configure(
+                text="Check startup again" if stage == "waiting_game_screen" else "Play replay")
             _set_widget_state(self.cancel_startup_button,
                               "normal" if self.startup_cancel is not None
                               and not self.startup_cancel.is_set() else "disabled")
@@ -3230,7 +3265,13 @@ class DollyApp:
         on every slider move) would stack modal dialogs and leave the window
         disabled behind them, forcing a hard close.
         """
-        if isinstance(exc, PreloadUnavailableError) and not self.closed:
+        if isinstance(exc, StartupAcknowledgementRequired) and not self.closed:
+            # The user handles the stock game screen. This action must never
+            # substitute the explicit unverified replay load for normal checks.
+            self.status_text.set(str(exc))
+            self.startup_progress.set(str(exc))
+            self._log(f"{title}: {exc}")
+        elif isinstance(exc, PreloadUnavailableError) and not self.closed:
             self._error(title, exc, offer_unverified_replay=True)
         else:
             self._error(title, exc)

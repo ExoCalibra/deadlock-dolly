@@ -1,5 +1,17 @@
 # Bundled cvar unlocker modifications
 
+- `unlocker-build-6806.patch` (apply after6805): local identifier
+  `v0.5.2-dolly-build-6806`, retaining upstream v0.5.2 and pinned source/SDK
+  provenance. Adds only the reviewed server6806/Tier0 exact pair; the named
+  Source2ServerConfig001 secondary+8 table and Connect/Disconnect/GetTickInterval
+  ABI remain reviewed, with all earlier pairs and shutdown guards retained.
+  Three compiled ABI/lifecycle tests and512 actual gate/table checks pass; the
+  current-public predecessor refuses the new pair. The static-CRT candidate
+  retains its two interface exports and imports only available Tier0 symbols.
+  This is offline proof; no6806 live startup/export/shutdown acceptance is claimed.
+  Dolly's existing isolated Early Development warning bool remains specific to
+  that stock notice; it does not skip hero announcements or weaken startup gates.
+
 The bundled `bin/win64/server.dll` is a locally built modification of
 [cvar-unhide-s2-citadel v0.5.2](https://github.com/Artemon121/cvar-unhide-s2-citadel),
 which is MIT licensed (see `LICENSE.md`). The upstream project is not
@@ -152,3 +164,63 @@ offline results.
 The upstream MIT license and copyright notice are preserved in `LICENSE.md`.
 
 - `unlocker-build-6726.patch` follows6723. Adds the exact6726 tier0/server pair and secondary interface tuple. Unknown or mixed6726 pairs fail closed; existing reviewed builds retain their paths.
+
+## Build 6801 complete shim and qualification
+
+The current MIT-licensed compatibility shim is included as `build_compat.cpp`.
+Its exact source SHA-256 is
+`21c9faa03b7c992763fb139aa423fc5a6867d47d1b1d19313637ba57ed85fbdd`.
+This is plugin source, not a Valve game binary. It adds the independently
+reviewed 6801 tier0/server pair and configuration-interface tuple while
+preserving earlier guards, the ICvar adapter and owned-command teardown.
+
+For source reconstruction, use the upstream and SDK commits pinned above,
+retain `unlocker-shutdown.patch`, `sdk-disconnect.patch` and the existing build
+patches through 6793 for the supporting adapter/CMake sources, then replace
+their `build_compat.cpp` with this complete file. Keep all historical patches,
+including `unlocker-build-6796.patch` and `unlocker-build-6801.patch`, as change
+records. The 6796 file describes a hash substitution rather than a standard
+replayable unified hunk; the complete shim avoids requiring that old step.
+Do not apply the 6796/6801 incremental changes again after copying the complete
+shim. Verify the source hash above before building.
+
+The qualified build used MSVC 19.38.33134.0, toolset v143 14.38.33130,
+Windows SDK 10.0.22621.0, MASM, C++20 and the static CRT, against SDK commit
+`7ae489c1722dfb117ff080d6403d85e01e9c53c9`. With the patched SDK at `sdk/`,
+the established CMake build can be selected explicitly:
+
+```text
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -T "v143,version=14.38.33130" -DCMAKE_SYSTEM_VERSION=10.0.22621.0
+cmake --build build --config Release --parallel 2
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Qualification built this exact shim with the retained supporting sources and
+patched pinned SDK; a fresh upstream checkout/reconstruction was not repeated
+for this update. `shutdown_lifecycle_tests` and `cvar_adapter_tests` passed.
+The additional maintainer `pair_tests` harness passed 462 checks using the
+actual build/configuration guard functions, including historical and unknown
+module pairs, both optional-export states, and corrupted/null configuration
+tables. Its `pair_tests_legacy_mutant` control failed the intended new-pair
+admission case. These two extra harness targets are qualification fixtures,
+not targets supplied by the historical upstream CMake patch.
+
+Offline review also verified the named server configuration class, all three
+complete configuration methods and all 14 complete ICvar adapter function
+families. The built DLL's PE imports/exports passed: x64, static CRT, both
+`CreateInterface` exports, and tier0 imports present in the complete installed
+export table. These results do not establish 6801 live startup, replay,
+rendering or shutdown behavior; those require a separate bounded Dolly-owned
+test. Keep the binary hash and launcher pins tied to the reviewed build.
+
+## Build6805 exact pair
+
+Adds the reviewed6805 server to the existing6801 Tier0 family without changing historical pair/table guards. Config001 named registration, constructor-owned instance, secondary interface and complete lifecycle bodies are qualified separately from camera profiles. Fresh static-CRT build,487 actual-function pair/table checks, three ABI/lifecycle tests and import/export audit pass offline; in-game results are recorded separately.
+
+
+## Build6807 exact pair
+
+The current complete compatibility source `build_compat.cpp` has SHA-256
+`7fbf2c6cfa316e569946c0453ac6ff6cb7179d000d42c3639f44842011099ed1`. Additive `unlocker-build-6807.patch` records the change from the retained6806 shim. All earlier pairs, table guards, adapter/lifecycle sources and upstream v0.5.2/SDK provenance remain. The actual named Config001 secondary+8 table and three tuple entries retain their reviewed values; relocated registration, constructed object, registry and complete consumers were requalified.
+
+One private MSVC/static-CRT build and all three owning ABI/lifecycle/pair tests passed, including537 actual-function pair/table checks and an intended failing exact6806 predecessor control. The actual DLL has306176 bytes and SHA-256 `6175a79b88eb8e76dc8e7d9ca6eda01cc37f24c3a2519f9e170d56b1e429c25f`; both PE exports/imports and current Tier0 import subset passed. The established patched source/SDK method was reused; a fresh upstream reconstruction was not repeated. These are offline facts; no6807 game load or runtime qualification is claimed.

@@ -253,6 +253,10 @@ class PreloadUnavailableError(RuntimeError):
     """
 
 
+class StartupAcknowledgementRequired(PreloadUnavailableError):
+    """The intro never began; ask the user to check the game's startup screen."""
+
+
 class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFlightMixin, GameUiHandoffMixin):
     def __init__(self, log_callback=None):
         self._log_callback = log_callback
@@ -407,6 +411,70 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         if overlay is None:
             return None
         return Path(overlay) / "cvar_unlocker" / "bin" / "win64"
+
+    def movie_output_context(self):
+        """Bind engine movie output to this launch's verified primary MOD root."""
+        import hashlib
+        from .file_ops import _plain_ancestors
+        from .movie_audio import MovieOutputContext
+        from .session_cleanup import _marker
+        with self._op_lock:
+            self._require_connection()
+            session, demo, console = self._session, self._demo, self._console
+            pid, directory, overlay = session.pid, session.session_dir, session.overlay_dir
+            paths = launcher.validate_game(session.command[0])
+            record = launcher._load_record(directory)
+            marker = _marker(overlay, paths, directory)
+            root = overlay / 'cvar_unlocker' / 'movie'
+            mod = root.parent
+            if not _plain_ancestors(mod) or not mod.is_dir():
+                raise RuntimeError("The owned movie audio MOD directory is unavailable.")
+            mod_info = mod.stat()
+            mod_identity = (mod_info.st_dev, mod_info.st_ino)
+            baseline_path = launcher.EDITING_ROOT / 'gameinfo.gi'
+            if not _plain_ancestors(baseline_path) or not 0 < baseline_path.stat().st_size <= 1024 * 1024:
+                raise RuntimeError("The movie audio editing baseline is unavailable.")
+            before = baseline_path.stat()
+            with baseline_path.open('rb') as stream:
+                baseline = stream.read(1024 * 1024 + 1)
+            after = baseline_path.stat()
+            if (len(baseline) != before.st_size or len(baseline) > 1024 * 1024
+                    or any(getattr(before, name) != getattr(after, name)
+                           for name in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+                    or record.get('configuration_mode') != 'isolated_editing'
+                    or hashlib.sha256(baseline).hexdigest() != record.get('editing_gameinfo_sha256')
+                    or record.get('pid') != pid or record.get('command') != list(session.command)
+                    or Path(record['overlay_dir']) != overlay
+                    or demo is None or record.get('selected_demo') != str(demo)):
+                raise RuntimeError("The movie audio launch identity could not be verified.")
+            patched = launcher.make_gameinfo(baseline.decode('utf-8'), overlay.name, isolated_settings=True)
+            mods = [entry for entry in launcher._search_paths_entries(launcher._parse(patched))
+                    if entry.key.value.casefold() == 'mod']
+            if (hashlib.sha256(patched.encode('utf-8')).hexdigest() != record['patched_sha256']
+                    or not mods or mods[0].value.value != overlay.name + '/cvar_unlocker'):
+                raise RuntimeError("The movie audio primary MOD path could not be verified.")
+            fields = ('pid', 'command', 'overlay_dir', 'original_sha256', 'patched_sha256',
+                      'editing_gameinfo_sha256', 'configuration_mode', 'selected_demo')
+            identity = {name: record.get(name) for name in fields}
+
+            def verify_owner(controller):
+                with self._op_lock:
+                    if (controller is not self or self._session is not session or self._demo != demo
+                            or self._console is not console or session.pid != pid or session.process.pid != pid
+                            or session.overlay_dir != overlay or session.session_dir != directory):
+                        raise RuntimeError("The movie audio session changed; its files were kept.")
+                    self._require_connection()
+                    current = launcher._load_record(directory)
+                    if ({name: current.get(name) for name in fields} != identity
+                            or _marker(overlay, paths, directory) != marker
+                            or not _plain_ancestors(mod) or not mod.is_dir()):
+                        raise RuntimeError("The movie audio output owner changed; its files were kept.")
+                    info = mod.stat()
+                    if (info.st_dev, info.st_ino) != mod_identity:
+                        raise RuntimeError("The movie audio MOD directory changed; its files were kept.")
+
+            verify_owner(self)
+            return MovieOutputContext(root, verify_owner)
 
     def _require_connection(self):
         if not self._alive():
@@ -943,19 +1011,20 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 if not trace["observed_started"] and not trace["observed_intro"]:
                     elapsed = time.monotonic() - observed_at
                     if elapsed >= PRELOAD_INTRO_STALL_SECONDS:
-                        message = ("Deadlock never showed its hideout intro or started the map and "
-                                   "shader preload, so Dolly stopped the automatic check. The game "
-                                   "session is still open: load the selected replay from Startup "
-                                   "controls to continue without preload verification.")
+                        message = ("Deadlock's hideout intro has not started. If a development or "
+                                   "welcome screen is showing in the game, dismiss it there. Then "
+                                   "choose Check startup again in Dolly to repeat the normal checks "
+                                   "and open the same selected replay. The game session stays open.")
                         self._startup_evidence["preload_unavailable"] = {
                             "reason": "intro_never_started",
                             "waited_seconds": round(elapsed, 3),
                             "last_sample": deepcopy(sample)}
                         self._message(message, startup_stage="preload_unavailable")
-                        raise PreloadUnavailableError(message)
+                        raise StartupAcknowledgementRequired(message)
                 if not sample["started"]:
-                    message = ("waiting_preload_intro", "Preparing Deadlock's intro and map preload. "
-                               "Your replay will open automatically when ready.")
+                    message = ("waiting_preload_intro", "Check Deadlock for a development or welcome "
+                               "screen and dismiss it in the game. Dolly is waiting for the hideout "
+                               "intro and map preload before opening your replay.")
                     if sample.get("intro_phase") == 2 and "intro_action" not in self._startup_evidence:
                         if self._automatic_hideout_check(initial_frame):
                             self._check_startup_cancelled(cancel_event)
@@ -1220,57 +1289,103 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._check_startup_cancelled(cancel_event)
                 self._wait_dashboard_preload(initial_frame, cancel_event)
                 self._check_startup_cancelled(cancel_event)
-                self.load_replay()
-                self._message("Unlocker confirmed. Loading the selected replay…", startup_stage="loading_replay")
-
-                def selected_replay():
-                    try:
-                        info = self._require_demo()
-                    except (RuntimeError, ValueError):
-                        return None
-                    if bridge is not None:
-                        current = bridge.status()
-                        if current.get("state") in ("fault", "unsupported"):
-                            raise RuntimeError("Native camera failed while loading: " + str(current.get("message")))
-                        if self._demo is None or not same_replay_name(self._demo, current.get("demo_name")):
-                            return None
-                        if int(current.get("frame_count", 0)) <= initial_frame:
-                            return None
-                    return info
-
-                self._startup_wait(selected_replay, "waiting for the selected replay", cancel_event)
-                # Both backends can render views at tick 0 while the first full
-                # entity update is still being reconstructed. A native view is
-                # camera readiness, not replay simulation readiness. Let that
-                # initial update advance before handing users a paused editor.
-                self._message("Replay detected. Waiting for it to begin playing before pausing…",
-                              startup_stage="loading_replay")
-                self._startup_wait(self._replay_begun, "waiting for the replay to begin playing",
-                                   cancel_event, timeout=45)
-                self._wait_replay_camera(bridge, cancel_event)
-                self._request("demo_pause")
-                self._message("Replay loaded and paused. Checking camera controls…", startup_stage="checking_camera")
-                self.probe()
-                self._check_startup_cancelled(cancel_event)
-                self._message("Opening the paused camera editor…", startup_stage="entering_editor")
-                if bridge is not None:
-                    # -console preserves access but can leave the console
-                    # visible at startup. Close it explicitly before enabling
-                    # native flight, so its text box cannot share movement keys.
-                    self.toggle_console(False)
-                    self.enter_native_flight(cancelled=cancel_event.is_set if cancel_event is not None else None)
-                else:
-                    self.begin_paused_camera(cancelled=cancel_event.is_set if cancel_event is not None else None)
-                self._message("Replay ready. Move the camera and capture your first view. F7 opens the console.",
-                              startup_stage="editing_ready")
-                if bridge is not None:
-                    self._record_native_renderer()
-                return self.status()
+                return self._finish_replay_startup(bridge, initial_frame, cancel_event)
             except Exception as exc:
-                if not self._probe_result:
-                    self._probe_failure = str(exc)
-                self._message(str(exc), startup_stage="cancelled" if cancel_event is not None and cancel_event.is_set() else "failed")
+                self._startup_failed(exc, cancel_event)
                 raise
+
+    def _startup_failed(self, exc, cancel_event):
+        if not self._probe_result:
+            self._probe_failure = str(exc)
+        stage = ("cancelled" if cancel_event is not None and cancel_event.is_set()
+                 else "waiting_game_screen" if isinstance(exc, StartupAcknowledgementRequired)
+                 else "failed")
+        self._message(str(exc), startup_stage=stage)
+
+    def resume_startup(self, demo_path, cancel_event=None):
+        """Explicitly recheck the same owned hideout after a user dismisses its UI.
+
+        Never relaunch, reinitialize the unlocker, dismiss a screen, or dispatch a
+        replay before the existing preload/hideout/full-packet/camera checks pass.
+        """
+        with self._op_lock:
+            # Rejected input must leave the same waiting session available so
+            # the user can restore its replay selection and try explicitly.
+            self._check_startup_cancelled(cancel_event)
+            self._require_unlocker()
+            with self._state_lock:
+                stage = self._state.get("startup_stage")
+            unavailable = self._startup_evidence.get("preload_unavailable", {})
+            if (stage != "waiting_game_screen" or self._replay_requested
+                    or self._startup_evidence.get("pid") != self._session.pid
+                    or unavailable.get("reason") != "intro_never_started"):
+                raise RuntimeError("There is no waiting startup screen to recheck in this session.")
+            path = launcher._validate_demo(demo_path)
+            if path is None or path != launcher._validate_demo(self._demo):
+                raise RuntimeError("The selected replay changed. Restore the original selection or close this session before starting another replay.")
+            try:
+                bridge = self._native_bridge()
+                initial_frame = int(bridge.status().get("frame_count", 0)) if bridge is not None else 0
+                self._message("Checking the same hideout after the game screen was dismissed…",
+                              startup_stage="waiting_hideout")
+                readiness = self._startup_wait(lambda: self._automatic_hideout_check(initial_frame),
+                                               "rechecking hideout readiness", cancel_event)
+                self._startup_evidence["resumed_hideout_readiness"] = readiness
+                self._check_startup_cancelled(cancel_event)
+                self._wait_dashboard_preload(initial_frame, cancel_event)
+                self._check_startup_cancelled(cancel_event)
+                return self._finish_replay_startup(bridge, initial_frame, cancel_event)
+            except Exception as exc:
+                self._startup_failed(exc, cancel_event)
+                raise
+
+    def _finish_replay_startup(self, bridge, initial_frame, cancel_event):
+        self.load_replay()
+        self._message("Unlocker confirmed. Loading the selected replay…", startup_stage="loading_replay")
+
+        def selected_replay():
+            try:
+                info = self._require_demo()
+            except (RuntimeError, ValueError):
+                return None
+            if bridge is not None:
+                current = bridge.status()
+                if current.get("state") in ("fault", "unsupported"):
+                    raise RuntimeError("Native camera failed while loading: " + str(current.get("message")))
+                if self._demo is None or not same_replay_name(self._demo, current.get("demo_name")):
+                    return None
+                if int(current.get("frame_count", 0)) <= initial_frame:
+                    return None
+            return info
+
+        self._startup_wait(selected_replay, "waiting for the selected replay", cancel_event)
+        # Both backends can render views at tick 0 while the first full
+        # entity update is still being reconstructed. A native view is
+        # camera readiness, not replay simulation readiness. Let that
+        # initial update advance before handing users a paused editor.
+        self._message("Replay detected. Waiting for it to begin playing before pausing…",
+                      startup_stage="loading_replay")
+        self._startup_wait(self._replay_begun, "waiting for the replay to begin playing",
+                           cancel_event, timeout=45)
+        self._wait_replay_camera(bridge, cancel_event)
+        self._request("demo_pause")
+        self._message("Replay loaded and paused. Checking camera controls…", startup_stage="checking_camera")
+        self.probe()
+        self._check_startup_cancelled(cancel_event)
+        self._message("Opening the paused camera editor…", startup_stage="entering_editor")
+        if bridge is not None:
+            # -console preserves access but can leave the console
+            # visible at startup. Close it explicitly before enabling
+            # native flight, so its text box cannot share movement keys.
+            self.toggle_console(False)
+            self.enter_native_flight(cancelled=cancel_event.is_set if cancel_event is not None else None)
+        else:
+            self.begin_paused_camera(cancelled=cancel_event.is_set if cancel_event is not None else None)
+        self._message("Replay ready. Move the camera and capture your first view. F7 opens the console.",
+                      startup_stage="editing_ready")
+        if bridge is not None:
+            self._record_native_renderer()
+        return self.status()
 
     def _record_native_renderer(self):
         """One read-only confirmation that a native session really runs DX11.
@@ -1336,6 +1451,12 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._startup_evidence["confirmation_counts"] = counts
                 if not {"concommands", "cvars"} <= counts.keys():
                     raise RuntimeError("Dolly could not confirm cvar_unhide completion. Keep the game in the hideout and retry Initialize unlocker. Empty console output alone does not prove the DLL failed to load. Export diagnostics if it persists; the replay has not been loaded by Dolly.")
+                if isinstance(self._session, launcher.Session):
+                    from .editing_session import verify_runtime
+                    self._startup_evidence['editing_configuration'] = verify_runtime(
+                        self._session.session_dir,
+                        lambda command: self._request(command, timeout=3, allow_error=True),
+                        pid=self._session.pid)
                 after = self._request("demo_info", allow_error=True)
                 try:
                     after_info = parse_demo_info(after)
@@ -5352,7 +5473,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             if deployment is not None:
                 preserve_diagnostics(deployment, self._session.session_dir)
         session_files = ("session.json", "launch.log", "game_stdout.log",
-                         "native_diagnostics.json", "graphics-session.json", "graphics-runtime.json") + DIAGNOSTIC_NAMES
+                         "native_diagnostics.json", "graphics-session.json", "graphics-runtime.json",
+                         "editing-session.json") + DIAGNOSTIC_NAMES
         destination = Path(destination)
         report = {"version": __version__, "state": self.status(), "protocol": self._protocol,
                   "motion_clock": motion_clock_info(),

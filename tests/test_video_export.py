@@ -2148,7 +2148,12 @@ class MediaPollIsolationTests(unittest.TestCase):
         self.assertEqual(self.editor_poll.call_count, 2)
         self.assertEqual(self.app.root.after.call_count, 2)
         self.app._log.assert_called_once_with("Media status unavailable: Bad media protocol")
-        self.app.play_replay_button.configure.assert_called_with(state="normal")
+        # Caption updates follow state updates; require the final effective
+        # button state rather than assuming the last call only changes state.
+        configured = {}
+        for invocation in self.app.play_replay_button.configure.call_args_list:
+            configured.update(invocation.kwargs)
+        self.assertEqual(configured, {"state": "normal", "text": "Play replay"})
 
     def test_start_timeout_releases_busy_and_keeps_finish_discard_available(self):
         app = self.app

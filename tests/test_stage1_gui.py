@@ -117,6 +117,92 @@ class Stage1GuiTests(unittest.TestCase):
         app._editing_started.assert_called_once()
         self.assertEqual(h.errors, [])
 
+    def console_harness(self):
+        h, app = self.harness()
+        app.camera_driver.set('Console (legacy)')
+        app.controller.launch = Mock(return_value={'pid': 123, 'camera_backend': 'console'})
+        app.controller.resume_startup = Mock()
+        app.advanced_startup_dialog = Mock()
+        return h, app
+
+    def test_console_play_launches_manual_session_with_snapshotted_preferences(self):
+        h, app = self.console_harness()
+        app.protocol.set('VConsole')
+        app.graphics_profiles = SimpleNamespace(selected_id=lambda: 'chosen-profile')
+        app._start_editing_session()
+        app.demo_path.set('changed.dem')
+        app.camera_driver.set('Native (experimental)')
+        with patch('dolly.gui.save_settings') as save, \
+             patch('dolly.controller.PreloadMonitor') as preload, \
+             patch('dolly.controller.ReplayCameraMonitor') as replay_camera:
+            h.finish()
+        app.controller.launch.assert_called_once()
+        args, kwargs = app.controller.launch.call_args
+        self.assertTrue(args[1].endswith('/shot.dem'))
+        self.assertEqual(kwargs, {'protocol': 'vconsole', 'native': False,
+            'launch_options': '-windowed -w 1920 -h 1080', 'graphics_profile': 'chosen-profile'})
+        self.assertEqual(save.call_args.args[0].demo_path, args[1])
+        self.assertEqual(save.call_args.args[0].launch_options, '-windowed -w 1920 -h 1080')
+        self.assertIs(app.app_settings, save.call_args.args[0])
+        app.controller.start_editing.assert_not_called()
+        app.controller.resume_startup.assert_not_called()
+        preload.assert_not_called()
+        replay_camera.assert_not_called()
+        app._editing_started.assert_not_called()
+        app.advanced_startup_dialog.deiconify.assert_called_once()
+        app.advanced_startup_dialog.lift.assert_called_once()
+        self.assertIsNone(app.startup_cancel)
+        app.startup_bar.stop.assert_called_once()
+        self.assertIn('Connect', app.startup_progress.get())
+        self.assertIn('Check camera support', app.startup_progress.get())
+        self.assertEqual(h.errors, [])
+
+    def test_console_cancel_before_worker_prevents_settings_write_and_launch(self):
+        h, app = self.console_harness()
+        app._start_editing_session()
+        app._cancel_startup()
+        with patch('dolly.gui.save_settings') as save:
+            h.finish()
+        save.assert_not_called()
+        app.controller.launch.assert_not_called()
+        app.controller.start_editing.assert_not_called()
+        app.advanced_startup_dialog.deiconify.assert_not_called()
+        self.assertEqual(len(h.errors), 1)
+        self.assertIn('cancelled', str(h.errors[0]))
+
+    def test_console_failed_launch_retains_queue_error_without_ready_or_guide(self):
+        h, app = self.console_harness()
+        original_settings = app.app_settings
+        failure = RuntimeError('Launch refused')
+        app.controller.launch.side_effect = failure
+        app._start_editing_session()
+        with patch('dolly.gui.save_settings'):
+            h.finish()
+        self.assertEqual(h.errors, [failure])
+        self.assertFalse(app.busy)
+        self.assertIs(app.app_settings, original_settings)
+        app._editing_started.assert_not_called()
+        app.advanced_startup_dialog.deiconify.assert_not_called()
+        app.controller.start_editing.assert_not_called()
+
+    def test_console_cancellation_during_launch_stops_automatic_progress(self):
+        h, app = self.console_harness()
+        def launch(*args, **kwargs):
+            app._cancel_startup()
+            return {'pid': 123, 'camera_backend': 'console'}
+        app.controller.launch.side_effect = launch
+        app._start_editing_session()
+        with patch('dolly.gui.save_settings'):
+            h.finish()
+        self.assertIsNone(app.startup_cancel)
+        app.startup_bar.stop.assert_called_once()
+        self.assertIn('cancelled', app.startup_progress.get())
+        self.assertIn('remains open', app.status_text.get())
+        app.controller.start_editing.assert_not_called()
+        app.controller.resume_startup.assert_not_called()
+        app._editing_started.assert_not_called()
+        self.assertEqual(h.errors, [])
+
     def test_invalid_additional_options_never_launch_or_disable_current_input(self):
         h, app = self.harness()
         app.launch_options.set('-secure +playdemo other.dem')

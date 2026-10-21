@@ -35,9 +35,10 @@ workflows and the [changelog](CHANGELOG.md) for release history.
    Source users need Python 3.10+ with Tcl/Tk and a built native helper; see
    [BUILDING.md](BUILDING.md). The current native helper uses ABI 4; keep it with
    the matching editor files from the same build.
-3. Open Steam and sign in. Keep `-insecure` in Deadlock's launch options while
-   using Dolly. Native sessions use **DirectX 11**, selected by
-   Dolly's editing launch without changing your saved graphics settings.
+3. Open Steam and sign in. Dolly adds `-dev -insecure` directly to the process it
+   launches; Steam's saved launch options stay untouched. Native sessions use
+   **DirectX 11**. Dolly keeps normal-play configs aside by using stock defaults
+   and a separate session settings folder; its own saved Controls remain in use.
 4. Open **Dolly.exe**. In **Replay → Launch setup**, choose `game/bin/win64/deadlock.exe` and a
    local, decompressed `.dem`. Older `citadel.exe` installations and Steam
    libraries on another drive are accepted; do not rename game files.
@@ -47,7 +48,10 @@ workflows and the [changelog](CHANGELOG.md) for release history.
 6. Click **Open replay in Dolly**. Dolly connects to the game process it launched,
    waits for rendered pre-replay scene and unlocker-registration evidence,
    executes `cvar_unhide` once, and requires both completion summaries.
-7. Dolly advances Deadlock's **click to continue** screen automatically, waits for
+7. Dolly skips the early-development notice inside its own session and
+   automatically advances the verified hideout **Press any key to Start** intro.
+   Hero announcements and other prompts remain available; dismiss those in
+   Deadlock. Dolly waits for
    verified map and shader preload completion, then automatically loads the
    selected demo, checks its identity
    and camera support, pauses it, closes the console explicitly and enables
@@ -75,9 +79,10 @@ administrator** if it was enabled unnecessarily. If your computer requires that
 permission, close Dolly and use **Run as administrator** on `Dolly.exe`, then retry.
 Re-extracting the ZIP does not resolve this Windows permission requirement.
 A timeout, failed unlocker confirmation, or unverified preload does not
-automatically load the demo. If Deadlock never shows its intro or starts the
-map and shader preload, Dolly stops the automatic check early and offers to load
-the selected replay without preload verification; the game session stays open.
+automatically load the demo. If the hideout intro never starts, Dolly asks you
+to check the game for a hero announcement or another prompt. Dismiss that screen and
+choose **Check startup again** to repeat the normal checks in the same session.
+The game stays open and the selected replay remains unloaded until they pass.
 Preload verification supports reviewed game builds; after a game update, Dolly
 may need an update before automatic startup can proceed.
 
@@ -109,9 +114,12 @@ The native helper runs inside the game's user-mode process; it is **not a
 kernel driver**. Native launch checks reviewed `client.dll`, `engine2.dll` and
 `tier0.dll` fingerprints. Unknown updates are blocked. See
 [the maintainer compatibility reference](internal/GAME_UPDATES.md); do not replace game DLLs or edit fingerprints
-to force compatibility. **Console (legacy)** in Troubleshooting keeps the older
-workflow without native flight or the in-game panel. Its unlocker and startup
-checks still need support for the installed game build.
+to force compatibility. Choosing **Console (legacy)** and **Play replay** opens
+the manual Startup controls: wait for the hideout, then use **Connect → Initialize
+unlocker → Load replay → Check camera support**. This uses console camera controls
+without native flight, the in-game panel, native recording or layers. Its separate
+configuration and server-unlocker checks must still pass; a client-only update
+does not itself disable the manual route, but every patch is not guaranteed.
 
 ## In-game input and default keys
 

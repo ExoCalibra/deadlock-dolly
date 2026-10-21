@@ -18,14 +18,14 @@ class GraphicsProfiles:
         self.status = tk.StringVar()
         self.combo = field(parent, "Next replay session", self.selection, values=(profiles.CURRENT,))
         self.combo.bind("<<ComboboxSelected>>", lambda _event: self.run(self.select))
-        actions(parent, (("Save current graphics...", lambda: self.run(self.capture)),
+        actions(parent, (("Save normal-play graphics...", lambda: self.run(self.capture)),
                          ("Import video.txt...", lambda: self.run(self.import_file)),
                          ("Preview changes...", lambda: self.run(self.preview))))
         actions(parent, (("Rename...", lambda: self.run(self.rename)),
                          ("Delete...", lambda: self.run(self.delete))), 2)
-        ttk.Label(parent, text="Profiles apply when Dolly starts a replay. Your previous settings return after Deadlock exits. "
-                  "Close the game before saving its graphics. Display mode, resolution, GPU and upscaler settings are kept; "
-                  "use Display launch options for window size.", wraplength=700, style="CardMuted.TLabel").pack(fill="x")
+        ttk.Label(parent, text="Dolly uses clean settings in a separate folder for each replay session. Your normal-play configs stay untouched. "
+                  "Saved profiles change only Dolly's quality settings. Display mode, resolution and GPU identity are kept; upscaling and render scale start clean. "
+                  "Use Display launch options for window size.", wraplength=700, style="CardMuted.TLabel").pack(fill="x")
         ttk.Label(parent, textvariable=self.status, wraplength=700, style="CardMuted.TLabel").pack(fill="x", pady=(8, 0))
         try:
             self.refresh()
@@ -104,11 +104,12 @@ class GraphicsProfiles:
 
     def preview(self):
         _library, profile = self.chosen()
-        target = profiles.current_video()
-        _data, changes = profiles.preview(profile, profiles.read_video(target))
-        text = f"Steam video settings: {target}\nProfile: {profile['name']}\n\n" + "\n".join(changes)
-        text += "\n\nNo game files are changed by this preview. All fields not listed above are kept. "
-        text += "The actual pre-launch file is backed up for each session. Unexpected later edits require manual review."
+        from .editing_session import preview_video
+        _data, audit = preview_video(profile['id'])
+        text = f"Separate Dolly session settings\nProfile: {profile['name']}\n\n"
+        text += '\n'.join(f"{profiles.QUALITY_FIELDS[key]}: {value}" for key, value in audit['quality_values'].items())
+        text += "\n\nNo game files are changed by this preview. Your normal-play settings and startup scripts are not imported. "
+        text += "Only these reviewed quality values and display/device fields are written to Dolly's new session folder."
         self.show_preview("Next-launch graphics preview", text)
 
     def show_preview(self, title, text, save=None):

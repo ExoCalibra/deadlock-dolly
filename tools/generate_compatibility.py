@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import stat
 import struct
 import sys
 import tempfile
@@ -31,6 +32,8 @@ IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z_0-9]*\Z')
 HASH = re.compile(r'[0-9a-f]{64}\Z')
 SCENE_FIELDS = ('object', 'vtable', 'frame', 'stack', 'records', 'capacity', 'ids',
                 'transforms', 'cpu_transforms', 'owner_offset', 'renderer_gpu_buffer_offset')
+UNLOCKER_METADATA = 'third_party/cvar_unlocker/THIRD_PARTY.json'
+UNLOCKER_ARTIFACT = 'bin/win64/server.dll'
 
 
 class ContractError(ValueError):
@@ -52,6 +55,49 @@ def unique_object(pairs):
 
 def read_json(path):
     return json.loads(Path(path).read_text(encoding='utf-8'), object_pairs_hook=unique_object)
+
+
+def unlocker_contract(root):
+    """One reviewed artifact identity for the launcher and native front factory."""
+    root = Path(root).absolute()
+
+    def read_plain(relative, limit):
+        path = root / relative
+        for entry in (path, *path.parents):
+            info = entry.lstat()
+            flags = getattr(info, 'st_file_attributes', 0)
+            require(not stat.S_ISLNK(info.st_mode) and
+                    not flags & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400),
+                    'Unlocker contract paths must be ordinary files/directories')
+            if entry == root:
+                break
+        before = path.stat()
+        require(stat.S_ISREG(before.st_mode) and 0 < before.st_size <= limit,
+                'Unlocker contract file is missing, empty or exceeds its bound')
+        with path.open('rb') as handle:
+            raw = handle.read(limit + 1)
+        after = path.stat()
+        require(len(raw) == before.st_size <= limit and
+                all(getattr(before, key) == getattr(after, key)
+                    for key in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')),
+                'Unlocker contract file changed while reading')
+        return raw
+
+    metadata = json.loads(read_plain(UNLOCKER_METADATA, 64 * 1024).decode('utf-8'),
+                          object_pairs_hook=unique_object)
+    require(isinstance(metadata, dict) and metadata.get('bundled_file') == UNLOCKER_ARTIFACT,
+            'Unlocker artifact must use the reviewed fixed bundle path')
+    digest = metadata.get('bundled_file_sha256')
+    size = metadata.get('bundled_file_size')
+    version = metadata.get('version')
+    require(isinstance(digest, str) and HASH.fullmatch(digest), 'Invalid unlocker artifact SHA-256')
+    require(type(size) is int and 64 <= size <= 2 * 1024 * 1024, 'Invalid unlocker artifact size')
+    require(isinstance(version, str) and re.fullmatch(r'v[0-9][A-Za-z0-9_.-]{0,79}', version),
+            'Invalid unlocker artifact version')
+    artifact = read_plain('third_party/cvar_unlocker/' + UNLOCKER_ARTIFACT, 2 * 1024 * 1024)
+    require(len(artifact) == size and hashlib.sha256(artifact).hexdigest() == digest,
+            'Unlocker artifact differs from its reviewed metadata')
+    return {'SHA256': digest, 'SIZE': size, 'VERSION': version}
 
 
 def integer(value):
@@ -361,6 +407,7 @@ def render_player_scenes(rows):
 
 def generated_outputs(root=ROOT):
     root = Path(root)
+    unlocker = unlocker_contract(root)
     data, modules, values = load_contract(root)
     # Check the consumer API before emitting anything. Removing/renaming a
     # reviewed symbol cannot silently produce a broken startup monitor.
@@ -370,7 +417,7 @@ def generated_outputs(root=ROOT):
         required = {node.attr for node in ast.walk(tree) if isinstance(node,ast.Attribute)
                     and isinstance(node.value,ast.Name) and node.value.id == '_profile'}
         require(required <= values[group].keys(), f'{group}: missing symbols required by its runtime consumer')
-    py, cpp = render_runtime(data, values)
+    py, cpp = render_runtime(data, {**values, 'Unlocker': unlocker})
     outputs = {'dolly/_runtime_generated.py': py, 'native/include/dolly_runtime_generated.hpp': cpp,
                'native/src/dolly_follow_anchor_generated.hpp': render_follow(data),
                'native/include/dolly_player_scene_generated.hpp': render_player_scenes(player_scenes(root, data))}

@@ -124,8 +124,13 @@ class ClipAudioCapture:
         if reconstructed and self.folder.exists():
             raise FileExistsError(f"Reconstructed audio folder already exists: {self.folder}")
         if self.fixed_step:
-            from .movie_audio import MovieWave
-            self.movie = MovieWave(video, game)
+            from .movie_audio import MovieOutputContext, MovieWave
+            if controller is None:
+                raise RuntimeError("The owned movie audio session is unavailable.")
+            context = controller.movie_output_context()
+            if not isinstance(context, MovieOutputContext):
+                raise RuntimeError("The owned movie audio output could not be verified.")
+            self.movie = MovieWave(video, game, output_context=context)
             self.recorder = None
         else:
             self.recorder = resource_root() / "native/bin/win64/DollyGameAudio.exe"
@@ -285,14 +290,16 @@ class ClipAudioCapture:
         return self.folder if self.reconstructed else None
 
     def cancel(self) -> None:
-        if self.movie is not None:
-            self.movie.cancel(self.controller)
         try:
-            if self.voice_started:
-                self.bridge.stop_source_audio()
-                self.voice_started = False
+            if self.movie is not None:
+                self.movie.cancel(self.controller)
         finally:
-            if self.process and self.process.poll() is None:
-                self.process.kill()
-                self.process.communicate()
-            self.temporary.cleanup()
+            try:
+                if self.voice_started:
+                    self.bridge.stop_source_audio()
+                    self.voice_started = False
+            finally:
+                if self.process and self.process.poll() is None:
+                    self.process.kill()
+                    self.process.communicate()
+                self.temporary.cleanup()

@@ -13,7 +13,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
 ![License](https://img.shields.io/badge/license-MIT-2ea44f)
-[![Version](https://img.shields.io/badge/version-0.6.63--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.6.64--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
 
 ![Deadlock Dolly demo](assets/dolly-demo.gif)
 
@@ -22,7 +22,7 @@
 Capture views from a local replay, shape a camera path and play it back with
 animated framing and effects. Edit through the desktop or directly in the game.
 
-**Current source: 0.6.63-alpha · Windows x64 · DirectX 11.** The portable app
+**Current source: 0.6.64-alpha · Windows x64 · DirectX 11.** The portable app
 includes Python and Tcl/Tk; no separate installation is needed.
 
 > **Local replays only — use at your own risk.** Dolly injects a native DLL
@@ -94,8 +94,10 @@ and `tier0.dll`. Dolly checks the installed modules before loading its native
 helper. A Deadlock update can require a matching Dolly update.
 
 Use **Settings → Troubleshooting & recovery → Startup controls → Check game build**
-to check your installation. **Console (legacy)** is available when Native is
-unavailable, but its unlocker and startup checks also need game-build support.
+to check your installation. **Console (legacy)** opens the manual Startup controls
+when selected. It can remain usable across a client-only update when its separate
+configuration and unlocker requirements still pass. It does not provide native
+recording or layers, and is not guaranteed to survive every game update.
 Camera compatibility does not by itself establish support for Depth or Players
 output. See the [user guide](docs/USER_GUIDE.md) for build checks and recovery;
 the [maintainer reference](docs/internal/GAME_UPDATES.md) explains compatibility review.
@@ -175,5 +177,5 @@ separate terms in [assets/README.md](assets/README.md).
 ## Releases
 
 - [Downloads and published release notes](https://github.com/cravvnn/deadlock-dolly/releases)
-- [Current source release notes: 0.6.63-alpha](docs/RELEASE_NOTES_0.6.63-alpha.md)
+- [Current source release notes: 0.6.64-alpha](docs/RELEASE_NOTES_0.6.64-alpha.md)
 - [Complete changelog](docs/CHANGELOG.md)

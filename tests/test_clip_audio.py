@@ -8,6 +8,35 @@ from unittest.mock import patch
 from dolly.clip_audio import _ffmpeg, _mux, _sample_window
 
 
+class OwnedMovieAudioCleanupTests(unittest.TestCase):
+    def test_movie_owner_refusal_still_cleans_independent_clip_audio_resources(self):
+        from dolly.clip_audio import ClipAudioCapture
+        from unittest.mock import Mock
+        # Actual ClipAudio cancel consumer with inert resource owners. No process
+        # is launched, and the refused movie never receives an engine command.
+        audio=object.__new__(ClipAudioCapture)
+        audio.controller=Mock();audio.movie=Mock()
+        audio.movie.cancel.side_effect=RuntimeError('Movie session changed')
+        audio.voice_started=True;audio.bridge=Mock()
+        audio.process=Mock();audio.process.poll.return_value=None
+        audio.temporary=Mock()
+        with self.assertRaisesRegex(RuntimeError,'Movie session changed'):
+            audio.cancel()
+        audio.bridge.stop_source_audio.assert_called_once_with()
+        audio.process.kill.assert_called_once_with();audio.process.communicate.assert_called_once_with()
+        audio.temporary.cleanup.assert_called_once_with()
+
+    def test_fixed_step_audio_refuses_an_unverified_missing_output_context(self):
+        from dolly.clip_audio import ClipAudioCapture
+        from unittest.mock import Mock
+        controller=Mock();controller.movie_output_context.return_value=None
+        with patch('dolly.clip_audio._ffmpeg',return_value=Path('ffmpeg.exe')):
+            with self.assertRaisesRegex(RuntimeError,'owned movie audio output'):
+                ClipAudioCapture(Path('shot.mkv'),game_audio=True,reconstructed=False,
+                    bridge=Mock(),game=Path('Deadlock/game/bin/win64/deadlock.exe'),game_pid=1,
+                    controller=controller,fixed_step=True)
+
+
 class AudioWindowTests(unittest.TestCase):
     def test_complete_window_uses_exact_sample_bounds(self):
         self.assertEqual(_sample_window(.5, 3, 168000), (24000, 144000))

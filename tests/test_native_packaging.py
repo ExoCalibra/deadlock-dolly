@@ -16,6 +16,29 @@ from release_files import sha256
 
 
 class NativePackagingTests(unittest.TestCase):
+    def test_front_factory_and_launcher_use_the_same_reviewed_unlocker_artifact(self):
+        from dolly import _runtime_generated
+        from dolly import launcher
+        import generate_compatibility
+        root = TOOLS.parent
+        metadata = json.loads((root / 'third_party/cvar_unlocker/THIRD_PARTY.json').read_text(encoding='utf-8'))
+        artifact = root / 'third_party/cvar_unlocker/bin/win64/server.dll'
+        expected = sha256(artifact)
+        self.assertEqual(metadata['bundled_file_sha256'], expected)
+        self.assertEqual(metadata['bundled_file_size'], artifact.stat().st_size)
+        source = (root / 'native/src/bridge_win.cpp').read_text(encoding='utf-8')
+        self.assertIsNone(re.search(r'constexpr char kUnlockerHash\[\]', source),
+                          'The front factory must not keep an independent unlocker pin')
+        self.assertIn('hash_file(path) != reviewed::Unlocker::SHA256', source)
+        generate_compatibility.check_generated(root)
+        self.assertEqual(_runtime_generated.Unlocker.SHA256, expected)
+        self.assertEqual(_runtime_generated.Unlocker.VERSION, metadata['version'])
+        self.assertEqual(_runtime_generated.Unlocker.SIZE, artifact.stat().st_size)
+        self.assertEqual(launcher.UNLOCKER_SHA256, expected)
+        generated = (root / 'native/include/dolly_runtime_generated.hpp').read_text(encoding='utf-8')
+        section = re.search(r'namespace Unlocker \{(.*?)\}', generated, re.S).group(1)
+        self.assertIn(f'SHA256[] = "{expected}";', section)
+
     def test_declared_replay_reader_is_bundled_and_hash_checked(self):
         native,dll,metadata=self.runtime_fixture()
         reader=native/build_native.REPLAY_INDEX_RELATIVE

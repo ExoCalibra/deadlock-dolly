@@ -6,6 +6,8 @@ methods; these tests do not claim compatibility with a running game build.
 """
 
 from collections import deque
+from dataclasses import replace
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -19,6 +21,114 @@ from dolly.controller import (Controller, frame_commands, parse_camera, read_cva
                               tick_rate_advice, tick_rates_match)
 from dolly.console import ConsoleError
 from dolly.path import CvarTrack, Keyframe, Project, TrackKey, STANDARD_ASPECT
+
+
+class MovieOutputContextTests(unittest.TestCase):
+    """Real journal/marker and controller context; fake Popen/console only."""
+    def setUp(self):
+        from test_launcher import fake_game
+        from dolly import launcher
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
+        self.folder=Path(temporary.name)
+        self.paths=fake_game(self.folder/'Deadlock')
+        self.overlay=self.paths.game_dir/'citadel_dolly_movie_context'
+        self.mod=self.overlay/'cvar_unlocker';self.mod.mkdir(parents=True)
+        self.directory=self.folder/'logs/movie_context';self.directory.mkdir(parents=True)
+        self.demo=self.folder/'example.dem'
+        self.process=SimpleNamespace(pid=4321,poll=lambda:None)
+        command=(str(self.paths.executable),'-dev','-insecure','-dx11')
+        self.session=launcher.Session(self.process,self.directory,self.overlay,self.directory/'launch.log',command,29090)
+        original=self.paths.gameinfo.read_bytes()
+        baseline=(launcher.EDITING_ROOT/'gameinfo.gi').read_bytes()
+        marker=dict(owner='Deadlock Dolly',session_dir=str(self.directory),original_gameinfo=str(self.paths.gameinfo),
+                    original_sha256=hashlib.sha256(original).hexdigest())
+        (self.overlay/'.dolly-session.json').write_text(json.dumps(marker),encoding='utf-8')
+        self.record={**marker,'overlay_dir':str(self.overlay),'backup_name':'original.gameinfo.gi',
+            'patched_sha256':hashlib.sha256(launcher.make_gameinfo(baseline.decode('utf-8'),self.overlay.name,isolated_settings=True).encode()).hexdigest(),
+            'editing_gameinfo_sha256':hashlib.sha256(baseline).hexdigest(),'configuration_mode':'isolated_editing',
+            'pid':4321,'command':list(command),'selected_demo':str(self.demo),'config_state':'restored'}
+        self.save()
+        self.c=Controller();self.c._session=self.session;self.c._demo=self.demo
+        self.c._console=SimpleNamespace(is_connected=True)
+
+    def save(self):
+        (self.directory/'session.json').write_text(json.dumps(self.record),encoding='utf-8')
+
+    def test_owned_mod_root_is_verified_after_original_gameinfo_was_restored(self):
+        context=self.c.movie_output_context()
+        self.assertEqual(context.root,self.mod/'movie')
+        context.verify_owner(self.c)
+        self.assertEqual(self.paths.gameinfo.read_bytes().decode('utf-8').count('citadel_dolly_'),0)
+
+    def test_context_refuses_same_pid_replacement_session_and_wrong_controller(self):
+        context=self.c.movie_output_context()
+        with self.assertRaisesRegex(RuntimeError,'session changed'):
+            context.verify_owner(Controller())
+        self.c._session=replace(self.session)
+        with self.assertRaisesRegex(RuntimeError,'session changed'):
+            context.verify_owner(self.c)
+
+    def test_context_refuses_exit_before_any_audio_command(self):
+        context=self.c.movie_output_context();self.process.poll=lambda:1
+        with self.assertRaisesRegex(RuntimeError,'Launch the local replay'):
+            context.verify_owner(self.c)
+
+    def test_context_refuses_changed_journal_or_configured_mount(self):
+        context=self.c.movie_output_context()
+        self.record['pid']=999;self.save()
+        with self.assertRaisesRegex(RuntimeError,'output owner changed'):
+            context.verify_owner(self.c)
+        self.record['pid']=4321;self.record['patched_sha256']='0'*64;self.save()
+        with self.assertRaisesRegex(RuntimeError,'primary MOD'):
+            self.c.movie_output_context()
+
+    def test_context_refuses_a_replaced_or_linked_mod_directory(self):
+        context=self.c.movie_output_context()
+        retained=self.overlay/'retained';self.assertTrue(retained.resolve().is_relative_to(self.folder.resolve()))
+        self.mod.rename(retained);self.mod.mkdir()
+        with self.assertRaisesRegex(RuntimeError,'MOD directory changed'):
+            context.verify_owner(self.c)
+        self.mod.rmdir()
+        if __import__('sys').platform=='win32':
+            import _winapi
+            _winapi.CreateJunction(str(retained),str(self.mod))
+        else:self.mod.symlink_to(retained,target_is_directory=True)
+        try:
+            with self.assertRaises(RuntimeError):context.verify_owner(self.c)
+            self.assertTrue(retained.is_dir())
+        finally:
+            if __import__('sys').platform=='win32':self.mod.rmdir()
+            else:self.mod.unlink()
+
+    def movie(self,unknown=False):
+        from dolly.movie_audio import MovieWave
+        marker=self.folder/'dolly_movie_audio_4321.ready';marker.write_text('',encoding='ascii')
+        self.c._request=MagicMock(side_effect=lambda command,**kwargs: (
+            'Started recording movie: movie/2026_10_20_18_01_38/dolly_audio_x.*: framerate 30'
+            if command.startswith('startmovie ') else 'Finishing movie' if command=='endmovie' else ''))
+        self.c._native_bridge=MagicMock(return_value=SimpleNamespace(status=lambda:{'engine_time':0}))
+        movie=MovieWave(self.folder/'take.mkv',self.paths.executable,output_context=self.c.movie_output_context())
+        with patch('dolly.movie_audio.tempfile.gettempdir',return_value=str(self.folder)):
+            movie.start(self.c,30)
+        movie.folder.mkdir(parents=True)
+        (movie.folder/(movie.name+'.wav')).write_bytes(b'own')
+        if unknown:(movie.folder/'unrelated.wav').write_bytes(b'keep')
+        return movie
+
+    def test_clean_owned_audio_allows_actual_overlay_removal_after_exit(self):
+        from dolly.session_cleanup import remove_overlay
+        movie=self.movie();movie.cancel(self.c)
+        self.process.poll=lambda:0
+        self.assertTrue(remove_overlay(self.overlay,self.paths,self.directory))
+        self.assertFalse(self.overlay.exists())
+
+    def test_unknown_audio_sibling_blocks_deployment_deletion_and_is_preserved(self):
+        from dolly.session_cleanup import remove_overlay
+        movie=self.movie(unknown=True);folder=movie.folder;movie.cancel(self.c)
+        self.process.poll=lambda:0
+        with self.assertRaisesRegex(RuntimeError,'extra file or folder'):
+            remove_overlay(self.overlay,self.paths,self.directory)
+        self.assertEqual((folder/'unrelated.wav').read_bytes(),b'keep')
 
 
 def make_project():
@@ -811,6 +921,23 @@ class ControllerTests(unittest.TestCase):
             report = self.controller.probe()
             self.assertEqual(report["demo"]["name"], "example.dem")
             self.assertEqual(self.controller.status()["startup_stage"], "replay_ready")
+
+    def test_real_session_refuses_unlocker_ready_when_clean_config_check_fails(self):
+        from dolly import launcher
+        self._prepare_hideout()
+        self.process.pid = 1234
+        session = launcher.Session(self.process, Path('unused'), Path('unused-overlay'),
+                                   Path('unused.log'), (), 29090)
+        session.owns_console_port = lambda: True
+        session.restore_gameinfo = MagicMock()
+        self.controller._session = session
+        with patch('dolly.editing_session.verify_runtime', side_effect=RuntimeError('settings path unverified')):
+            with self.assertRaisesRegex(RuntimeError, 'settings path unverified'):
+                self.controller.initialize_unlocker()
+        session.restore_gameinfo.assert_not_called()
+        self.assertIsNone(self.controller._unlocker_pid)
+        self.assertFalse(self.controller.status()['unlocker_ready'])
+        self.assertFalse(any(command.startswith('playdemo ') for command in self.console.sent))
 
     def test_missing_or_partial_unhide_confirmation_keeps_replay_blocked(self):
         for output in ("", "Removed hidden flags from 120 concommands",
