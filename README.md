@@ -13,7 +13,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
 ![License](https://img.shields.io/badge/license-MIT-2ea44f)
-[![Version](https://img.shields.io/badge/version-0.6.77--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.6.78--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
 
 ![Deadlock Dolly demo](assets/dolly-demo.gif)
 
@@ -22,7 +22,7 @@
 Capture views from a local replay, shape a camera path and play it back with
 animated framing and effects. Edit through the desktop or directly in the game.
 
-**Current source: 0.6.77-alpha · Windows x64 · DirectX 11.** The portable app
+**Current source: 0.6.78-alpha · Windows x64 · DirectX 11.** The portable app
 includes Python and Tcl/Tk; no separate installation is needed.
 
 > **Local replays only — use at your own risk.** Dolly injects a native DLL
@@ -184,5 +184,5 @@ separate terms in [assets/README.md](assets/README.md).
 ## Releases
 
 - [Downloads and published release notes](https://github.com/cravvnn/deadlock-dolly/releases)
-- [Current source release notes: 0.6.77-alpha](docs/RELEASE_NOTES_0.6.77-alpha.md)
+- [Current source release notes: 0.6.78-alpha](docs/RELEASE_NOTES_0.6.78-alpha.md)
 - [Complete changelog](docs/CHANGELOG.md)

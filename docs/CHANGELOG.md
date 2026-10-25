@@ -4,6 +4,12 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.78-alpha
+
+- Keep Players layer exports running when the scratch drive briefly falls behind: the fixed-step capture now waits for the ordered writer instead of rejecting the frame and reporting "missed shot frames". A real timeout names the scratch drive, and stills keep using the aligned settled frame.
+
+Full details: [0.6.78 release notes](RELEASE_NOTES_0.6.78-alpha.md).
+
 ## 0.6.77-alpha
 
 - Support Deadlock updates without always rebuilding Dolly: reviewed build definitions are published on GitHub and fetched in the background, covering the native camera hook, module pins, replay/ConVar layouts and the editing-configuration pins. Published entries are additive and fail closed, so existing builds keep their release-reviewed data. A `server.dll` change still needs a release because the bundled cvar unlocker is built from that exact binary.
