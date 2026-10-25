@@ -5,6 +5,33 @@ build-specific sections preserve historical evidence and pending checks at
 the time of each review. For setup and checking your installed build, use the
 [user guide](../USER_GUIDE.md) and [current documentation](../README.md).
 
+## Published build definitions
+
+Ordinary build support no longer requires a new Dolly release. Reviewed data
+for one build can be appended to `definitions.json` at the repository root and
+pushed to the default branch; installed copies fetch it from the GitHub raw
+endpoint, cache it beside `Dolly.exe` and use it on the next launch. See
+[published build definitions](../DEFINITIONS.md) for the schema and the exact
+publish command (`tools/publish_definitions.py`).
+
+The published document covers binary identity and reviewed offsets only: the
+client camera record, engine and Tier0 identities with their named layouts,
+extra compatibility module pins, editing-configuration consumers and additive
+stock-cfg provenance rows. It is strictly additive, so a release pin is never
+revoked or reinterpreted.
+
+Keep these release-locked unless the corresponding reviews are rerun:
+
+- **The cvar unlocker.** Dolly's bundled `server.dll` is a patched copy of one
+  exact game server binary, so a new `server.dll` always needs a rebuilt
+  unlocker and a release. The feed deliberately cannot name a new server pin.
+- Follow-anchor, clip-audio, particle and prop-creation tables, plus movie-audio
+  capture, which stay gated to their exact reviewed identities.
+- The bundled `assets/editing/stock-provenance.json` video-resource pins and its
+  own integrity hash. They describe stock content, not a binary identity.
+- Any new layout, field or call-chain change that still needs the normal native
+  test cycle. Publishing a hash alone does not qualify a build.
+
 ## Shared reviewed contracts
 
 `native/profiles/manifest.json` controls accepted module fingerprints and the

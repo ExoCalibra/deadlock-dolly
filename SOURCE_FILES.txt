@@ -60,10 +60,12 @@ assets/editing/video.txt
 assets/logo-original.png
 assets/reshade/Deadlock-AO.ini
 assets/reshade/Deadlock-Dolly.ini
+definitions.json
 docs/BONE_PICKER.md
 docs/BUILDING.md
 docs/CAMERA_BUNDLE.md
 docs/CHANGELOG.md
+docs/DEFINITIONS.md
 docs/LAYER_EXPORT.md
 docs/README.md
 docs/RELEASE_NOTES_0.5.35-alpha.md
@@ -138,6 +140,8 @@ docs/RELEASE_NOTES_0.6.72-alpha.md
 docs/RELEASE_NOTES_0.6.73-alpha.md
 docs/RELEASE_NOTES_0.6.74-alpha.md
 docs/RELEASE_NOTES_0.6.75-alpha.md
+docs/RELEASE_NOTES_0.6.76-alpha.md
+docs/RELEASE_NOTES_0.6.77-alpha.md
 docs/SCREENSHOTS.md
 docs/SUPPORTED_CAMERA_CVARS.json
 docs/SUPPORTED_CAMERA_CVARS.md
@@ -184,6 +188,7 @@ dolly/crash_dumps.py
 dolly/curve.py
 dolly/curve_preview.py
 dolly/curve_workspace.py
+dolly/definitions.py
 dolly/demo_packets.py
 dolly/depth_exr.py
 dolly/depth_normals.py
@@ -449,6 +454,7 @@ native/src/dolly_overlay_win.cpp
 native/src/dolly_path.cpp
 native/src/dolly_player_capture.cpp
 native/src/dolly_prop_runtime.cpp
+native/src/dolly_remote_definitions.hpp
 native/src/dolly_render_class_win.cpp
 native/src/dolly_renderer_diagnostics_win.cpp
 native/src/dolly_reshade_win.cpp
@@ -472,6 +478,7 @@ native/tests/bone_picker_tests.cpp
 native/tests/bridge_smoke.cpp
 native/tests/capability_tests.cpp
 native/tests/compat_locator_tests.cpp
+native/tests/definitions_tests.cpp
 native/tests/depth_live_tests.cpp
 native/tests/depth_readback_smoke.cpp
 native/tests/depth_scene_smoke.cpp
@@ -580,6 +587,7 @@ tests/test_cpp_format.py
 tests/test_crash_dumps.py
 tests/test_curve.py
 tests/test_curve_preview.py
+tests/test_definitions.py
 tests/test_demo_packets.py
 tests/test_depth_exr.py
 tests/test_depth_normals.py
@@ -831,6 +839,7 @@ tools/generate_compatibility.py
 tools/generate_profile.py
 tools/generate_sound_profile.py
 tools/generate_ui_tokens.py
+tools/publish_definitions.py
 tools/release_files.py
 tools/release_status.py
 tools/test-lite-policy.cmd

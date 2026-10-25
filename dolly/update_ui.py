@@ -1,14 +1,17 @@
 """Metadata-only discovery and explicit, version-bound update consent."""
 from __future__ import annotations
+import logging
 import os
 import queue
 import threading
 import webbrowser
-from . import __version__, updater
+from . import __version__, definitions, updater
 from .runtime import application_root, is_frozen
 from .ui.update_notice import UpdateNotice
 from .video_export import ACTIVE_STATES
 from .update_worker import check_processes, pending_work, launch_worker
+
+LOG = logging.getLogger("dolly")
 
 
 class UpdateUI:
@@ -35,6 +38,29 @@ class UpdateUI:
         app.root.after(250, self.poll)
         if self.enabled and app.app_settings.auto_updates and not skip_startup:
             app.root.after(2000, self.check)
+        if app.app_settings.auto_updates and not skip_startup:
+            # Build definitions are small and useful to source builds too, so
+            # this runs even when the packaged updater is unavailable.
+            app.root.after(2400, self.refresh_definitions)
+
+    def refresh_definitions(self):
+        """Adopt published build definitions for this and later launches.
+
+        Failure is silent by design: the bundled reviewed table stays active
+        and the user is never blocked or interrupted by a network problem.
+        """
+        if self.app.closed:
+            return
+
+        def run():
+            try:
+                document = definitions.refresh()
+                LOG.info("Published build definitions: %s", document.describe())
+            except definitions.DefinitionsError as exc:
+                LOG.info("Published build definitions were not used: %s", exc)
+            except Exception:  # never let background network work surface a dialog
+                LOG.info("Published build definitions were not used.")
+        threading.Thread(target=run, name="Dolly build definitions", daemon=True).start()
 
     @staticmethod
     def release_key(release):

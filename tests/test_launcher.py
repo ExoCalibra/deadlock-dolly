@@ -322,6 +322,44 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(self.paths.gameinfo.read_bytes(), before)
         self.assertFalse(list(self.paths.game_dir.glob('citadel_dolly_*')))
 
+    def test_published_definitions_extend_editing_pins_additively(self):
+        from dolly import definitions
+        target = self.paths.game_dir / 'bin/win64/filesystem_stdio.dll'
+        target.write_bytes(b'updated filesystem consumer')
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(launcher.LaunchError, 'not been reviewed'):
+            launcher._editing_gameinfo(self.paths)
+        published = definitions.parse({
+            "format": 1, "native_abi": 4,
+            "editing": {"configuration_modules": {"bin/win64/filesystem_stdio.dll": [digest]}},
+        })
+        with patch.object(definitions, "current", return_value=published):
+            self.assertEqual(launcher._editing_gameinfo(self.paths), GAMEINFO)
+        # A published pin for a different file must not widen this one.
+        wrong = definitions.parse({
+            "format": 1, "native_abi": 4,
+            "editing": {"configuration_modules": {"bin/win64/filesystem_stdio.dll": ["a" * 64]}},
+        })
+        with patch.object(definitions, "current", return_value=wrong):
+            with self.assertRaisesRegex(launcher.LaunchError, 'not been reviewed'):
+                launcher._editing_gameinfo(self.paths)
+
+    def test_published_definitions_cannot_widen_the_unlocker_server_pin(self):
+        from dolly import definitions
+        target = self.paths.game_dir / 'citadel/bin/win64/server.dll'
+        target.write_bytes(b'updated named server')
+        with self.assertRaisesRegex(launcher.LaunchError, 'not been reviewed'):
+            launcher._editing_gameinfo(self.paths)
+        # The bundled unlocker is built from the reviewed server binary, so a
+        # definitions document is not allowed to name a new server identity.
+        with self.assertRaises(definitions.DefinitionsError):
+            definitions.parse({
+                "format": 1, "native_abi": 4,
+                "editing": {"unlocker_server_sha256": ["a" * 64]},
+            })
+        with self.assertRaisesRegex(launcher.LaunchError, 'not been reviewed'):
+            launcher._editing_gameinfo(self.paths)
+
     def test_unknown_client_console_launch_keeps_user_cfg_exact_and_uses_private_root(self):
         (self.paths.game_dir/'citadel/bin/win64/client.dll').write_bytes(b'unknown private camera layout')
         cfg = self.paths.citadel_dir/'cfg'; cfg.mkdir()
@@ -1202,6 +1240,9 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual((target / "server.dll").read_bytes(), dll.read_bytes())
         self.assertEqual(hashlib.sha256((target / "dolly_cvar_unlocker.dll").read_bytes()).hexdigest(), launcher.UNLOCKER_SHA256)
         self.assertEqual((target / "dolly_native.cfg").read_bytes(), b"DOLLY_NATIVE_1\n" + b"a" * 32 + b"\n5432\n")
+        published = (target / "dolly_definitions.txt").read_text(encoding="ascii")
+        self.assertTrue(published.startswith("DOLLY_DEFINITIONS 1\nabi 4\n"))
+        self.assertTrue(published.endswith("end\n"))
         self.assertEqual(hashlib.sha256((target.parents[1] / "pak01_dir.vpk").read_bytes()).hexdigest(),
                          launcher.CONFETTI_PACK_SHA256)
         self.assertEqual(hashlib.sha256((target.parents[1] / "pak02_dir.vpk").read_bytes()).hexdigest(),

@@ -4,6 +4,21 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.77-alpha
+
+- Support Deadlock updates without always rebuilding Dolly: reviewed build definitions are published on GitHub and fetched in the background, covering the native camera hook, module pins, replay/ConVar layouts and the editing-configuration pins. Published entries are additive and fail closed, so existing builds keep their release-reviewed data. A `server.dll` change still needs a release because the bundled cvar unlocker is built from that exact binary.
+- Report published support in **Check game build**, cache the accepted file beside `Dolly.exe`, and document the maintainer publish step in [published build definitions](DEFINITIONS.md).
+
+Full details: [0.6.77 release notes](RELEASE_NOTES_0.6.77-alpha.md).
+
+## 0.6.76-alpha
+
+- Fix the desktop Bone Picker entry point: starting a first bone camera or opening the picker from the desktop now supplies the required editor publication callback instead of raising `start_attached_view() missing ... 'publish'`.
+- Name the blocking game process when Dolly refuses to launch: PID, executable path, Windows session and visible window, plus whether it belongs to a different installation than the one selected in Dolly.
+- Keep the 0.6.75 stuck-effect cleanup, 0.6.74 mixed skin-pack loading and the 0.6.73 audio/campath/6819 fixes.
+
+Full details: [0.6.76 release notes](RELEASE_NOTES_0.6.76-alpha.md).
+
 ## 0.6.75-alpha
 
 - Clear stuck replay effects from the in-game Scene appearance card. The renamed **Clear stuck effects** button now removes ragdolls, decals, screen post-processing and Violet's ink constructs left behind when changing replay frames, instead of only ragdolls.

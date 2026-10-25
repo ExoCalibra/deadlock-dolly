@@ -17,6 +17,7 @@ older screenshots and per-version notes may show controls that have changed.
 | Use paired camera metadata and float depth in compositing | [Camera bundle](CAMERA_BUNDLE.md) |
 | Check the framing and depth-of-field controls Dolly exposes | [Camera control reference](SUPPORTED_CAMERA_CVARS.md) |
 | Check for updates, install an update or recover an interrupted update | [Updating and recovery](UPDATING.md) |
+| Understand, publish or diagnose game-build definitions | [Published build definitions](DEFINITIONS.md) |
 
 The [repository README](../README.md) is the quick start. The Windows ZIP also
 includes `Start_Here.txt` and selected export and update guides. Settings,

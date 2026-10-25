@@ -42,8 +42,10 @@ from .compatibility import (
     SUPPORTED,
     UNSUPPORTED,
     accepted_pins,
+    merged_pins,
     scan_game_modules,
 )
+from . import definitions
 
 PACKAGE_ROOT = application_root(Path(__file__).resolve().parent.parent)
 UNLOCKER_ROOT = resource_root(Path(__file__).resolve().parent.parent) / "third_party" / "cvar_unlocker"
@@ -60,6 +62,13 @@ try:
     NATIVE_GAME_SHA256 = accepted_pins()
 except CompatibilityError:
     NATIVE_GAME_SHA256 = {}
+
+
+def game_pins() -> dict[str, tuple[str, ...]]:
+    """Reviewed module pins plus published definitions. Reviewed values win."""
+    return merged_pins(NATIVE_GAME_SHA256, definitions.module_pins())
+
+
 STEAM_APP_ID = "1422450"
 # Mod managers (Deadlock Mod Manager, Grimoire, the manual guide) mount their
 # addon folders with ordinary SearchPaths entries. The reviewed editing baseline
@@ -97,16 +106,23 @@ def _editing_gameinfo(paths: GamePaths, *, provenance: dict | None = None) -> st
                 or set(profile.get("configuration_modules", {})) != set(CONFIGURATION_MODULES)
                 or hashlib.sha256(data).hexdigest() != profile.get("gameinfo_sha256")):
             raise ValueError("Editing configuration failed its integrity check")
+        # Published definitions may accept an updated module identity. They are
+        # additive: the bundled pin always stays accepted.
+        published = definitions.current()
         for relative in CONFIGURATION_MODULES:
             expected = profile["configuration_modules"][relative]
             if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
                 raise ValueError("Invalid editing configuration consumer fingerprint")
-            if hash_file(paths.game_dir / relative) != expected:
+            accepted = {expected, *published.editing_modules.get(relative, ())}
+            if hash_file(paths.game_dir / relative) not in accepted:
                 raise LaunchError("Dolly's editing configuration has not been reviewed for this game build. "
                                   "Update Dolly before launching. Your gameinfo.gi was not changed.")
         server_hash = profile.get("unlocker_server_sha256")
         if not isinstance(server_hash, str) or re.fullmatch(r"[0-9a-f]{64}", server_hash) is None:
             raise ValueError("Invalid editing unlocker server fingerprint")
+        # The bundled cvar unlocker is a patched copy of this exact server
+        # binary, so a new server.dll always needs a matching Dolly release.
+        # Published definitions must not widen this gate.
         if hash_file(paths.game_dir / "citadel/bin/win64/server.dll") != server_hash:
             raise LaunchError("Dolly's cvar unlocker has not been reviewed for this server build. "
                               "Update Dolly before launching. Your gameinfo.gi was not changed.")
@@ -114,7 +130,8 @@ def _editing_gameinfo(paths: GamePaths, *, provenance: dict | None = None) -> st
         roots = _named(_parse(text), "GameInfo")
         if len(roots) != 1 or roots[0].children is None:
             raise ValueError("Invalid editing GameInfo block")
-        receipt = verify(paths, EDITING_ROOT, profile, _steam_roots())
+        receipt = verify(paths, EDITING_ROOT, profile, _steam_roots(),
+                         extra_files=published.stock_provenance_files)
         if provenance is not None:
             provenance.update(receipt)
         return text
@@ -327,7 +344,7 @@ def _already_running_message(details, selected_executable: Path) -> str:
             different_install = True
         session = ("session " + str(process.session_id)
                    if process.session_id is not None else "session unavailable")
-        window = (f'visible window "{process.window_title}"'
+        window = (f'visible window "{" ".join(str(process.window_title).split())}"'
                   if process.window_title else "no visible window")
         parts.append(f"PID {process.pid}, {path}, {session}, {window}")
     if not parts:
@@ -588,7 +605,7 @@ def _verified_unlocker() -> Path:
 def _verified_native(paths: GamePaths) -> Path:
     """Fail closed on changed game binaries or a missing native release build."""
     try:
-        report = scan_game_modules(paths.game_dir, pins=NATIVE_GAME_SHA256).camera_report()
+        report = scan_game_modules(paths.game_dir, pins=game_pins()).camera_report()
     except CompatibilityError as exc:
         raise LaunchError(str(exc)) from exc
     if report.state == UNSUPPORTED:
@@ -920,6 +937,10 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
             (target / "dolly_native.cfg").write_text(
                 f"DOLLY_NATIVE_1\n{bridge.token}\n{bridge.editor_pid}\n",
                 encoding="ascii", newline="\n")
+            # Published build definitions travel beside the deployed DLL. The
+            # bridge parses them fail-closed; an empty document leaves the
+            # bundled reviewed table active.
+            definitions.write_native(target / definitions.NATIVE_NAME)
         command = build_command(paths, overlay, port, demo, protocol, launch_options, native=native)
         metadata = {**marker, "command": command, "selected_demo": str(demo) if demo is not None else None, "port": port, "protocol": protocol, "dolly_version": DOLLY_VERSION, "overlay_dir": str(overlay), "unlocker_version": _Unlocker.VERSION, "unlocker_sha256": UNLOCKER_SHA256, "validation": "Windows game startup and selected console protocol require a local probe.", "backup_name": "original.gameinfo.gi", "patched_sha256": hashlib.sha256(patched_data).hexdigest(), "original_mode": stat.S_IMODE(paths.gameinfo.stat().st_mode), "config_state": "prepared", "editing_configuration_provenance": configuration_provenance}
         metadata["editing_gameinfo_sha256"] = hashlib.sha256(editing.encode("utf-8")).hexdigest()
@@ -928,7 +949,7 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         metadata["allow_mod_overrides"] = allow_mod_overrides
         metadata["configuration_mode"] = "isolated_editing"
         if native:
-            metadata["native_camera"] = {"abi": NATIVE_ABI, "game_sha256": NATIVE_GAME_SHA256,
+            metadata["native_camera"] = {"abi": NATIVE_ABI, "game_sha256": game_pins(),
                                          "dll_sha256": hashlib.sha256(native_dll.read_bytes()).hexdigest()}
         # Durably save the original and journal before touching the installed file.
         _atomic_write(session_dir / "original.gameinfo.gi", original_data)

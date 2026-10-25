@@ -13,7 +13,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4)
 ![License](https://img.shields.io/badge/license-MIT-2ea44f)
-[![Version](https://img.shields.io/badge/version-0.6.75--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
+[![Version](https://img.shields.io/badge/version-0.6.77--alpha-orange)](https://github.com/cravvnn/deadlock-dolly/releases/latest)
 
 ![Deadlock Dolly demo](assets/dolly-demo.gif)
 
@@ -22,7 +22,7 @@
 Capture views from a local replay, shape a camera path and play it back with
 animated framing and effects. Edit through the desktop or directly in the game.
 
-**Current source: 0.6.75-alpha · Windows x64 · DirectX 11.** The portable app
+**Current source: 0.6.77-alpha · Windows x64 · DirectX 11.** The portable app
 includes Python and Tcl/Tk; no separate installation is needed.
 
 > **Local replays only — use at your own risk.** Dolly injects a native DLL
@@ -91,7 +91,9 @@ Start with the [documentation index](docs/README.md) for all current guides.
 
 Native mode requires reviewed builds of Deadlock's `client.dll`, `engine2.dll`
 and `tier0.dll`. Dolly checks the installed modules before loading its native
-helper. A Deadlock update can require a matching Dolly update.
+helper. Reviewed build definitions are published separately from releases, so a
+client-only update can often be supported without downloading a new Dolly
+build. See [published build definitions](docs/DEFINITIONS.md).
 
 Use **Settings → Troubleshooting & recovery → Startup controls → Check game build**
 to check your installation. **Console (legacy)** opens the manual Startup controls
@@ -118,6 +120,11 @@ Every update requires **Update now**. Nothing downloads or installs before that
 click, and **Later** leaves the update available. If Dolly asks you to save work
 or close the game, do that and click **Update now** again. Settings, shots and
 external tool paths are preserved. See [updating and recovery](docs/UPDATING.md).
+
+Dolly also refreshes the small
+[published build definitions](docs/DEFINITIONS.md) file in the background when
+automatic checking is enabled. That file only adds game builds that are already
+reviewed, is cached beside `Dolly.exe`, and never installs or runs anything.
 
 ## Session files
 
@@ -177,5 +184,5 @@ separate terms in [assets/README.md](assets/README.md).
 ## Releases
 
 - [Downloads and published release notes](https://github.com/cravvnn/deadlock-dolly/releases)
-- [Current source release notes: 0.6.75-alpha](docs/RELEASE_NOTES_0.6.75-alpha.md)
+- [Current source release notes: 0.6.77-alpha](docs/RELEASE_NOTES_0.6.77-alpha.md)
 - [Complete changelog](docs/CHANGELOG.md)

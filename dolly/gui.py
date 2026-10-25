@@ -1776,14 +1776,14 @@ class DollyApp:
     def _check_game_build(self):
         """Hash the installed modules and report Native camera compatibility."""
         from dolly import compatibility
-        from dolly.launcher import LaunchError, validate_game
+        from dolly.launcher import LaunchError, game_pins, validate_game
         path = self.game_path.get().strip()
         if not path:
             self.native_status_text.set("Choose the Deadlock folder first.")
             return
         try:
             paths = validate_game(path)
-            report = compatibility.scan_game_modules(paths.game_dir)
+            report = compatibility.scan_game_modules(paths.game_dir, pins=game_pins())
         except (compatibility.CompatibilityError, LaunchError, OSError) as exc:
             self.native_status_text.set(str(exc))
             return

@@ -36,6 +36,7 @@
 #include "dolly_video.hpp"
 #include "dolly_confetti.hpp"
 #include "dolly_prop_runtime.hpp"
+#include "dolly_remote_definitions.hpp"
 // Pulled in again (as a no-op) by dolly_compat_runtime.hpp from inside the
 // anonymous namespace below. Declaring it here first keeps `#pragma once` from
 // introducing a `dolly` namespace in that anonymous namespace, which would
@@ -117,6 +118,9 @@ constexpr EngineLayout kEngine6726Layout{0x5b92b0, 0x4d7e88, 0x4e2790, 0x2d590, 
 constexpr EngineLayout kEngine6728Layout{0x5b92b0, 0x4d7e88, 0x4e2790, 0x2d590, 0x732c0,
                                          0x34ea0,  0x28b40,  0x34ee0,  0x73310};
 EngineLayout gEngineLayout = kLegacyEngineLayout;
+// Movie-audio capture stays reviewed per exact engine identity. A published
+// definitions entry cannot widen it.
+bool gReviewedMovieAudioEngine = false;
 // Identical across every reviewed client build; the exact-hash path re-checks it.
 constexpr unsigned char kSetupPrologue[] = {
     0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
@@ -404,6 +408,19 @@ static bool module_matches(HMODULE module, const char* expected, std::uint32_t i
     return module && hash_file(module_path(module)) == expected &&
            module_image_size(module) == image_size;
 }
+// Definitions published on the repository's default branch and cached by the
+// editor. Loaded once in the worker; everything else only reads it. Declared
+// before the behaviour headers below because they consult it during setup.
+dolly_remote::Definitions gRemoteDefinitions;
+
+static void load_remote_definitions() {
+    dolly_remote::Definitions parsed;
+    if (!dolly_remote::load(beside_module(L"dolly_definitions.txt").c_str(), parsed))
+        return;
+    if (parsed.abi != kBridgeAbi)
+        return;
+    gRemoteDefinitions = parsed;
+}
 #include "dolly_compat_runtime.hpp"
 #include "native_camera_view.hpp"
 camera_view::Cache gCameraCache;
@@ -411,6 +428,57 @@ camera_view::Cache gCameraCache;
 #include "native_relief_win.hpp"
 #include "native_gameplay_effects_win.hpp"
 #include "dolly_attach_runtime.hpp"
+
+// Reviewed engine2 identities select one of the compiled replay layouts. A
+// published definitions entry may add another accepted engine identity that
+// reuses a named layout, but it can never override a compiled one.
+static bool resolve_engine_layout(HMODULE engine, EngineLayout& layout) {
+    const bool engine6726 = module_matches(engine, kBuild6726EngineHash, 0x906000);
+    const bool engine6728 = module_matches(engine, kBuild6728EngineHash, 0x906000);
+    const bool engine6739 = module_matches(engine, kBuild6739EngineHash, 0x906000);
+    const bool engine6753 = module_matches(engine, kBuild6753EngineHash, 0x906000);
+    const bool engine6757 = module_matches(engine, kBuild6757EngineHash, 0x906000);
+    const bool engine6779 = module_matches(engine, kBuild6779EngineHash, 0x906000);
+    const bool engine6782 = module_matches(engine, kBuild6782EngineHash, 0x906000);
+    const bool engine6793 = module_matches(engine, kBuild6793EngineHash, 0x906000);
+    const bool engine6801 = module_matches(engine, kBuild6801EngineHash, 0x906000);
+    const bool engine6769 = module_matches(engine, kBuild6769EngineHash, 0x906000);
+    const bool september_engine = module_matches(engine, kSeptemberEngineHash, 0x906000);
+    if (engine6801 || engine6793 || engine6782 || engine6779 || engine6769 || engine6757 ||
+        engine6753 || engine6739 || engine6728) {
+        layout = kEngine6728Layout;
+        gReviewedMovieAudioEngine = engine6801 || engine6793;
+        return true;
+    }
+    if (engine6726) {
+        layout = kEngine6726Layout;
+        return true;
+    }
+    if (september_engine) {
+        layout = kSeptemberEngineLayout;
+        return true;
+    }
+    if (module_matches(engine, kEngineHash, 0x969000) ||
+        module_matches(engine, kUpdatedEngineHash, 0x969000)) {
+        layout = kLegacyEngineLayout;
+        return true;
+    }
+    if (!gRemoteDefinitions.loaded)
+        return false;
+    for (std::size_t i = 0; i < gRemoteDefinitions.engine_count; ++i) {
+        const auto& profile = gRemoteDefinitions.engines[i];
+        if (!module_matches(engine, profile.sha256, profile.image_size))
+            continue;
+        const auto* found = dolly_remote::detail::engine_layout(gRemoteDefinitions, profile.layout);
+        if (!found)
+            return false;
+        layout = EngineLayout{found->demo_global, found->demo_table, found->engine_table,
+                              found->playing,    found->active,     found->paused,
+                              found->seeking,    found->tick,       found->filename};
+        return true;
+    }
+    return false;
+}
 
 // Attach preview state resolved by the worker from the published selection.
 // The render callback only reads this immutable snapshot: it never walks
@@ -1425,6 +1493,9 @@ static DWORD WINAPI worker(void*) {
             return 0;
         }
         startup_status(State::Starting, 0, "Waiting for Deadlock client and engine modules.");
+        // Published build definitions, cached beside this DLL by the editor.
+        // A missing or malformed file simply leaves the bundled table active.
+        load_remote_definitions();
         double began = now_seconds();
         HMODULE client = nullptr, engine = nullptr;
         while (now_seconds() - began < 120 && WaitForSingleObject(gEditor, 0) == WAIT_TIMEOUT) {
@@ -1434,20 +1505,7 @@ static DWORD WINAPI worker(void*) {
                 break;
             Sleep(20);
         }
-        const bool engine6726 = module_matches(engine, kBuild6726EngineHash, 0x906000);
-        const bool engine6728 = module_matches(engine, kBuild6728EngineHash, 0x906000);
-        const bool engine6739 = module_matches(engine, kBuild6739EngineHash, 0x906000);
-        const bool engine6753 = module_matches(engine, kBuild6753EngineHash, 0x906000);
-        const bool engine6757 = module_matches(engine, kBuild6757EngineHash, 0x906000);
-        const bool engine6779 = module_matches(engine, kBuild6779EngineHash, 0x906000);
-        const bool engine6782 = module_matches(engine, kBuild6782EngineHash, 0x906000);
-        const bool engine6793 = module_matches(engine, kBuild6793EngineHash, 0x906000);
-        const bool engine6801 = module_matches(engine, kBuild6801EngineHash, 0x906000);
-        const bool engine6769 = module_matches(engine, kBuild6769EngineHash, 0x906000);
-        const bool september_engine = module_matches(engine, kSeptemberEngineHash, 0x906000);
-        if (!engine6801 && !engine6793 && !engine6782 && !engine6779 && !engine6769 && !engine6757 && !engine6753 && !engine6739 && !engine6728 && !engine6726 && !september_engine &&
-            !module_matches(engine, kEngineHash, 0x969000) &&
-            !module_matches(engine, kUpdatedEngineHash, 0x969000)) {
+        if (!resolve_engine_layout(engine, gEngineLayout)) {
             startup_status(
                 State::Unsupported, 21,
                 "The installed engine2.dll does not match this native build. Use Console camera and provide the updated DLL.");
@@ -1455,15 +1513,7 @@ static DWORD WINAPI worker(void*) {
         }
         gClient = reinterpret_cast<std::uintptr_t>(client);
         gEngine = reinterpret_cast<std::uintptr_t>(engine);
-        gEngineLayout = (engine6801 || engine6793 || engine6782 || engine6779 || engine6769) ? kEngine6728Layout
-                        : engine6757       ? kEngine6728Layout
-                        : engine6753       ? kEngine6728Layout
-                        : engine6739       ? kEngine6728Layout
-                        : engine6728       ? kEngine6728Layout
-                        : engine6726       ? kEngine6726Layout
-                        : september_engine ? kSeptemberEngineLayout
-                                           : kLegacyEngineLayout;
-        gCompat = resolve_client_profile(client, true);
+        gCompat = resolve_client_profile(client, true, &gRemoteDefinitions);
         if (!gCompat.resolved) {
             startup_status(
                 State::Unsupported, 21,
@@ -1571,7 +1621,7 @@ static DWORD WINAPI worker(void*) {
         // The movie-WAV owner, virtual methods and host_framerate registration
         // are reviewed for these exact engines. The hook only changes the movie
         // clock while host_framerate is positive; real-time recording is unchanged.
-        if (engine6793 || engine6801)
+        if (gReviewedMovieAudioEngine)
             movie_audio_install(engine);
         // Hook and original trampoline remain resident until process exit. Losing
         // the editor only releases ownership, avoiding code-unload races in a view.
