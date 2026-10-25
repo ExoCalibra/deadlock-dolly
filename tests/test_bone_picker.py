@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from dolly import bone_picker as picker, editor_wire as wire
+from dolly import bone_picker as picker, editor_wire as wire, gui
 from dolly.native_effects import model_token
 from dolly.path import AttachKey, Keyframe, Project
 
@@ -243,6 +243,46 @@ class BonePickerTests(unittest.TestCase):
             project.keyframes[0].attach.bone = name
             with self.subTest(name=name), self.assertRaises(ValueError):
                 project.validate()
+
+
+class DesktopBonePickerCallTests(unittest.TestCase):
+    """The desktop entry points must satisfy the shared keyword-only contract."""
+
+    def fake_app(self, keyframes=()):
+        return SimpleNamespace(
+            project=Project(keyframes=list(keyframes)),
+            _attach_players={"Player": {"handle": 11, "entity_index": 11,
+                                        "model_path": "models/heroes/astro/astro.vmdl"}},
+            attach_player=SimpleNamespace(get=lambda: "Player"),
+            _guard=lambda _title, function: function(),
+            _publish_editor=Mock(),
+        )
+
+    @patch("dolly.bone_picker.start_attached_view")
+    def test_first_bone_view_passes_publish(self, started):
+        app = self.fake_app()
+        gui.DollyApp._open_bone_picker(app)
+        started.assert_called_once()
+        self.assertIs(started.call_args.args[0], app)
+        self.assertIs(started.call_args.kwargs["publish"], app._publish_editor)
+
+    @patch("dolly.bone_picker.open_picker")
+    def test_existing_bone_view_passes_publish(self, opened):
+        app = self.fake_app([copy.deepcopy(Keyframe(0, 1, 2, 3, 4, 5, 6))])
+        gui.DollyApp._open_bone_picker(app)
+        opened.assert_called_once_with(app, publish=app._publish_editor)
+
+    @patch("dolly.bone_picker.close_picker")
+    def test_cancel_passes_publish(self, closed):
+        app = self.fake_app()
+        gui.DollyApp._cancel_bone_picker(app)
+        closed.assert_called_once_with(app, publish=app._publish_editor)
+
+    @patch("dolly.gui.editor_session.configure")
+    def test_desktop_publish_updates_native_editor(self, configure):
+        app = SimpleNamespace()
+        gui.DollyApp._publish_editor(app)
+        configure.assert_called_once_with(app)
 
 
 if __name__ == "__main__":

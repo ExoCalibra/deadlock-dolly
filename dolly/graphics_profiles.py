@@ -381,12 +381,20 @@ def audit_runtime(session: Path, query) -> dict | None:
         return None
     names = {key.removeprefix("setting."): value for key, value in values.items() if key.startswith("setting.r_")}
     report = {"profile": profile_name, "observed": {}, "mismatches": [], "unreadable": [],
+              "not_echoed": [],
               "file_only": sorted(key for key in values if not key.startswith("setting.r_")),
               "visual_verified": False}
     for name, value in names.items():
         # Keep each observation tied to its own console request. A partial
         # multi-command reply must not hide otherwise readable trailing values.
         output = query(name)
+        if not str(output or "").strip():
+            # Deadlock hides some render CVARs from the console echo. The
+            # command is accepted but prints nothing, so there is no value to
+            # compare. That is not a mismatch and not a broken profile; record
+            # it separately instead of warning on every session.
+            report["not_echoed"].append(name)
+            continue
         try:
             actual = read_cvar_value(name, output)
         except ValueError:

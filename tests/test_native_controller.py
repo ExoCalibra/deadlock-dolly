@@ -201,6 +201,21 @@ class NativeControllerTests(unittest.TestCase):
         self.assertEqual(self.controller._playback_details["smoothing"]["kind"], "native_view_time")
         self.assertEqual(self.controller._playback_details["smoothing"]["nominal_delay_seconds"], 0)
 
+    def test_one_transient_console_timeout_does_not_end_the_shot(self):
+        from dolly.console import ConsoleTimeout
+        self.prepare()
+        original = self.controller._require_demo
+        misses = []
+        def flaky(*args, **kwargs):
+            if not misses:
+                misses.append(True)
+                raise ConsoleTimeout("the game was busy replying")
+            return original(*args, **kwargs)
+        self.controller._require_demo = flaky
+        self.run_native()
+        self.assertTrue(misses)
+        self.assertIn("Native shot finished", self.controller.status()["message"])
+
     def test_active_native_path_never_streams_pose_or_aspect_console_commands(self):
         self.prepare()
         self.run_native()

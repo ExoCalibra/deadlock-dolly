@@ -70,6 +70,7 @@ from ._runtime_generated import Preload as _profile
 
 CLIENT_SHA256 = _profile.CLIENT_SHA256
 RESOURCE_SHA256 = _profile.RESOURCE_SHA256
+RESOURCE_RENDERER_SHA256 = _profile.RESOURCE_RENDERER_SHA256
 MANAGER = _profile.MANAGER
 MANAGER_VTABLE = _profile.MANAGER_VTABLE
 RESOURCE_GLOBAL = _profile.RESOURCE_GLOBAL
@@ -243,9 +244,10 @@ class PreloadMonitor:
             raise PreloadError('Preload verification requires the Dolly-owned development session.')
         executable = Path(command[0]).resolve()
         game = executable.parents[2]
-        paths = (game/'citadel/bin/win64/client.dll', game/'bin/win64/resourcesystem.dll')
+        paths = (game/'citadel/bin/win64/client.dll', game/'bin/win64/resourcesystem.dll',
+                 game/'bin/win64/rendersystemdx11.dll')
         images = []
-        for path, expected in zip(paths, (CLIENT_SHA256, RESOURCE_SHA256)):
+        for path, expected in zip(paths, (CLIENT_SHA256, RESOURCE_SHA256, RESOURCE_RENDERER_SHA256)):
             try:
                 data, observed = game_file(path)
             except PreloadError as exc:
@@ -263,14 +265,15 @@ class PreloadMonitor:
                 if not module or module[1] != path.resolve():
                     raise PreloadError('Loaded preload module path differs from the reviewed installation.')
                 bases.append(module[0])
-            self.base, self.resource_base = bases
+            self.base, self.resource_base, self.renderer_base = bases
             for base, data, spans in (
                     (self.base, images[0], CLIENT_CODE_SPANS),
-                    (self.resource_base, images[1], ((RESOURCE_QUERY, 13),))):
+                    (self.renderer_base, images[2], ((RESOURCE_QUERY, 13),))):
                 for rva, length in spans:
                     if memory.read(base+rva, length) != _image_bytes(data, rva, length):
                         raise PreloadError('Live preload code differs from the reviewed game build.')
             self.identity = {'client_sha256': CLIENT_SHA256, 'resource_sha256': RESOURCE_SHA256,
+                             'renderer_sha256': RESOURCE_RENDERER_SHA256,
                              'method': 'reviewed_dashboard_preload', 'pid': session.pid}
             self.intro_sent = False
         except BaseException:
@@ -318,8 +321,8 @@ class PreloadMonitor:
             vtable = memory.pointer(system)
         except PreloadError:
             return {'coherent': False}
-        if (vtable != self.resource_base+RESOURCE_VTABLE
-                or memory.pointer(vtable+_profile.RESOURCE_QUERY_SLOT) != self.resource_base+RESOURCE_QUERY):
+        if (vtable != self.renderer_base+RESOURCE_VTABLE
+                or memory.pointer(vtable+_profile.RESOURCE_QUERY_SLOT) != self.renderer_base+RESOURCE_QUERY):
             raise _ReviewedBuildMismatch('Resource completion query differs from the reviewed build.')
         resource_done = memory.read(resource+_profile.RESOURCE_DONE, 1)[0] if resource else 1
         if resource_done not in (0, 1) or raw != memory.read(self.base+MANAGER, _profile.MANAGER_SIZE):

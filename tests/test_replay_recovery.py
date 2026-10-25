@@ -227,6 +227,14 @@ class ReplayRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.console.sent), 1)
         self.assertEqual(self.pause_ticks, [])
 
+    def test_slow_shot_reload_is_not_timed_out_while_the_replay_is_still_loading(self):
+        # 400 polls of tick 0 is about 100 s of a replay that is still opening.
+        # That is a normal load on a slower machine; it used to abort at 45 s.
+        self.initial_ticks = iter([0] * 400 + [2])
+        result = self.recover()
+        self.assertGreaterEqual(result['tick'], 2)
+        self.assertEqual(self.controller._replay_recovery['stage'], 'ready')
+
     def test_initial_full_packet_timeout_never_pauses_or_retries(self):
         self.initial_ticks = iter(())
         self.after_load = lambda: setattr(self.console, 'tick', 0)
@@ -234,6 +242,7 @@ class ReplayRecoveryTests(unittest.TestCase):
             self.recover()
         self.assertEqual(len(self.console.sent), 1)
         self.assertEqual(self.pause_ticks, [])
+        self.assertGreaterEqual(self.clock.now, 119)
 
     def test_transient_console_timeout_during_recovery_is_polled_not_fatal(self):
         original = self.controller._request

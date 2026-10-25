@@ -7,8 +7,9 @@ import unittest
 from unittest.mock import patch
 
 from dolly.console import (ConsoleClient, ConsoleError, ConsoleTimeout,
-                           VConsoleDecoder, encode_command, error_text,
-                           parse_demo_info, parse_demo_tick, parse_game_build)
+                           VConsoleDecoder, _ConsoleTextDecoder, _decode_console_text,
+                           encode_command, error_text, parse_demo_info, parse_demo_tick,
+                           parse_game_build)
 
 
 def print_packet(text):
@@ -432,6 +433,26 @@ class ConsoleTests(unittest.TestCase):
         for patterns in ((), ["x"], ("",), (3,), ("[",), ("x",) * 9, ("x" * 513,)):
             with self.subTest(patterns=patterns), self.assertRaises(ValueError):
                 client.request("cvar_unhide", completion_patterns=patterns)
+
+
+class ConsoleEncodingTests(unittest.TestCase):
+    def test_non_utf8_console_text_uses_the_active_ansi_codepage(self):
+        expected = ('USRLOCAL             "C:\\Users\\alexz\\OneDrive\\'
+                    '\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b'
+                    '\\DeadlockDolly\\logs\\20261022_092343\\editing-config\\"')
+        raw = expected.encode("cp1251")
+        with patch("dolly.console._console_fallback_encoding", return_value="cp1251"):
+            self.assertEqual(_decode_console_text(raw), expected)
+            decoder = _ConsoleTextDecoder()
+            split = len(raw) // 2
+            self.assertEqual(decoder.feed(raw[:split]) + decoder.feed(raw[split:]), expected)
+
+    def test_split_utf8_sequence_survives_the_incremental_decoder(self):
+        expected = "h\u00e9llo \u0440\u0430\u0431\u043e"
+        raw = expected.encode("utf-8")
+        decoder = _ConsoleTextDecoder()
+        pieces = [decoder.feed(raw[index:index + 1]) for index in range(len(raw))]
+        self.assertEqual("".join(pieces), expected)
 
 
 class ParsingTests(unittest.TestCase):

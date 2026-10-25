@@ -13,7 +13,8 @@ class PreloadTests(unittest.TestCase):
                 scheduled=1, job_complete=1):
         monitor = preload.PreloadMonitor.__new__(preload.PreloadMonitor)
         monitor.session = SimpleNamespace(running=True)
-        monitor.base, monitor.resource_base = 0x180000000, 0x190000000
+        monitor.base, monitor.resource_base, monitor.renderer_base = (
+            0x180000000, 0x190000000, 0x1a000000)
         raw = bytearray(64)
         struct.pack_into('<Q', raw, 0, monitor.base+preload.MANAGER_VTABLE)
         struct.pack_into('<ii', raw, 0x24, completed, total)
@@ -23,8 +24,8 @@ class PreloadTests(unittest.TestCase):
         blocks = {monitor.base+preload.MANAGER: bytes(raw), resource+0x44: bytes([done])}
         pointers = {monitor.base+preload.RESOURCE_GLOBAL: 0x400000,
                     monitor.base+preload.INTRO_GLOBAL: 0,
-                    0x400000: monitor.resource_base+preload.RESOURCE_VTABLE,
-                    monitor.resource_base+preload.RESOURCE_VTABLE+0xc0: monitor.resource_base+preload.RESOURCE_QUERY}
+                    0x400000: monitor.renderer_base+preload.RESOURCE_VTABLE,
+                    monitor.renderer_base+preload.RESOURCE_VTABLE+0xc0: monitor.renderer_base+preload.RESOURCE_QUERY}
         monitor.memory = Mock()
         monitor.intro_sent = False
         monitor.memory.read.side_effect = lambda address, size: blocks[address][:size]
@@ -126,7 +127,7 @@ class PreloadTests(unittest.TestCase):
 
     def test_changed_resource_query_fails_closed(self):
         m, _, pointers = self.monitor()
-        pointers[m.resource_base+preload.RESOURCE_VTABLE+0xc0] += 1
+        pointers[m.renderer_base+preload.RESOURCE_VTABLE+0xc0] += 1
         with self.assertRaisesRegex(preload.PreloadError, 'query differs'):
             m.sample()
 

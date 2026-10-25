@@ -25,6 +25,13 @@ from .display import client_size
 ACTIVE_STATES = frozenset(("starting", "recording", "finalizing"))
 TERMINAL_STATES = frozenset(("idle", "completed", "cancelled", "failed"))
 BITRATE_PRESETS = {"10 Mbps": 10_000_000, "20 Mbps": 20_000_000, "40 Mbps": 40_000_000}
+# Output containers offered by the Export tab. The lossless codec and the
+# built-in Media Foundation writer each force their own container.
+CONTAINER_CHOICES = (("mp4", "MP4 video"), ("mkv", "Matroska video (MKV)"),
+                     ("mov", "QuickTime movie (MOV)"))
+CONTAINER_LABEL_TO_KEY = {label: key for key, label in CONTAINER_CHOICES}
+CONTAINER_KEYS = frozenset(key for key, _label in CONTAINER_CHOICES)
+DEFAULT_CONTAINER = "mp4"
 
 # key -> (label, native encoder, native codec, requires ffmpeg). The numeric
 # encoder/codec values match dolly::video::Encoder/Codec in dolly_video.hpp.
@@ -83,6 +90,44 @@ def bundled_ffmpeg_path() -> "Path | None":
     return None
 
 
+_ENCODER_LIST_CACHE: dict[tuple[str, int], "frozenset[str] | None"] = {}
+
+
+def ffmpeg_encoder_names(ffmpeg: "Path | None") -> "frozenset[str] | None":
+    """Read the encoder names a configured FFmpeg actually provides.
+
+    Returns None when the list cannot be read; callers must not treat that as
+    "the encoder is missing", because the native writer may still handle it.
+    """
+    if ffmpeg is None:
+        return None
+    try:
+        path = Path(ffmpeg)
+        key = (str(path), path.stat().st_mtime_ns)
+    except (OSError, TypeError, ValueError):
+        return None
+    if key in _ENCODER_LIST_CACHE:
+        return _ENCODER_LIST_CACHE[key]
+    names: "set[str] | None" = None
+    try:
+        result = subprocess.run(
+            [str(path), "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        names = None
+    else:
+        if result.returncode == 0:
+            names = set()
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if len(fields) >= 2 and fields[0].startswith("V"):
+                    names.add(fields[1])
+    value = frozenset(names) if names is not None else None
+    _ENCODER_LIST_CACHE[key] = value
+    return value
+
+
 def resolve_backend(options: "VideoOptions") -> tuple[int, int]:
     """Choose the native (encoder, codec) pair for validated options.
 
@@ -99,6 +144,24 @@ def resolve_backend(options: "VideoOptions") -> tuple[int, int]:
     if needs_ffmpeg and not options.ffmpeg_path:
         return 0, 0
     return encoder, codec_id
+
+
+def resolve_container(codec_key: str, container: str | None = None, *,
+                      ffmpeg_available: bool = True) -> str:
+    """The container actually used for a codec, never an invalid combination."""
+    _label, _encoder, codec_id, _needs = CODEC_BY_KEY.get(codec_key, CODEC_BY_KEY[DEFAULT_CODEC_KEY])
+    if codec_id == LOSSLESS_CODEC_ID:
+        return "mkv"
+    if codec_key == "builtin" or (codec_key == "auto" and not ffmpeg_available):
+        # The built-in Media Foundation writer only creates MP4 files.
+        return "mp4"
+    return container if container in CONTAINER_KEYS else DEFAULT_CONTAINER
+
+
+def video_suffix(codec_key: str, container: str | None = None, *,
+                 ffmpeg_available: bool = True) -> str:
+    """Container suffix for a codec and optional chosen container."""
+    return "." + resolve_container(codec_key, container, ffmpeg_available=ffmpeg_available)
 
 
 def default_video_path(shot_name: str, directory: Path | None = None, *, now: datetime | None = None) -> Path:
@@ -157,6 +220,9 @@ class VideoOptions:
     max_frames: int = 0
     players_scratch: "Path | None" = None
     camera_track: bool = False
+    # Output container: "mp4", "mkv" or "mov". Empty keeps the historical
+    # codec-derived choice; validated() records the resolved container.
+    container: str = ""
 
     def validated(self) -> VideoOptions:
         if type(self.camera_track) is not bool:
@@ -178,7 +244,9 @@ class VideoOptions:
         if not raw.strip() or any(ord(char) < 32 for char in raw):
             raise ValueError("Choose an output file without control characters.")
         path = Path(self.path).expanduser().absolute()
-        suffix = ".mkv" if codec_id == LOSSLESS_CODEC_ID else ".mp4"
+        ffmpeg = resolve_ffmpeg(self.ffmpeg_path)
+        container = resolve_container(self.codec, self.container, ffmpeg_available=bool(ffmpeg))
+        suffix = "." + container
         if path.suffix.lower() != suffix:
             raise ValueError(f"The output filename must end in {suffix}.")
         if not path.parent.is_dir() and not ((self.depth or self.layers)
@@ -219,7 +287,6 @@ class VideoOptions:
         speed = float(self.speed)
         if not 0.05 <= speed <= 4:
             raise ValueError("Export speed must be between 0.05 and 4.")
-        ffmpeg = resolve_ffmpeg(self.ffmpeg_path)
         if needs_ffmpeg and not ffmpeg:
             raise ValueError("Select an ffmpeg.exe for the chosen encoder.")
         # The native writer also creates the file exclusively. This early
@@ -231,7 +298,29 @@ class VideoOptions:
         result = VideoOptions(path, self.fps, self.bitrate, self.codec, self.quality, self.preset,
                               ffmpeg, self.fixed_step, speed, self.depth, self.depth_exr,
                               self.layers, self.white_clear, self.shot_only,
-                              self.full_resolution or self.depth, self.bundle_audio, self.max_frames, scratch, self.camera_track)
+                              self.full_resolution or self.depth, self.bundle_audio, self.max_frames, scratch, self.camera_track,
+                              container=container)
+        if ffmpeg is not None:
+            # Reject an encoder the configured FFmpeg does not provide before
+            # the replay is reloaded and the native recorder is armed. The
+            # bundled LGPL build intentionally omits libx264/libx265, but the
+            # encoder list is still offered; failing here leaves the game
+            # untouched instead of stopping the FFmpeg pipe on frame one.
+            resolved_key = None
+            if self.codec == "auto":
+                backend_encoder, _backend_codec = resolve_backend(result)
+                if backend_encoder == 1:
+                    resolved_key, _label = encoder_select.auto_encoder()
+            elif CODEC_BY_KEY[self.codec][3]:
+                resolved_key = self.codec
+            if resolved_key is not None:
+                encoder_name = "ffv1" if resolved_key == "lossless" else resolved_key
+                available = ffmpeg_encoder_names(ffmpeg)
+                if available is not None and encoder_name not in available:
+                    raise ValueError(
+                        f"The selected encoder '{encoder_name}' is not available in the "
+                        "configured FFmpeg build. Choose Auto, a hardware encoder, or the "
+                        "built-in writer, or point Dolly at an FFmpeg build that includes it.")
         if self.depth:
             encoder, _codec_id = resolve_backend(result)
             if encoder != 1:

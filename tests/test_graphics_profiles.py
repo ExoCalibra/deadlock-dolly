@@ -403,6 +403,17 @@ class LegacyGraphicsRecoveryTests(unittest.TestCase):
         self.assertIn("warning", report)
         self.assertEqual(self.target.read_bytes(), RECORDING)
 
+    def test_hidden_render_cvar_with_no_echo_does_not_warn(self):
+        session = self.launch()
+        # Deadlock's hidden render CVARs accept the command but print nothing.
+        query = MagicMock(return_value='')
+        report = gp.audit_runtime(session.session_dir, query)
+        self.assertEqual(set(report["not_echoed"]), {"r_citadel_shadow_quality", "r_effects_bloom"})
+        self.assertEqual(report["mismatches"], [])
+        self.assertEqual(report["unreadable"], [])
+        self.assertNotIn("warning", report)
+        self.assertEqual(self.target.read_bytes(), RECORDING)
+
     def test_missing_video_file_never_falls_back_to_install_cfg(self):
         self.target.unlink()
         other = self.paths.citadel_dir / "cfg/video.txt"

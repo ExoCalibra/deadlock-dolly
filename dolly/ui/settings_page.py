@@ -52,6 +52,7 @@ class SettingsState:
     reshade_status_text: tk.Variable
     show_log: tk.Variable
     auto_updates_initial: bool
+    allow_mod_overrides_initial: bool
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class SettingsActions:
     open_launch_options: Callable[..., object]
     recover_game_config: Callable[..., object]
     save_layout_paths: Callable[..., object]
+    save_mod_preference: Callable[..., object]
     save_update_preference: Callable[..., object]
     select_reshade_runtime: Callable[..., object]
     toggle_log: Callable[..., object]
@@ -98,6 +100,21 @@ class SettingsPage:
         field(game, "Replay folder", state.replay_folder)
         actions(game, (("Browse folder...", commands.browse_replay_folder), ("Save paths", commands.save_layout_paths)), 2)
         actions(game, (("Display launch options...", commands.open_launch_options),), 1)
+        mods = card(body, "Mods")
+        self.allow_mod_overrides = tk.BooleanVar(value=state.allow_mod_overrides_initial)
+        ttk.Checkbutton(
+            mods, style="Card.TCheckbutton",
+            text="Load mixed mod packs (skins with UI/shader overrides)",
+            variable=self.allow_mod_overrides, command=commands.save_mod_preference
+        ).pack(anchor="w", pady=(0, GAP))
+        ttk.Label(
+            mods,
+            text="Off: Dolly loads only skin, map, model, audio and animation content. "
+                 "On: a skin pack that also contains Panorama, shaders, post-processing "
+                 "or startup overrides is loaded too. Those extra files can change what "
+                 "the camera captures or override Dolly's interface hiding.",
+            wraplength=760, style="CardMuted.TLabel",
+        ).pack(anchor="w", pady=(0, GAP))
         from ..graphics_profiles_ui import GraphicsProfiles
         self.graphics_profiles = GraphicsProfiles(card(body, "Replay graphics profiles"), root=root, on_error=on_error)
         self.reshade_card = shade = card(body, "ReShade")

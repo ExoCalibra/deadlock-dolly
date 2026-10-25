@@ -207,6 +207,20 @@ inline bool locate_entity_system(HMODULE client, std::uintptr_t& out) noexcept {
         !read_value(base + dos.e_lfanew, nt) || nt.Signature != IMAGE_NT_SIGNATURE)
         return false;
     const std::uintptr_t size = nt.OptionalHeader.SizeOfImage;
+    // The reviewed FollowTarget entity-list global is the same current
+    // CGameEntitySystem object the follow resolver uses. Prefer it, with the
+    // vtable check, before the legacy build-specific locator search.
+    std::uintptr_t reviewed_system = 0;
+    if (read_value(base + dolly::reviewed::FollowTarget::ENTITY_LIST, reviewed_system) &&
+        reviewed_system) {
+        // This is the exact global the reviewed Follow resolver reads. Its
+        // object is not guaranteed to expose CGameEntitySystem's primary
+        // vtable at offset zero, so validating that vtable here rejected the
+        // same system Follow was already using. Trust the reviewed global;
+        // the legacy locator below remains the fallback when it is null.
+        out = reviewed_system;
+        return true;
+    }
     const std::uintptr_t vtable = compat_detail::locate_vtable(client, "CGameEntitySystem");
     if (!vtable)
         return false;
@@ -268,8 +282,49 @@ inline bool locate_entity_system(HMODULE client, std::uintptr_t& out) noexcept {
     return false;
 }
 
+inline bool scan_identity_players(std::uintptr_t entity_system, std::vector<PlayerEntity>& out) noexcept {
+    // The linked-list heads moved/renamed on 6817. Walk the regular identity
+    // chunks instead, accepting only reviewed player/clone pawn instances.
+    const auto base = reinterpret_cast<std::uintptr_t>(configured_client);
+    if (!base)
+        return false;
+    const std::uintptr_t player_vtable = base + dolly::reviewed::FollowTarget::PLAYER_PAWN_VTABLE;
+    const std::uintptr_t clone_vtable =
+        base + dolly::reviewed::FollowTarget::FAMILIAR_CLONE_PAWN_VTABLE;
+    constexpr unsigned chunk_count = 0x40;   // 32,768 identities, enough for 15-bit handles
+    constexpr unsigned chunk_slots = 512;
+    for (unsigned chunk_index = 0; chunk_index < chunk_count; ++chunk_index) {
+        std::uintptr_t chunk = 0;
+        if (!read_value(entity_system + 8 * chunk_index, chunk) || !chunk)
+            continue;
+        for (unsigned slot = 0; slot < chunk_slots; ++slot) {
+            const std::uintptr_t identity =
+                chunk + dolly::reviewed::FollowTarget::IDENTITY_STRIDE * slot;
+            std::uintptr_t instance = 0, backlink = 0, vtable = 0;
+            if (!read_value(identity, instance) || !instance ||
+                !read_value(instance + dolly::reviewed::FollowTarget::ENTITY_IDENTITY, backlink) ||
+                backlink != identity || !read_value(instance, vtable) ||
+                (vtable != player_vtable && vtable != clone_vtable))
+                continue;
+            PlayerEntity player;
+            player.instance = instance;
+            player.identity = identity;
+            read_value(identity + dolly::reviewed::FollowTarget::IDENTITY_HANDLE, player.handle);
+            out.push_back(player);
+            if (out.size() >= 64)
+                return true;
+        }
+    }
+    return !out.empty();
+}
+
 inline bool walk_players(std::uintptr_t entity_system, std::vector<PlayerEntity>& out) noexcept {
     out.clear();
+    // The 6817/6819 linked-list heads can contain controller identities named
+    // "player" that are not attachable pawns. Prefer the reviewed pawn-vtable
+    // chunk scan, then retain the legacy list walk only as a fallback.
+    if (scan_identity_players(entity_system, out))
+        return true;
     std::vector<std::uintptr_t> seen;
     for (unsigned head : {0x210u, 0x230u}) {
         std::uintptr_t identity = 0;

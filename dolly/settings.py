@@ -22,7 +22,7 @@ from .editor_actions import (
 )
 from .replays import parse_launch_options
 
-SETTINGS_VERSION = 8
+SETTINGS_VERSION = 9
 DEFAULT_RESHADE_BINDING = EditorBinding("F11")
 MAX_SETTINGS_BYTES = 64 * 1024
 
@@ -47,6 +47,7 @@ class AppSettings:
     auto_updates: bool = True
     framing_grid_enabled: bool = False
     pause_after_capture: bool = False
+    allow_mod_overrides: bool = False
     migration_warnings: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -58,6 +59,8 @@ class AppSettings:
             raise ValueError("framing_grid_enabled must be a boolean.")
         if type(self.pause_after_capture) is not bool:
             raise ValueError("pause_after_capture must be a boolean.")
+        if type(self.allow_mod_overrides) is not bool:
+            raise ValueError("allow_mod_overrides must be a boolean.")
         if not isinstance(self.capture_binding, CaptureBinding):
             raise ValueError("capture_binding must be a CaptureBinding.")
         # Validate here as well as at the JSON boundary before saving anything.
@@ -160,7 +163,7 @@ def _decode_settings(data: bytes) -> AppSettings:
         raise ValueError("Dolly settings are not valid UTF-8 JSON.") from exc
     if not isinstance(raw, dict) or "version" not in raw:
         raise ValueError("Dolly settings must contain a version and preferences.")
-    if type(raw["version"]) is not int or raw["version"] not in (1, 2, 3, 4, 5, 6, 7, SETTINGS_VERSION):
+    if type(raw["version"]) is not int or raw["version"] not in (1, 2, 3, 4, 5, 6, 7, 8, SETTINGS_VERSION):
         raise ValueError(f"Unsupported Dolly settings version: {raw['version']!r}.")
     if raw["version"] == 1:
         if set(raw) != {"version", "capture_binding"}:
@@ -192,6 +195,8 @@ def _decode_settings(data: bytes) -> AppSettings:
         fields.add("export_folder")
     if raw["version"] >= 8:
         fields.add("pause_after_capture")
+    if raw["version"] >= 9:
+        fields.add("allow_mod_overrides")
     if set(raw) != fields | {"version"}:
         raise ValueError(f"Version {raw['version']} Dolly settings have missing or unknown preference fields.")
     values = {name: raw[name] for name in fields}
@@ -267,6 +272,7 @@ def save_settings(
         "auto_updates": settings.auto_updates,
         "framing_grid_enabled": settings.framing_grid_enabled,
         "pause_after_capture": settings.pause_after_capture,
+        "allow_mod_overrides": settings.allow_mod_overrides,
         "capture_binding": settings.capture_binding.to_dict(),
         "game_path": settings.game_path,
         "replay_folder": settings.replay_folder,

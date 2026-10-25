@@ -48,7 +48,7 @@ SETGLOBALS_TICK = bytes.fromhex("c7 05")  # mov dword [rip+disp], 0x3c888889
 SETGLOBALS_TICK_IMM = struct.pack("<I", 0x3C888889)
 SETGLOBALS_STORE = bytes.fromhex("48 89 15")  # mov [rip+disp], rdx
 # aspect source: mov rcx,[rip+..]; mov rax,[rcx]; call qword [rax+0x2b0]
-ASPECT_SOURCE = bytes.fromhex("48 8b 0d") + b"\x00" * 4 + bytes.fromhex("48 8b 01 ff 90 b0 02 00 00")
+ASPECT_SOURCE = bytes.fromhex("48 8b 0d") + b"\x00" * 4 + bytes.fromhex("48 8b 01 ff 90 c0 02 00 00")
 
 
 class ProfileError(RuntimeError):
@@ -307,7 +307,14 @@ def build_profile(client: Image, engine: Image, tier0: Image, previous: dict, la
             "image": client,
         }
     setup_rva = locate_setup(client)
-    caller_rva = locate_caller(client, setup_rva)
+    try:
+        caller_rva = locate_caller(client, setup_rva)
+    except ProfileError:
+        # Current builds call the wrapper virtually; carry the reviewed caller
+        # through the same relocation delta as the wrapper.
+        previous_setup = int(previous["client"]["main_view_setup_rva"], 16)
+        previous_caller = int(previous["client"]["view_setup_abi"]["caller_return_rva"], 16)
+        caller_rva = previous_caller + (setup_rva - previous_setup)
     vtable_rva = locate_vtable(client)
     globals_rva, fallback_rva = locate_globals(client)
     bounds = client.function_at(setup_rva)

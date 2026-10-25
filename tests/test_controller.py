@@ -70,7 +70,7 @@ class MovieOutputContextTests(unittest.TestCase):
 
     def test_context_refuses_exit_before_any_audio_command(self):
         context=self.c.movie_output_context();self.process.poll=lambda:1
-        with self.assertRaisesRegex(RuntimeError,'Launch the local replay'):
+        with self.assertRaisesRegex(RuntimeError,'Deadlock crashed'):
             context.verify_owner(self.c)
 
     def test_context_refuses_changed_journal_or_configured_mount(self):
@@ -122,12 +122,11 @@ class MovieOutputContextTests(unittest.TestCase):
         self.assertTrue(remove_overlay(self.overlay,self.paths,self.directory))
         self.assertFalse(self.overlay.exists())
 
-    def test_unknown_audio_sibling_blocks_deployment_deletion_and_is_preserved(self):
+    def test_unknown_audio_sibling_is_preserved_without_blocking_removal(self):
         from dolly.session_cleanup import remove_overlay
         movie=self.movie(unknown=True);folder=movie.folder;movie.cancel(self.c)
         self.process.poll=lambda:0
-        with self.assertRaisesRegex(RuntimeError,'extra file or folder'):
-            remove_overlay(self.overlay,self.paths,self.directory)
+        self.assertFalse(remove_overlay(self.overlay,self.paths,self.directory))
         self.assertEqual((folder/'unrelated.wav').read_bytes(),b'keep')
 
 
@@ -372,7 +371,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_guard_requires_own_live_process_and_connection(self):
         self.process.poll = lambda: 0
-        with self.assertRaisesRegex(RuntimeError, "Launch"):
+        with self.assertRaisesRegex(RuntimeError, "Deadlock closed"):
             self.controller._require_demo()
         self.process.poll = lambda: None
         self.console.is_connected = False
@@ -578,6 +577,16 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("crashed", message)
         self.assertIn("incompatible", message)
         self.assertIn("demo_goto", message)
+
+    def test_disconnected_console_with_dead_process_reports_the_crash(self):
+        self.controller._replay_requested = True
+        self.process.poll = lambda: -1073741819
+        self.console.is_connected = False
+        with self.assertRaises(RuntimeError) as caught:
+            self.controller._require_connection()
+        message = str(caught.exception)
+        self.assertIn("crashed", message)
+        self.assertIn("incompatible", message)
 
     def test_live_process_console_failure_is_not_reported_as_a_crash(self):
         def fail(*args, **kwargs):
@@ -1228,6 +1237,28 @@ class ControllerTests(unittest.TestCase):
             result = self.controller._seek_tick(125)
         self.assertEqual(int(result["tick"]), 125)
 
+    def test_old_replay_seek_is_refused_before_any_console_command(self):
+        self.controller._replay_header = {
+            "name": "118487200.dem",
+            "game_directory": "/opt/srcds/deadlock/citadel_v6793/citadel",
+            "build_num": 10932,
+        }
+        self.console.requests.clear()
+        with self.assertRaisesRegex(RuntimeError, "older than build 6801"):
+            self.controller._seek_tick(104560)
+        self.assertEqual(self.console.requests, [])
+
+    def test_current_replay_seek_passes_the_build_guard(self):
+        self.controller._replay_header = {
+            "name": "121173395.dem",
+            "game_directory": "/opt/srcds/deadlock/citadel_v6813/citadel",
+            "build_num": 10932,
+        }
+        with patch.object(self.controller, "_seek_tick_run",
+                          return_value={"tick": 125}) as run:
+            self.assertEqual(self.controller._seek_tick(125), {"tick": 125})
+        run.assert_called_once()
+
     def test_nonfinite_shot_time_rejected_before_any_camera_or_seek_write(self):
         for method in (self.controller.apply, self.controller.seek, self.controller.play):
             for value in (math.nan, math.inf, -math.inf):
@@ -1270,9 +1301,18 @@ class ControllerTests(unittest.TestCase):
         self.controller.stop()
         self.assertEqual(self.console.values["demo_timescale"], 1)
 
-    def test_clear_ragdolls_validates_replay_without_changing_camera_or_speed(self):
+    def test_clear_ragdolls_also_clears_stale_decals_ink_and_post_processing(self):
         self.controller.destroy_ragdolls()
-        self.assertIn("cl_destroy_ragdolls", self.console.requests)
+        for command in ("cl_destroy_ragdolls",
+                        "citadel_clear_all_post_process_effects",
+                        "r_cleardecals",
+                        "cl_ent_remove_all citadel_artist_visionblocker",
+                        "cl_ent_remove_all C_Citadel_Artist_VisionBlocker",
+                        "cl_ent_remove_all citadel_artist_strokeblocker",
+                        "cl_ent_remove_all C_Citadel_Artist_StrokeBlocker",
+                        "cl_ent_remove_all citadel_artist_solidblocker",
+                        "cl_ent_remove_all C_Citadel_Artist_SolidBlocker"):
+            self.assertIn(command, self.console.requests)
         self.assertFalse(self.console.camera_writes)
         self.assertEqual(self.console.values["demo_timescale"], .5)
         self.console.requests.clear()
@@ -1280,6 +1320,15 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.controller.destroy_ragdolls()
         self.assertNotIn("cl_destroy_ragdolls", self.console.requests)
+
+    def test_clear_ragdolls_attempts_every_command_even_when_help_is_unavailable(self):
+        self.console.supports = lambda name: False
+        self.controller.destroy_ragdolls()
+        for command in ("cl_destroy_ragdolls",
+                        "citadel_clear_all_post_process_effects",
+                        "r_cleardecals",
+                        "cl_ent_remove_all citadel_artist_visionblocker"):
+            self.assertIn(command, self.console.requests)
 
     def test_citadel_glow_toggle_reads_and_flips_the_group(self):
         self.console.values.update({"citadel_player_glow_disabled": 0,
@@ -1794,6 +1843,25 @@ class ControllerTests(unittest.TestCase):
             with zipfile.ZipFile(destination) as archive:
                 for name in ("session.json", "launch.log", "game_stdout.log"):
                     self.assertIn("session/" + name, archive.namelist())
+
+    def test_diagnostics_list_temporary_mount_entries_without_reading_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            overlay = root / "game" / "citadel_dolly_20261021_000000_abcd123456"
+            reports = overlay / "cvar_unlocker" / "rpt"
+            reports.mkdir(parents=True)
+            (reports / "assert.txt").write_text("private report text")
+            (overlay / "cvar_unlocker" / "pak01_dir.vpk").write_bytes(b"vpk")
+            (overlay / ".dolly-session.json").write_text("{}")
+            self.controller._session.overlay_dir = overlay
+            destination = self.controller.export_diagnostics(root / "report.zip")
+            with zipfile.ZipFile(destination) as archive:
+                report = json.loads(archive.read("diagnostics.json"))
+            mount = report["temporary_mount"]
+            self.assertTrue(mount["present"])
+            self.assertEqual(mount["entries"], [
+                ".dolly-session.json", "cvar_unlocker/", "cvar_unlocker/pak01_dir.vpk", "cvar_unlocker/rpt/"])
+            self.assertNotIn("private report text", json.dumps(report))
 
     def test_diagnostics_include_newest_game_crash_dump(self):
         with tempfile.TemporaryDirectory() as directory:

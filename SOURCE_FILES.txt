@@ -127,6 +127,17 @@ docs/RELEASE_NOTES_0.6.61-alpha.md
 docs/RELEASE_NOTES_0.6.62-alpha.md
 docs/RELEASE_NOTES_0.6.63-alpha.md
 docs/RELEASE_NOTES_0.6.64-alpha.md
+docs/RELEASE_NOTES_0.6.65-alpha.md
+docs/RELEASE_NOTES_0.6.66-alpha.md
+docs/RELEASE_NOTES_0.6.67-alpha.md
+docs/RELEASE_NOTES_0.6.68-alpha.md
+docs/RELEASE_NOTES_0.6.69-alpha.md
+docs/RELEASE_NOTES_0.6.70-alpha.md
+docs/RELEASE_NOTES_0.6.71-alpha.md
+docs/RELEASE_NOTES_0.6.72-alpha.md
+docs/RELEASE_NOTES_0.6.73-alpha.md
+docs/RELEASE_NOTES_0.6.74-alpha.md
+docs/RELEASE_NOTES_0.6.75-alpha.md
 docs/SCREENSHOTS.md
 docs/SUPPORTED_CAMERA_CVARS.json
 docs/SUPPORTED_CAMERA_CVARS.md
@@ -169,6 +180,7 @@ dolly/compatibility.py
 dolly/console.py
 dolly/controller.py
 dolly/convar_response.py
+dolly/crash_dumps.py
 dolly/curve.py
 dolly/curve_preview.py
 dolly/curve_workspace.py
@@ -215,6 +227,7 @@ dolly/lite_mode.py
 dolly/media_transport.py
 dolly/media_wire.py
 dolly/memory_watch.py
+dolly/mod_policy.py
 dolly/movie_audio.py
 dolly/native_bridge.py
 dolly/native_capabilities.py
@@ -369,6 +382,13 @@ native/profiles/deadlock-2026-10-20-6803-complete.json
 native/profiles/deadlock-2026-10-20-6805-complete.json
 native/profiles/deadlock-2026-10-20-6806-complete.json
 native/profiles/deadlock-2026-10-20-6807-complete.json
+native/profiles/deadlock-2026-10-21-6810-complete.json
+native/profiles/deadlock-2026-10-21-6812-complete.json
+native/profiles/deadlock-2026-10-22-6813-complete.json
+native/profiles/deadlock-2026-10-22-6814-complete.json
+native/profiles/deadlock-2026-10-22-6815-complete.json
+native/profiles/deadlock-2026-10-22-6817-complete.json
+native/profiles/deadlock-2026-10-22-6819-complete.json
 native/profiles/deadlock-client-2026-09-07-engine-2026-08-13.json
 native/profiles/deadlock-client-2026-09-09-engine-2026-08-13.json
 native/profiles/manifest.json
@@ -557,6 +577,7 @@ tests/test_controller.py
 tests/test_controls_page.py
 tests/test_convar_response.py
 tests/test_cpp_format.py
+tests/test_crash_dumps.py
 tests/test_curve.py
 tests/test_curve_preview.py
 tests/test_demo_packets.py
@@ -601,6 +622,7 @@ tests/test_lite_gui.py
 tests/test_lite_mode.py
 tests/test_media_transport.py
 tests/test_memory_watch.py
+tests/test_mod_policy.py
 tests/test_motion_clock.py
 tests/test_movie_audio.py
 tests/test_native_atomics.py
@@ -720,6 +742,13 @@ third_party/cvar_unlocker/unlocker-build-6801.patch
 third_party/cvar_unlocker/unlocker-build-6805.patch
 third_party/cvar_unlocker/unlocker-build-6806.patch
 third_party/cvar_unlocker/unlocker-build-6807.patch
+third_party/cvar_unlocker/unlocker-build-6810.patch
+third_party/cvar_unlocker/unlocker-build-6812.patch
+third_party/cvar_unlocker/unlocker-build-6813.patch
+third_party/cvar_unlocker/unlocker-build-6814.patch
+third_party/cvar_unlocker/unlocker-build-6815.patch
+third_party/cvar_unlocker/unlocker-build-6817.patch
+third_party/cvar_unlocker/unlocker-build-6819.patch
 third_party/cvar_unlocker/unlocker-shutdown.patch
 third_party/notices/CS2RemoteConsole-MIT.txt
 third_party/notices/RUNTIME_NOTICES.md
@@ -803,5 +832,6 @@ tools/generate_profile.py
 tools/generate_sound_profile.py
 tools/generate_ui_tokens.py
 tools/release_files.py
+tools/release_status.py
 tools/test-lite-policy.cmd
 tools/update_game.py

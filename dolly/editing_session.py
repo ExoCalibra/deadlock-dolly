@@ -29,6 +29,30 @@ JOURNAL = "editing-session.json"
 MAX_BYTES = 128 * 1024
 EMPTY_CONVARS = b'"config"\n{\n\t"convars"\n\t{\n\t}\n}\n'
 
+# Audio levels are player preferences, not rendering overrides. Dolly's
+# isolated settings folder otherwise starts from game defaults, which can make
+# a quiet player's mix unexpectedly loud. Copy only these reviewed audio keys
+# from the active Steam profile; performance, input and UI preferences remain
+# isolated.
+AUDIO_CONVARS = frozenset({
+    "volume",
+    "dsp_volume",
+    "snd_gamevolume",
+    "snd_musicvolume",
+    "snd_voipvolume",
+    "snd_gamevoicevolume",
+    "snd_toolvolume",
+    "snd_ducktovolume",
+    "snd_mute_losefocus",
+    "snd_mixahead",
+    "snd_gain",
+    "snd_duckerattacktime",
+    "snd_duckerreleasetime",
+    "snd_duckerthreshold",
+    "citadel_previous_umuted_audio_level",
+    "snd_steamaudio_enable_perspective_correction",
+})
+
 # Carry device/display identity only. Performance tiers, rendering quality,
 # upscalers, render scale, commands and all unknown fields remain excluded.
 DISPLAY_FIELDS = {
@@ -62,6 +86,59 @@ def _read(path: Path) -> bytes:
 
 def _values(data: bytes) -> dict[str, str]:
     return {name: entry.value.value for name, entry in graphics_profiles._document(data)[1].items()}
+
+
+def _convar_values(data: bytes) -> dict[str, str]:
+    """Read one ``config { convars { ... } }`` VCFG without other settings."""
+    from . import keyvalues
+    roots = keyvalues._parse(data.decode("utf-8-sig"))
+    config = keyvalues._named(roots, "config")
+    if len(config) != 1 or config[0].children is None:
+        raise ValueError("Convar VCFG lacks one config block")
+    convars = keyvalues._named(config[0].children, "convars")
+    if len(convars) != 1 or convars[0].children is None:
+        raise ValueError("Convar VCFG lacks one convars block")
+    result = {}
+    for entry in convars[0].children:
+        if entry.value is None:
+            raise ValueError("Convar VCFG contains a non-value entry")
+        result[entry.key.value] = entry.value.value
+    return result
+
+
+def _audio() -> tuple[dict[str, str], str | None]:
+    """Copy reviewed audio levels from the active profile without other settings."""
+    try:
+        cfg = Path(graphics_profiles.current_video()).parent
+        values: dict[str, str] = {}
+        for name in ("machine_convars.vcfg", "user_convars_0_slot0.vcfg"):
+            path = cfg / name
+            if not path.is_file():
+                continue
+            try:
+                for key, value in _convar_values(_read(path)).items():
+                    if (key in AUDIO_CONVARS and isinstance(value, str)
+                            and len(value) <= 64 and not any(ord(c) < 32 for c in value)):
+                        values[key] = value
+            except (OSError, LaunchError, ValueError, TypeError):
+                continue
+        return values, None
+    except (OSError, LaunchError, ValueError, TypeError) as exc:
+        return {}, f"Audio preferences were unavailable ({type(exc).__name__}); using game defaults."
+
+
+def _convars(values: dict[str, str]) -> bytes:
+    if not values:
+        return EMPTY_CONVARS
+
+    def quote(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    data = ('"config"\n{\n\t"convars"\n\t{\n' + "".join(
+        f"\t\t{quote(name)}\t\t{quote(value)}\n" for name, value in sorted(values.items())
+    ) + "\t}\n}\n").encode("utf-8")
+    _convar_values(data)
+    return data
 
 
 def _baseline(editing_root: Path | None = None) -> bytes | None:
@@ -265,8 +342,9 @@ def prepare(session_dir: Path, paths: GamePaths, *, graphics_profile: str = "",
             display['setting.refreshrate_numerator'] = options[options.index('-refresh') + 1]
             display['setting.refreshrate_denominator'] = '1'
         video, video_audit = _video(baseline, display, graphics_profile)
+        audio, audio_warning = _audio()
         files = {
-            "cfg/machine_convars.vcfg": EMPTY_CONVARS,
+            "cfg/machine_convars.vcfg": _convars(audio),
             "cfg/user_convars_0_slot0.vcfg": EMPTY_CONVARS,
         }
         if video is not None:
@@ -288,12 +366,16 @@ def prepare(session_dir: Path, paths: GamePaths, *, graphics_profile: str = "",
             "environment_keys": sorted(environment),
             "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
             "display_fields_preserved": sorted(display),
+            "audio_convar_count": len(audio),
+            "audio_convar_names": sorted(audio),
             "user_configuration_gate": "host_readconfig_ignore_userconfig",
             "runtime_verified": False,
             **video_audit,
         }
         if warning is not None:
             audit["warning"] = warning
+        if audio_warning is not None:
+            audit["audio_warning"] = audio_warning
         _atomic_write(journal, (json.dumps(audit, indent=2) + "\n").encode("utf-8"))
         return {"environment": environment, "audit": audit}
     except (OSError, ValueError, TypeError, KeyError) as exc:

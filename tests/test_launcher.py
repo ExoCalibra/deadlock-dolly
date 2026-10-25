@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+from dolly import game_processes
 from dolly import launcher
 from dolly import panorama_assets
 from test_panorama_assets import write_vpk
@@ -472,7 +473,9 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(session.overlay_dir.name, mounted)
         record = json.loads((session.session_dir / "session.json").read_text())
         self.assertEqual(record["carried_addon_mounts"], [])
-        self.assertIn({"key": "Game", "path": "citadel/addons"}, record["excluded_addon_mounts"])
+        excluded = {mount["path"]: mount for mount in record["excluded_addon_mounts"]}
+        self.assertIn("citadel/addons", excluded)
+        self.assertIn("missing", excluded["citadel/addons"]["reason"])
         self.assertEqual((session.session_dir / 'original.gameinfo.gi').read_bytes(), original)
         session.restore_gameinfo()
         self.assertEqual(self.paths.gameinfo.read_bytes(), original)
@@ -663,6 +666,42 @@ class LauncherTests(unittest.TestCase):
         self.assertFalse(self.package.exists())
         self.assertFalse(list(self.paths.game_dir.glob("citadel_dolly_*")))
 
+    def test_running_game_refusal_names_process_path_session_and_install(self):
+        details = [game_processes.GameProcess(
+            4242, "deadlock.exe", r"C:\Other Steam\Deadlock\game\bin\win64\deadlock.exe",
+            2, None)]
+        message = launcher._already_running_message(details, self.paths.executable)
+        self.assertIn("PID 4242", message)
+        self.assertIn(r"C:\Other Steam", message)
+        self.assertIn("session 2", message)
+        self.assertIn("no visible window", message)
+        self.assertIn("different installation", message)
+        self.assertIn("Exit Deadlock", message)
+        with patch.object(launcher, "_check_runtime"), \
+                patch.object(launcher, "running_processes", return_value={"steam.exe", "deadlock.exe"}), \
+                patch.object(game_processes, "running_game_processes", return_value=details), \
+                patch.object(launcher, "PACKAGE_ROOT", self.package), \
+                patch.object(launcher.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(launcher.LaunchError, "PID 4242.*different installation"):
+                launcher.launch(self.paths.root)
+            popen.assert_not_called()
+
+    def test_running_game_details_filter_and_describe_visible_process(self):
+        with patch.object(game_processes, "_snapshot",
+                          return_value=[(7, "deadlock.exe"), (8, "steam.exe")]), \
+                patch.object(game_processes, "_process_path",
+                             return_value=r"D:\SteamLibrary\Deadlock\deadlock.exe"), \
+                patch.object(game_processes, "_session_id", return_value=1), \
+                patch.object(game_processes, "_window_titles", return_value={7: "Deadlock"}):
+            details = game_processes.running_game_processes()
+        self.assertEqual(details, [game_processes.GameProcess(
+            7, "deadlock.exe", r"D:\SteamLibrary\Deadlock\deadlock.exe", 1, "Deadlock")])
+
+    def test_running_game_refusal_without_details_keeps_actionable_fallback(self):
+        message = launcher._already_running_message([], self.paths.executable)
+        self.assertIn("Deadlock is already running", message)
+        self.assertIn("Exit Deadlock", message)
+
     def test_missing_steam_refused(self):
         with patch.object(launcher, "_check_runtime"), patch.object(launcher, "running_processes", return_value=set()):
             with self.assertRaisesRegex(launcher.LaunchError, "Open Steam"):
@@ -782,10 +821,14 @@ class LauncherTests(unittest.TestCase):
                 patch.object(launcher, 'running_processes', return_value={'steam.exe'}), \
                 patch.object(launcher, 'PACKAGE_ROOT', self.package), \
                 patch.object(launcher.subprocess, 'Popen', side_effect=failed):
-            with self.assertRaisesRegex(launcher.LaunchError, 'preserved'):
+            with self.assertRaisesRegex(launcher.LaunchError, 'fake start failure'):
                 launcher.launch(self.paths.root)
         overlay = next(self.paths.game_dir.glob('citadel_dolly_*'))
+        # The user's file is never deleted, and it no longer turns the failed
+        # launch into a cleanup error: Dolly's own files go, the marker stays.
         self.assertEqual((overlay / 'unexpected-user-file.txt').read_bytes(), b'user data')
+        self.assertTrue((overlay / '.dolly-session.json').is_file())
+        self.assertFalse((overlay / 'cvar_unlocker/bin/win64/server.dll').exists())
         self.assertEqual(self.paths.gameinfo.read_bytes(), before)
 
     def test_game_starting_during_preparation_is_refused(self):
@@ -804,6 +847,53 @@ class LauncherTests(unittest.TestCase):
         process.poll.return_value = None
         with patch.object(launcher, "_check_runtime"), patch.object(launcher, "running_processes", return_value={"steam.exe"}), patch.object(launcher, "PACKAGE_ROOT", self.package), patch.object(launcher.subprocess, "Popen", return_value=process), patch.object(launcher.threading, "Thread"):
             return launcher.launch(self.paths.root)
+
+    def _skin_mount(self):
+        addons = self.paths.game_dir / "citadel" / "addons"
+        (addons / "skin" / "models").mkdir(parents=True)
+        (addons / "skin" / "models" / "hero.vmdl").write_bytes(b"model")
+        (addons / "skin" / "materials" / "models").mkdir(parents=True)
+        (addons / "skin" / "materials" / "models" / "hero.vmat").write_bytes(b"material")
+        return addons
+
+    def test_content_mod_mount_is_carried_ahead_of_the_game_and_restored_exactly(self):
+        self._skin_mount()
+        self.paths.gameinfo.write_text(DMM_GAMEINFO, encoding="utf-8")
+        original = self.paths.gameinfo.read_bytes()
+        session = self._launched_session()
+        try:
+            mounted = self.paths.gameinfo.read_text(encoding="utf-8")
+            record = json.loads((session.session_dir / "session.json").read_text(encoding="utf-8"))
+            self.assertIn('Game\t"citadel/addons"', mounted)
+            game_lines = [line.strip() for line in mounted.splitlines()
+                          if line.strip().split() and line.strip().split()[0] == "Game"]
+            self.assertIn("citadel_dolly_", game_lines[0])
+            self.assertEqual([item["key"] for item in record["carried_addon_mounts"]],
+                             ["Game", "Mod", "Write", "Mod", "Write", "AddonRoot"])
+            self.assertEqual(record["excluded_addon_mounts"], [])
+        finally:
+            session.restore_gameinfo()
+        self.assertEqual(self.paths.gameinfo.read_bytes(), original)
+
+    def test_render_mod_mount_is_skipped_with_a_recorded_reason(self):
+        addons = self.paths.game_dir / "citadel" / "addons"
+        (addons / "qol" / "materials" / "environment").mkdir(parents=True)
+        (addons / "qol" / "materials" / "environment" / "fog.vmat").write_bytes(b"fog")
+        self.paths.gameinfo.write_text(DMM_GAMEINFO, encoding="utf-8")
+        original = self.paths.gameinfo.read_bytes()
+        session = self._launched_session()
+        try:
+            mounted = self.paths.gameinfo.read_text(encoding="utf-8")
+            record = json.loads((session.session_dir / "session.json").read_text(encoding="utf-8"))
+            self.assertNotIn('Game\t"citadel/addons"', mounted)
+            self.assertEqual(record["carried_addon_mounts"], [])
+            self.assertEqual([item["path"] for item in record["excluded_addon_mounts"]],
+                             ["citadel/addons"])
+            self.assertIn("visual material", record["excluded_addon_mounts"][0]["reason"])
+            self.assertIn("skipped 1 render/visual or unrecognised mount", session.read_log())
+        finally:
+            session.restore_gameinfo()
+        self.assertEqual(self.paths.gameinfo.read_bytes(), original)
 
     def test_recovery_after_editor_crash_restores_backup(self):
         before = self.paths.gameinfo.read_bytes()
@@ -925,7 +1015,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(dll.read_bytes()).hexdigest(), meta["bundled_file_sha256"])
         self.assertEqual(meta["bundled_file_sha256"], launcher.UNLOCKER_SHA256)
         self.assertEqual(meta["license"], "MIT")
-        self.assertEqual(meta["version"], "v0.5.2-dolly-build-6807")
+        self.assertEqual(meta["version"], "v0.5.2-dolly-build-6819")
         self.assertEqual(dll.stat().st_size, meta["bundled_file_size"])
         self.assertIn("unlocker-build-6712.patch", meta["patches"])
         self.assertIn("unlocker-build-6722.patch", meta["patches"])
@@ -943,6 +1033,12 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("unlocker-build-6785.patch", meta["patches"])
         self.assertIn("unlocker-build-6793.patch", meta["patches"])
         self.assertIn("unlocker-build-6796.patch", meta["patches"])
+        self.assertIn("unlocker-build-6812.patch", meta["patches"])
+        self.assertIn("unlocker-build-6813.patch", meta["patches"])
+        self.assertIn("unlocker-build-6814.patch", meta["patches"])
+        self.assertIn("unlocker-build-6815.patch", meta["patches"])
+        self.assertIn("unlocker-build-6817.patch", meta["patches"])
+        self.assertIn("unlocker-build-6819.patch", meta["patches"])
         for patch in meta["patches"]:
             self.assertTrue((launcher.UNLOCKER_ROOT / patch).is_file(), patch)
 

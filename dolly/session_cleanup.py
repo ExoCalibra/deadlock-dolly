@@ -40,6 +40,10 @@ GENERATED_FILES = frozenset({
     "cvar_unlocker/pak02_dir.vpk",
 })
 GENERATED_DIRS = frozenset({"cvar_unlocker", "cvar_unlocker/bin", "cvar_unlocker/bin/win64", "session-files"})
+# The game writes its own assertion/crash reports into the addon root it was
+# given as a search path. Their names are engine-chosen, so the whole directory
+# is treated as session output rather than enumerated file by file.
+GENERATED_TREES = frozenset({"cvar_unlocker/rpt"})
 
 
 def _owned_location(overlay: Path, paths) -> bool:
@@ -133,12 +137,15 @@ def remove_overlay(overlay: Path, paths, session_dir: Path | None = None) -> boo
     directories: list[Path] = []
     generated_files = set(GENERATED_FILES)
     generated_dirs = set(GENERATED_DIRS)
+    generated_trees = set(GENERATED_TREES)
     config_dir = overlay / 'cvar_unlocker' / 'cfg'
     if config_dir.exists() or config_dir.is_symlink():
         from .editing_assets import load
         generated_dirs.add('cvar_unlocker/cfg')
         generated_files.update('cvar_unlocker/cfg/' + name for name in load())
     preserved_artifact: Path | None = None
+    preserved_unknown: list[str] = []
+    removed_reports: list[str] = []
     pending = [overlay]
     while pending:
         directory = pending.pop()
@@ -154,7 +161,17 @@ def remove_overlay(overlay: Path, paths, session_dir: Path | None = None) -> boo
                 continue
             if not plain:
                 raise LaunchError(f"Temporary plugin directory contains a link; left untouched: {child}")
-            if ((child.is_dir() and relative == "cvar_unlocker/replays") or
+            if any(relative == root or relative.startswith(root + "/") for root in generated_trees):
+                # Plain entries below a known report directory are game output
+                # from this session; they were never user files. Traversal
+                # still happens through the same plain-path check above.
+                if child.is_dir():
+                    directories.append(child)
+                    pending.append(child)
+                else:
+                    files.append(child)
+                    removed_reports.append(relative)
+            elif ((child.is_dir() and relative == "cvar_unlocker/replays") or
                     (child.is_file() and relative == "cvar_unlocker/panorama_debugger.cfg") or
                     (child.is_dir() and relative == "session-files" and any(child.iterdir()))):
                 # Sessions can leave replay/settings data in the temporary mount.
@@ -169,7 +186,12 @@ def remove_overlay(overlay: Path, paths, session_dir: Path | None = None) -> boo
             elif not child.exists():
                 continue
             else:
-                raise LaunchError(f"Temporary plugin directory contains an extra file or folder; left untouched: {child}")
+                # Never delete it, but never hold the next launch hostage
+                # either: the mount is unmounted and belongs to a finished
+                # session, so Dolly removes its own files, keeps this one, and
+                # says so. The ownership marker stays so a later cleanup can
+                # still recognise the mount.
+                preserved_unknown.append(relative)
     if preserved_artifact is not None:
         logging.getLogger(__name__).warning(
             "Preserved an unmounted Dolly session containing replay/settings data: %s. "
@@ -186,11 +208,30 @@ def remove_overlay(overlay: Path, paths, session_dir: Path | None = None) -> boo
             child.rmdir()
         except FileNotFoundError:
             pass
+        except OSError:
+            # A generated parent can still hold a preserved unrecognised entry;
+            # that is expected only on the preserve-and-continue path.
+            if not preserved_unknown:
+                raise
+    if preserved_unknown:
+        shown = ", ".join(sorted(preserved_unknown)[:5])
+        if len(preserved_unknown) > 5:
+            shown += f" and {len(preserved_unknown) - 5} more"
+        logging.getLogger(__name__).warning(
+            "Preserved unrecognised files in an unmounted Dolly session: %s. Dolly removed only its own "
+            "files; these were left untouched and do not block a new launch.", shown)
+        if session_dir is not None:
+            _append_log(session_dir, "Temporary-file cleanup left unrecognised entries untouched: " + shown)
+        return False
     marker.unlink(missing_ok=True)
     try:
         overlay.rmdir()
     except FileNotFoundError:
         pass
+    if removed_reports and session_dir is not None:
+        listed = sorted(removed_reports)
+        _append_log(session_dir, "Removed game-written session report files with the temporary plugin directory: "
+                    + ", ".join(listed[:10]) + (f" and {len(listed) - 10} more" if len(listed) > 10 else ""))
     return True
 
 

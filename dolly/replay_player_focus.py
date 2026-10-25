@@ -99,7 +99,7 @@ def resolve_participant(monitor, identifier, roster, *, evidence=None):
     if len(matches) > 1:
         raise ReplayPlayerUnavailable('This player has more than one possible hero at this tick. Camera unchanged.')
     if not matches:
-        raise ReplayPlayerUnavailable('This player has no hero at this tick. Camera unchanged.')
+        raise ReplayPlayerUnavailable('This player has no hero at this tick. Camera unchanged. Scrub forward to the match start, then select again.')
     evidence.update(lookup='pawn_controller_backlink', pawn_handle=matches[0]['handle'])
     return matches[0]
 
@@ -151,10 +151,10 @@ def resolve_player(monitor, identifier, players=None, *, evidence=None):
     evidence.update(stage='pawn_identity', pawn_handle=pawn)
     index = pawn & 0x7fff
     if pawn in (0, 0xffffffff, 0xfffffffe) or not 0 < index < 0x7fff:
-        unavailable('This player has no hero at this tick. Camera unchanged.')
+        unavailable('This player has no hero at this tick. Camera unchanged. Scrub forward to the match start, then select again.')
     pawn_chunk = pointer(system + 8 * (index >> 9))
     if not pawn_chunk:
-        unavailable('This player has no hero at this tick. Camera unchanged.')
+        unavailable('This player has no hero at this tick. Camera unchanged. Scrub forward to the match start, then select again.')
     pawn_identity = pawn_chunk + profile.IDENTITY_STRIDE * (index & 0x1ff)
     instance = pointer(pawn_identity)
     observed_handle = struct.unpack('<I', read(pawn_identity + profile.IDENTITY_HANDLE, 4))[0]
@@ -162,13 +162,13 @@ def resolve_player(monitor, identifier, players=None, *, evidence=None):
     if observed_handle != pawn:
         raise RuntimeError('The selected player pawn changed. Select the player again.')
     if not instance:
-        unavailable('This player has no hero at this tick. Camera unchanged.')
+        unavailable('This player has no hero at this tick. Camera unchanged. Scrub forward to the match start, then select again.')
     if pointer(instance + profile.ENTITY_IDENTITY) != pawn_identity:
         raise RuntimeError('The selected player pawn changed. Select the player again.')
     vtable = pointer(instance)
     evidence['pawn_vtable_rva'] = vtable - monitor.base
     if vtable == monitor.base + profile.OBSERVER_PAWN_VTABLE:
-        unavailable('This player has no hero at this tick. Camera unchanged.')
+        unavailable('This player has no hero at this tick. Camera unchanged. Scrub forward to the match start, then select again.')
     if vtable not in (monitor.base + profile.PLAYER_PAWN_VTABLE,
                       monitor.base + profile.FAMILIAR_CLONE_PAWN_VTABLE):
         raise RuntimeError('The selected player pawn identity differs. Select the player again.')

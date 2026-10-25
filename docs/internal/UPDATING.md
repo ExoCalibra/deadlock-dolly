@@ -8,6 +8,21 @@ Packaged Windows builds include the updater and recovery launcher in `Dolly.exe`
 Source checkouts use the local build workflow; the packaged updater does not
 install or build source checkouts.
 
+## Check the published state first
+
+Before saying a version is unpublished, or that a build is the next release,
+run:
+
+```
+python tools/release_status.py
+```
+
+It prints the latest published GitHub release, its asset names/sizes/SHA-256
+digests, the local `dolly.__version__`, and the matching local `dist` artifact
+hash. It then reports `MATCH`, `VERSION MATCH, ARTIFACT DIFFERS`, or
+`LOCAL AHEAD`. Publishing is always manual; this check never uploads, tags or
+publishes anything.
+
 ## Moving from the older automatic updater
 
 The **Update now** choice applies once 0.6.51-alpha or a later version is

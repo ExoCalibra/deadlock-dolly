@@ -14,6 +14,7 @@ class ExportState:
     ffmpeg_path: tk.Variable
     video_bitrate: tk.Variable
     video_codec: tk.Variable
+    video_format: tk.Variable
     player_processing: tk.Variable
     players_scratch: tk.Variable
     video_depth: tk.Variable
@@ -33,6 +34,7 @@ class ExportState:
     video_ae_camera: tk.Variable
     video_usd_camera: tk.Variable
     codec_choices: tuple[str, ...]
+    format_choices: tuple[str, ...]
     bitrate_choices: tuple[str, ...]
 
 
@@ -125,6 +127,7 @@ class ExportPage:
         passes.pack_configure(fill="both", expand=True)
         capture.pack_configure(fill="both", expand=True)
         self.export_passes_card, self.export_capture_card = passes, capture
+        self.video_format_combo = field(capture, "Format", state.video_format, values=state.format_choices)
         self.video_fps_combo = field(capture, "Video FPS", state.video_fps, values=("30", "60", "120", "300", "600"))
         self.video_speed_combo = field(capture, "Export speed", state.video_export_speed, values=("0.05", "0.1", "0.25", "0.5", "1", "2", "4"))
         self.video_fixed_checkbox = ttk.Checkbutton(capture, style="Card.TCheckbutton", text="Fixed-step export (frame-accurate)", variable=state.video_fixed_step)

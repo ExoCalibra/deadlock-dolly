@@ -18,6 +18,18 @@ Player capture profiles also keep the scene fingerprint, producer address and
 calling convention, record layout, and exact renderer pairing together. This
 avoids enabling a new scene build with an older producer entry point.
 
+### Build 6819 (2026-10-22)
+
+The 6819 hotfix changes `client.dll` and `server.dll`; the reviewed engine,
+Tier0, scene, sound, resource and renderer files are unchanged from 6817. The
+6817-to-6819 complete-owner map relocates all 100 required owners (deltas 0 or
+`+0xA0`). Camera wrapper/matrix, preload, Follow, schema, gameplay-effect,
+confetti and attachment consumers were regenerated from that map. The server
+Source2ServerConfig001 table and all three method bodies are byte-identical to
+6817, so the unlocker is an additive exact-hash gate over the retained tuple
+(`0x2b5a1b0`; slots `0x99d9e4/0x99d9f0/0x99ab40`), with 712 actual-function
+pair/table checks. Offline verification passes; no 6819 live claim yet.
+
 ### Build 6807 (2026-10-20)
 
 The next hotfix changes both client and server images. Required camera, startup,

@@ -113,7 +113,8 @@ def _audit_layer(layer: str, folder: Path, result: dict) -> None:
             take.setdefault("problems", []).extend(problems)
             result["findings"].extend(f"{layer}: {problem}" for problem in problems)
     _audit_camera(layer, folder, manifest_data, result)
-    videos = [path for path in (folder / f"{layer}.mov", folder / f"{layer}.mp4") if path.is_file()]
+    videos = [path for path in (folder / f"{layer}.mov", folder / f"{layer}.mp4",
+                                folder / f"{layer}.mkv") if path.is_file()]
     if not sidecar.is_file() and not manifest.is_file() and not videos:
         result["findings"].append(f"{layer}: folder has no sidecar, manifest or video")
     elif videos and all(path.stat().st_size == 0 for path in videos):

@@ -155,13 +155,59 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue((self.session.overlay_dir / "cvar_unlocker/bin/win64/server.dll").is_file())
         self.assertEqual(self.paths.gameinfo.read_bytes(), GAMEINFO.encode())
 
-    def test_replay_folder_does_not_bypass_other_cleanup_safety_checks(self):
+    def test_game_written_report_folder_is_removed_with_the_session(self):
+        # Deadlock writes its own assertion reports into the addon root it was
+        # given as a search path (cvar_unlocker/rpt). That output belongs to the
+        # session; leaving it behind used to block every later launch.
+        self.session.restore_gameinfo()
+        reports = self.session.overlay_dir / "cvar_unlocker" / "rpt"
+        (reports / "client").mkdir(parents=True)
+        (reports / "assert_audio_loop.txt").write_text("Leaked audio loop\n")
+        (reports / "client" / "stack.txt").write_text("nested report\n")
+        self.assertEqual(self.recover(), [str(self.session.session_dir)])
+        self.assertFalse(self.session.overlay_dir.exists())
+        self.assertEqual(self.paths.gameinfo.read_bytes(), GAMEINFO.encode())
+
+    def test_report_folder_does_not_bypass_extra_file_protection(self):
+        self.session.restore_gameinfo()
+        reports = self.session.overlay_dir / "cvar_unlocker" / "rpt"
+        reports.mkdir(parents=True)
+        (reports / "assert_audio_loop.txt").write_text("Leaked audio loop\n")
+        extra = self.session.overlay_dir / "notes.txt"
+        extra.write_text("keep me")
+        # The unrecognised file stops deletion of itself but must not stop the
+        # launch: Dolly's own files and the game's report go, notes.txt stays.
+        self.assertEqual(self.recover(), [])
+        self.assertEqual(extra.read_text(), "keep me")
+        self.assertFalse(reports.exists())
+        self.assertFalse((self.session.overlay_dir / "cvar_unlocker/bin/win64/server.dll").exists())
+        self.assertTrue((self.session.overlay_dir / ".dolly-session.json").is_file())
+
+    def test_linked_report_folder_is_not_followed(self):
+        self.session.restore_gameinfo()
+        outside = self.folder / "outside"
+        outside.mkdir()
+        protected = outside / "report.txt"
+        protected.write_text("keep me")
+        linked = self.session.overlay_dir / "cvar_unlocker" / "rpt"
+        try:
+            linked.symlink_to(outside, target_is_directory=True)
+        except OSError as exc:
+            if sys.platform != "win32" or exc.winerror != 1314:
+                raise
+            import _winapi
+            _winapi.CreateJunction(str(outside), str(linked))
+            self.addCleanup(linked.rmdir)
+        with self.assertRaisesRegex(launcher.LaunchError, "link"):
+            self.recover()
+        self.assertEqual(protected.read_text(), "keep me")
+
+    def test_replay_folder_is_preserved_without_blocking_recovery(self):
         self.session.restore_gameinfo()
         (self.session.overlay_dir / "cvar_unlocker" / "replays").mkdir()
         extra = self.session.overlay_dir / "notes.txt"
         extra.write_text("keep me")
-        with self.assertRaisesRegex(launcher.LaunchError, "extra file"):
-            self.recover()
+        self.assertEqual(self.recover(), [])
         self.assertEqual(extra.read_text(), "keep me")
         extra.unlink()
         self.paths.gameinfo.write_text(
@@ -170,14 +216,23 @@ class CleanupTests(unittest.TestCase):
         with self.assertRaisesRegex(launcher.LaunchError, "still references"):
             self.recover()
 
-    def test_unknown_user_content_preserves_the_whole_directory(self):
+    def test_unknown_user_content_is_preserved_without_blocking_the_next_launch(self):
         self.session.restore_gameinfo()
         extra = self.session.overlay_dir / "notes.txt"
         extra.write_text("keep me")
-        with self.assertRaisesRegex(launcher.LaunchError, "extra file"):
-            self.recover()
+        # Cleanup must not delete the file and must not fail the launch either.
+        self.assertEqual(self.recover(), [])
         self.assertEqual(extra.read_text(), "keep me")
-        self.assertTrue((self.session.overlay_dir / "cvar_unlocker/bin/win64/server.dll").is_file())
+        self.assertFalse((self.session.overlay_dir / "cvar_unlocker/bin/win64/server.dll").is_file())
+        self.assertEqual(self.recover(), [])
+        self.assertEqual(extra.read_text(), "keep me")
+        process = MagicMock()
+        process.pid = 9878
+        with patch.object(launcher, "_check_runtime"), patch.object(game_processes, "running_processes", return_value={"steam.exe"}), patch.object(launcher, "PACKAGE_ROOT", self.package), patch.object(launcher.subprocess, "Popen", return_value=process), patch.object(launcher.threading, "Thread"):
+            next_session = launcher.launch(self.paths.root)
+        self.assertNotEqual(next_session.overlay_dir, self.session.overlay_dir)
+        next_session.restore_gameinfo()
+        self.assertEqual(extra.read_text(), "keep me")
 
     def test_linked_child_is_not_followed_or_removed(self):
         self.session.restore_gameinfo()

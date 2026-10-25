@@ -66,7 +66,9 @@ class PageBoundaryTests(unittest.TestCase):
         self.assertEqual(tuple(view.home_camera_driver_combo.cget('values')), ('Native (experimental)', 'Console (legacy)'))
 
     def test_settings_owns_preferences_and_routes_to_dedicated_controls(self):
-        state = self.variables(SettingsState, auto_updates_initial=True, show_log=tk.BooleanVar(self.root, False))
+        state = self.variables(SettingsState, auto_updates_initial=True,
+                               allow_mod_overrides_initial=False,
+                               show_log=tk.BooleanVar(self.root, False))
         with patch('dolly.graphics_profiles.load_library', return_value={'format': 1, 'selected': '', 'profiles': []}):
             view = SettingsPage(self.root, state, self.callbacks(SettingsActions), root=self.root,
                                 on_error=lambda *args: self.fail(str(args)))
@@ -86,9 +88,11 @@ class PageBoundaryTests(unittest.TestCase):
         booleans = {name: tk.BooleanVar(self.root, False) for name in
                     ('video_depth', 'video_depth_exr', 'video_fixed_step', 'video_game_audio',
                      'video_layer_effects', 'video_layer_players', 'video_layer_world', 'video_reconstructed_audio')}
-        state = self.variables(ExportState, codec_choices=('Fixture encoder',), bitrate_choices=('Fixture rate',), **booleans)
+        state = self.variables(ExportState, codec_choices=('Fixture encoder',),
+                               format_choices=('Fixture format',), bitrate_choices=('Fixture rate',), **booleans)
         view = ExportPage(self.root, state, self.callbacks(ExportActions))
         self.assertEqual(tuple(view.video_codec_combo.cget('values')), ('Fixture encoder',))
+        self.assertEqual(tuple(view.video_format_combo.cget('values')), ('Fixture format',))
         self.assertEqual(tuple(view.video_bitrate_combo.cget('values')), ('Fixture rate',))
         view.video_source_combo.current(1)
         view.video_source_combo.event_generate('<<ComboboxSelected>>')
@@ -110,6 +114,7 @@ class PageBoundaryTests(unittest.TestCase):
                          'video_reconstructed_audio')}
             booleans['video_depth'].set(depth_on)
             state = self.variables(ExportState, codec_choices=('Fixture encoder',),
+                                   format_choices=('Fixture format',),
                                    bitrate_choices=('Fixture rate',), **booleans)
             return ExportPage(self.root, state, self.callbacks(ExportActions))
 

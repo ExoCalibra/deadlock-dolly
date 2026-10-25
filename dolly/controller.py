@@ -25,6 +25,7 @@ from . import __version__
 from . import dof_preflight as dof_support
 # Compatibility exports shared with graphics runtime diagnostics.
 from .convar_response import NUMBER, read_cvar_value
+from .file_ops import _plain_path
 from .path import (Project, Keyframe, validate_cvar_name, STANDARD_ASPECT, ASPECT_MIN, ASPECT_MAX,
                    validate_cvar_value, format_cvar_value)
 # Camera command/parse layer, re-exported for existing callers and tests.
@@ -185,10 +186,52 @@ def _write_diagnostics_archive(destination, report, history, session_files, sess
     return destination
 
 
+def _mount_listing(overlay, limit: int = 60) -> dict:
+    """Names-only listing of Dolly's temporary mount for support reports.
+
+    A blocked or deferred cleanup is explained by what is actually sitting in
+    the mount, and asking the user to screenshot an elevated Program Files
+    folder is a poor trade. Only relative names are recorded, nothing is read,
+    and a link is never followed.
+    """
+    try:
+        path = Path(overlay)
+    except TypeError:
+        return {"present": False}
+    try:
+        if not path.is_dir():
+            return {"present": False}
+    except OSError:
+        return {"present": False}
+    names: list[str] = []
+    truncated = False
+    for root in (path, path / "cvar_unlocker"):
+        try:
+            if not _plain_path(root):
+                continue
+            children = sorted(root.iterdir(), key=lambda item: item.name.casefold())
+        except OSError:
+            continue
+        for child in children:
+            if len(names) >= limit:
+                truncated = True
+                break
+            try:
+                directory = child.is_dir() and _plain_path(child)
+            except OSError:
+                directory = False
+            names.append(child.relative_to(path).as_posix() + ("/" if directory else ""))
+        if truncated:
+            break
+    return {"present": True, "entries": names, "truncated": truncated}
+
+
 CAMERA_AXES = ("x", "y", "z")
 CAMERA_SETTLE_INTERVAL = .05
 CAMERA_SETTLE_SAMPLES = 3
 CAMERA_SETTLE_LIMIT = 18
+# Replays recorded before this client build can fatal Deadlock during a far seek.
+MIN_SAFE_SEEK_REPLAY_BUILD = 6801
 CAMERA_POSITION_TOLERANCE = .5
 CAMERA_STABILITY_TOLERANCE = .2
 CAMERA_MAX_OFFSET = 256.0
@@ -220,6 +263,16 @@ PRELOAD_MAX_SECONDS = 900.0
 # demo_timescale shortens it without a seek, a faked game state or any guard
 # bypass. Dolly restores 1x before pausing for the editor. 1.0 disables it.
 REPLAY_PRESHOW_TIMESCALE = 4.0
+# A shot reload re-opens the whole replay in the same game process. That load is
+# the same work as the initial "waiting for the selected replay" stage, and it is
+# dominated by the game parsing the demo: 45 s was reached on ordinary machines
+# and longer replays on slower disks exceed it, so a shot failed while the replay
+# was still loading normally.
+SHOT_REPLAY_RESET_SECONDS = 120.0
+# A paused replay normally disconnects at once. A slow machine can still take a
+# while to release the previous demo, so allow more than the old instant-fail
+# window without waiting for the full reload budget.
+SHOT_REPLAY_INACTIVE_SECONDS = 30.0
 # Live-verified switches for the in-game health-bar toggle. Disabling
 # citadel_unit_status_enabled or citadel_hud_objective_health_enabled while a
 # replay renders hangs the game with a DX11 device error, so those master
@@ -228,6 +281,24 @@ REPLAY_PRESHOW_TIMESCALE = 4.0
 HEALTHBAR_SWITCH_CVARS = ("citadel_healthbars_enabled", "citadel_unit_status_use_new")
 HEALTHBAR_SWITCH_ON = {"citadel_healthbars_enabled": 1.0, "citadel_unit_status_use_new": 1.0}
 HEALTHBAR_SCALE_CVARS = ("citadel_unit_status_min_distance_scale", "citadel_unit_status_max_distance_scale")
+# A paused replay does not age or retire client-side effects. Seeking away from
+# a tick can leave its ragdolls, decals, screen post-processing and Violet's ink
+# constructs visible over the new frame. These are the game's own cleanup
+# commands; they change no cvars, camera pose or playback speed.
+REPLAY_CLEANUP_COMMANDS = (
+    "cl_destroy_ragdolls",
+    "citadel_clear_all_post_process_effects",
+    "r_cleardecals",
+    # Client entity classes are named differently from their network names in
+    # some builds. Both spellings are harmless when the other one matches
+    # nothing, so try both rather than guessing which table this build uses.
+    "cl_ent_remove_all citadel_artist_visionblocker",
+    "cl_ent_remove_all C_Citadel_Artist_VisionBlocker",
+    "cl_ent_remove_all citadel_artist_strokeblocker",
+    "cl_ent_remove_all C_Citadel_Artist_StrokeBlocker",
+    "cl_ent_remove_all citadel_artist_solidblocker",
+    "cl_ent_remove_all C_Citadel_Artist_SolidBlocker",
+)
 
 
 class CameraPositionError(RuntimeError):
@@ -477,6 +548,11 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             return MovieOutputContext(root, verify_owner)
 
     def _require_connection(self):
+        if self._session is not None and self._session.process.poll() is not None:
+            # The OS closes the netcon socket when Deadlock crashes. Report the
+            # process exit and the likely replay cause instead of a raw socket
+            # message or the separate-launch wording.
+            raise RuntimeError(self._game_death_message("Dolly was running a console command"))
         if not self._alive():
             raise RuntimeError("Launch the local replay from Dolly first. Connections to separately launched games are disabled.")
         if not self._console or not self._console.is_connected:
@@ -504,7 +580,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         if (not self._replay_requested or
                 context in ("waiting for the game console", "waiting for hideout readiness")):
             return (f"{reason} while {context}. The game exited before the selected replay "
-                    "was loaded. Inspect the startup error or game dump before retrying.")
+                    "was loaded. Inspect the startup error or game dump before retrying."
+                    + self._crash_suffix())
         header = self._replay_header
         recorded_build = header.get("build_num")
         if (recorded_build is not None and self._game_build is not None
@@ -523,11 +600,58 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             f"map {header['map_name']}" if header.get("map_name") else None) if part)
         if details:
             message += f" Selected replay: {details}."
-        return message
+        return message + self._crash_suffix()
+
+    def _crash_suffix(self):
+        """Name the newest crash dump's module and offset when one exists."""
+        try:
+            session = self._session
+            if session is None or not session.command:
+                return ""
+            executable = Path(session.command[0])
+            game = executable.parents[2] if len(executable.parents) > 2 else executable.parent
+            candidates = []
+            for folder in (game / "bin" / "win64", game / "citadel" / "crash"):
+                if folder.is_dir():
+                    candidates.extend(folder.glob("*.mdmp"))
+            if not candidates:
+                return ""
+            newest = max(candidates, key=lambda path: path.stat().st_mtime)
+            from .crash_dumps import analyse
+            report = analyse(newest)
+            if not report:
+                return ""
+            module = str(report.get("faulting_module") or "unknown module")
+            offset = report.get("module_offset")
+            access = report.get("access_address")
+            parts = [f"Crash dump {newest.name}: {module}" + (f"+{offset}" if offset else "")]
+            if access:
+                parts.append(f"read at {access}")
+            return " " + ", ".join(parts) + "."
+        except Exception:  # noqa: BLE001 - diagnostics must never mask the crash
+            return ""
 
     def _game_exit_message(self, command, detail):
         cleaned = str(command).strip().splitlines()[0][:80] if str(command).strip() else "a console command"
         return self._game_death_message(f"Dolly was running '{cleaned}'") + f" Console reported: {detail}"
+
+    def _recorded_replay_build(self):
+        """Client build named by the loaded replay header, or None."""
+        header = self._replay_header if isinstance(self._replay_header, dict) else {}
+        match = re.search(r"citadel_v(\d+)", str(header.get("game_directory") or ""), re.IGNORECASE)
+        return int(match.group(1)) if match else None
+
+    def _wait_for_crash_after_console_drop(self, context):
+        """Give a dying game time to report its exit after the console socket drops."""
+        session = self._session
+        if session is None:
+            return None
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if session.process.poll() is not None:
+                return self._game_death_message(context)
+            time.sleep(0.05)
+        return None
 
     def _request(self, command, timeout=3.0, allow_error=False, completion_patterns=None,
                  allow_truncated=False):
@@ -702,7 +826,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             return None
         return info
 
-    def launch(self, game_path, demo_path, protocol="netcon", *, native=False, launch_options="", graphics_profile=""):
+    def launch(self, game_path, demo_path, protocol="netcon", *, native=False, launch_options="", graphics_profile="", allow_mod_overrides=False):
         with self._op_lock:
             self._launch_attempt = {
                 "game_path": str(game_path),
@@ -716,10 +840,13 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._launch_attempt["graphics_profile"] = str(graphics_profile)
             if native:
                 self._launch_attempt["camera_backend"] = "native"
+            if allow_mod_overrides:
+                self._launch_attempt["allow_mod_overrides"] = True
             LOG.info("Launch requested: %s", self._launch_attempt)
             try:
                 result = self._launch(game_path, demo_path, protocol, native=native, launch_options=launch_options,
-                                      graphics_profile=graphics_profile)
+                                      graphics_profile=graphics_profile,
+                                      allow_mod_overrides=allow_mod_overrides)
             except Exception as exc:
                 self._launch_attempt.update(status="failed", error=str(exc), error_type=type(exc).__name__)
                 LOG.exception("Launch failed")
@@ -728,7 +855,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             self._launch_attempt.update(status="started", pid=result["pid"], session_dir=result["session_dir"])
             return result
 
-    def _launch(self, game_path, demo_path, protocol, *, native=False, launch_options="", graphics_profile=""):
+    def _launch(self, game_path, demo_path, protocol, *, native=False, launch_options="", graphics_profile="", allow_mod_overrides=False):
         with self._op_lock:
             if protocol not in ("vconsole", "netcon"):
                 raise ValueError("Unknown console protocol.")
@@ -745,6 +872,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             options = {"native": True} if native else {}
             if launch_options:
                 options["launch_options"] = launch_options
+            if allow_mod_overrides:
+                options["allow_mod_overrides"] = True
             if graphics_profile:
                 options["graphics_profile"] = graphics_profile
             self._recording_replay = None
@@ -1248,7 +1377,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     LOG.info("Could not restore the replay timescale after the pre-show", exc_info=True)
 
     def start_editing(self, game_path, demo_path, protocol="netcon", native=True,
-                      launch_options="", cancel_event=None, graphics_profile=""):
+                      launch_options="", cancel_event=None, graphics_profile="",
+                      allow_mod_overrides=False):
         """Launch, initialize once before the demo, and enter paused editing.
 
         Every transition uses process, console or rendered-view evidence.
@@ -1260,7 +1390,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 self._check_startup_cancelled(cancel_event)
                 profile_options = {"graphics_profile": graphics_profile} if graphics_profile else {}
                 self.launch(game_path, demo_path, protocol, native=native, launch_options=launch_options,
-                            **profile_options)
+                            allow_mod_overrides=allow_mod_overrides, **profile_options)
                 self._message("Starting Deadlock. Waiting for its console connection…", startup_stage="waiting_console")
 
                 def connected():
@@ -1632,13 +1762,15 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     return None
                 return info if not info["playing"] else None
             stopped = self._startup_wait(inactive, "waiting for the previous replay to stop",
-                                         self._stop_event, timeout=15)
+                                         self._stop_event, timeout=SHOT_REPLAY_INACTIVE_SECONDS)
             self._replay_recovery.update(stage="loading", inactive=stopped)
             self._check_position_cancelled()
             if self._session is not session or not self._alive():
                 raise RuntimeError("The game session ended during replay preparation.")
             command = 'playdemo "' + path.as_posix() + '"'
             self._console.send(command)  # Queue once; never resend on timeout.
+            self._message("Reloading the replay for this shot. A large replay can take a minute or two to load.",
+                          startup_stage="recovering_replay")
             self._replay_requested = True
             self._last_output["playdemo"] = "Sent: " + command
             def begun():
@@ -1656,7 +1788,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 except ConsoleTimeout:
                     return None
             ready = self._startup_wait(begun, "waiting for the fresh replay's initial update",
-                                       self._stop_event, timeout=45)
+                                       self._stop_event, timeout=SHOT_REPLAY_RESET_SECONDS)
             self._check_position_cancelled()
             # A fresh playdemo restarts the scripted opening even inside an
             # existing process. Apply the same camera handoff guard as initial
@@ -1772,11 +1904,18 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                         selected = resolve_participant(monitor, identifier, roster, evidence=evidence)
                         rows = [row for row in (roster or {}).get('players', [])
                                 if row.get('handle') == selected['handle']
-                                and row.get('entity_index') == selected['entity_index']
-                                and row.get('model_path') and row.get('model')]
-                        if len(rows) != 1:
-                            raise ReplayPlayerUnavailable('This player has no current hero in the roster. Camera unchanged.')
-                        player = dict(rows[0])
+                                and row.get('entity_index') == selected['entity_index']]
+                        if len(rows) > 1:
+                            raise ReplayPlayerUnavailable(
+                                'This player has more than one hero in the current roster. Camera unchanged.')
+                        player = dict(selected)
+                        player.setdefault('model', 0)
+                        player.setdefault('model_path', '')
+                        if len(rows) == 1 and rows[0].get('model_path') and rows[0].get('model'):
+                            player.update(rows[0])
+                        elif (roster or {}).get('players'):
+                            raise ReplayPlayerUnavailable(
+                                'This player has no current hero in the roster. Camera unchanged.')
                         break
                     except ReplayPlayerUnavailable:
                         self._check_participant_follow(intent)
@@ -1892,6 +2031,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         from .follow_target import FollowTargetMonitor
         from .replay_camera import ReplayCameraMonitor
         from .follow_camera import FollowSettings
+        from .replay_player_focus import resolve_participant
         with self._op_lock:
             if not isinstance(settings, FollowSettings):
                 raise ValueError('Choose valid Game Follow settings.')
@@ -1904,6 +2044,18 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 require_capability('follow')
             if self._recorder_active() or not bridge.status().get('paused'):
                 raise RuntimeError('Pause the replay before selecting a Follow hero.')
+            def current_player_roster():
+                roster = bridge.editor_roster()
+                matches = [row for row in (roster or {}).get('players', [])
+                           if all(row.get(key) == player.get(key)
+                                  for key in ('handle', 'entity_index', 'model', 'model_path'))]
+                if (len(matches) != 1
+                        or type(player.get('handle')) is not int
+                        or type(player.get('entity_index')) is not int
+                        or player['handle'] in (0xffffffff, 0xfffffffe)
+                        or not 0 < player['entity_index'] < 0x7fff
+                        or player['handle'] & 0x7fff != player['entity_index']):
+                    raise RuntimeError('The selected Follow hero is no longer in the current roster.')
             def current_player():
                 if _participant is not None:
                     self._check_participant_follow(_participant)
@@ -1912,21 +2064,28 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                     if (not state.get('paused') or state.get('tick') != expected_tick
                             or self._recorder_active()):
                         raise RuntimeError('The replay changed while confirming the Follow player.')
-                roster = bridge.editor_roster()
-                matches = [row for row in (roster or {}).get('players', [])
-                           if all(row.get(key) == player.get(key)
-                                  for key in ('handle', 'entity_index', 'model', 'model_path'))]
-                if (len(matches) != 1 or not player.get('model_path')
-                        or type(player.get('handle')) is not int
-                        or type(player.get('entity_index')) is not int
-                        or player['handle'] in (0xffffffff, 0xfffffffe)
-                        or not 0 < player['entity_index'] < 0x7fff
-                        or player['handle'] & 0x7fff != player['entity_index']):
-                    raise RuntimeError('The selected Follow hero is no longer in the current roster.')
+                if player.get('model_path') or _participant is None:
+                    current_player_roster()
+                    return
+                again = resolve_participant(monitor, _participant['identifier'],
+                                            bridge.editor_roster(), evidence={})
+                if (type(again.get('handle')) is not int
+                        or type(again.get('entity_index')) is not int
+                        or again['handle'] in (0xffffffff, 0xfffffffe)
+                        or not 0 < again['entity_index'] < 0x7fff
+                        or again['handle'] & 0x7fff != again['entity_index']
+                        or again['handle'] != player.get('handle')
+                        or again['entity_index'] != player.get('entity_index')):
+                    raise RuntimeError('The selected Follow hero changed while applying Game Follow.')
             expected_tick = bridge.status().get('tick')
-            current_player()
+            # Reject a stale roster-backed player before constructing the
+            # follow monitor or issuing any command. The resolver-backed path
+            # needs the monitor for its fresh identity check.
+            if player.get('model_path') or _participant is None:
+                current_player_roster()
             monitor = FollowTargetMonitor(self._session)
             try:
+                current_player()
                 monitor.sample()
                 monitor.sample_selection_context()
                 if _participant is not None:
@@ -1963,7 +2122,8 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                                                           camera=camera, expected_handle=player['handle'])
                     if (selected['handle'] == player['handle'] and mode in (2, 3) and mode == selected['mode']
                             and camera.get('ready')):
-                        self._game_hero_restore = (self._session, self._demo, player['model_path'])
+                        self._game_hero_restore = ((self._session, self._demo, player['model_path'])
+                                                   if player.get('model_path') else None)
                         break
                     if time.monotonic() >= deadline:
                         raise RuntimeError('The game did not confirm the selected Follow hero camera.')
@@ -3503,14 +3663,45 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             return self.status()
 
     def destroy_ragdolls(self):
-        """Clear accumulated ragdolls in the owned local replay."""
+        """Clear client-side leftovers that stay visible after a replay seek.
+
+        The name is retained for the native action ABI; the cleanup now covers
+        ragdolls, decals, screen post-processing and Violet's ink constructs.
+        A paused demo cannot age these effects out, so they otherwise persist
+        when the editor changes frames. The replay, camera and speed are left
+        untouched, and an unavailable command is skipped rather than failing
+        the whole cleanup.
+        """
         with self._op_lock:
             if self.status().get("playing") or getattr(self, "_export_timing", None):
-                raise RuntimeError("Stop shot playback or recording before clearing ragdolls.")
+                raise RuntimeError("Stop shot playback or recording before clearing replay effects.")
             self._require_probe()
             self._require_demo()
-            self._request("cl_destroy_ragdolls")
-            self._message("Ragdoll cleanup command sent.")
+            sent = []
+            failed = []
+            for command in REPLAY_CLEANUP_COMMANDS:
+                # Attempt every stock command. A missing name only prints an
+                # error line, which allow_error tolerates; gating on `help`
+                # would skip the important one when a -dev flood hides its
+                # response. The other commands still run either way.
+                try:
+                    output = self._request(command, allow_error=True)
+                    rejection = error_text(output)
+                    LOG.debug("Replay cleanup %r: %s", command, str(output)[:500])
+                    if rejection:
+                        failed.append(f"{command} ({rejection})")
+                        continue
+                    sent.append(command)
+                except (RuntimeError, ValueError, OSError) as exc:
+                    LOG.warning("Replay cleanup command %r failed: %s", command, exc)
+                    failed.append(command)
+            if not sent:
+                raise RuntimeError("This Deadlock build did not accept the replay-effect cleanup commands.")
+            if failed:
+                LOG.info("Replay cleanup could not send: %s", ", ".join(failed))
+            LOG.info("Replay cleanup sent: %s", ", ".join(sent))
+            self._message("Replay effects cleared. Ragdolls, decals, screen post-processing "
+                          "and Violet ink leftovers are removed.")
 
     def _console_cvar(self, name):
         """Current value of a console cvar, or None when it cannot be read."""
@@ -4172,6 +4363,14 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         but pin it explicitly so a user setting or a future default cannot break
         seeking, and restore the exact prior value afterward.
         """
+        recorded = self._recorded_replay_build()
+        if (recorded is not None and recorded < MIN_SAFE_SEEK_REPLAY_BUILD
+                and int(target) > 1):
+            raise RuntimeError(
+                f"This replay was recorded on Deadlock build {recorded}, which is older than build "
+                f"{MIN_SAFE_SEEK_REPLAY_BUILD}. Deadlock crashes when seeking replays recorded before "
+                f"{MIN_SAFE_SEEK_REPLAY_BUILD} (a Valve bug), so Dolly stopped before sending the seek. "
+                "Load a replay recorded on 6812 or 6813, or play this replay from the start without seeking.")
         fast_original = None
         try:
             fast_original = read_cvar_value("demo_usefastgoto",
@@ -4185,6 +4384,13 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 pass
         try:
             return self._seek_tick_run(target, allow_start_boundary=allow_start_boundary)
+        except RuntimeError as exc:
+            text = str(exc).lower()
+            if "console is disconnected" in text or "game closed the console" in text:
+                message = self._wait_for_crash_after_console_drop("seeking a replay tick")
+                if message:
+                    raise RuntimeError(message) from exc
+            raise
         finally:
             if fast_original is not None and not fast_original:
                 try:
@@ -4861,6 +5067,7 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
         updates = 0
         finished = False
         failure = None
+        identity_misses = 0
         waiter = FrameWait()
         try:
             if bridge is None:
@@ -4889,8 +5096,22 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
                 elif now - last_fresh > 3:
                     raise RuntimeError("The native camera stopped receiving rendered views. Restore the game window and export diagnostics.")
                 if now >= next_identity:
-                    observed_demo = self._require_demo(require_tick=not frozen)
-                    if (paused_clock is not None and status.get("paused") is True
+                    try:
+                        observed_demo = self._require_demo(require_tick=not frozen)
+                    except ConsoleTimeout:
+                        # A busy game (a 4K encode, a shader hitch) can miss one
+                        # three-second console deadline while still rendering.
+                        # Keep the previous identity result and try again on the
+                        # next window; a real hang still fails the frame and
+                        # replay-time guards above.
+                        identity_misses += 1
+                        if identity_misses > 1:
+                            raise
+                        observed_demo = None
+                    else:
+                        identity_misses = 0
+                    if (observed_demo is not None
+                            and paused_clock is not None and status.get("paused") is True
                             and int(observed_demo["tick"]) != paused_clock[1]):
                         raise RuntimeError("The replay jumped during the native shot. Camera playback stopped.")
                     next_identity = time.perf_counter() + .5
@@ -5538,6 +5759,21 @@ class Controller(ReplayWarmupMixin, LayerModesMixin, ExportTimingMixin, PausedFl
             except OSError:
                 continue
         report["crash_dumps"] = [{"name": path.name, "bytes": path.stat().st_size} for path in dumps]
+        crash_reports = []
+        for path in dumps:
+            try:
+                from .crash_dumps import analyse
+                crash_reports.append({"name": path.name, **analyse(path)})
+            except (OSError, ValueError) as exc:
+                crash_reports.append({"name": path.name, "error": str(exc)})
+        report["crash_analysis"] = crash_reports
+        try:
+            # A blocked/deferred temporary-file cleanup is only explainable by
+            # what is actually in the mount; record names, never contents.
+            report["temporary_mount"] = (_mount_listing(self._session.overlay_dir)
+                                         if self._session else None)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never fail the export
+            report["temporary_mount_error"] = str(exc)
         destination = _write_diagnostics_archive(destination, report, history, session_files,
                                                  self._session, dumps)
         self._message("Diagnostics exported to " + str(destination))

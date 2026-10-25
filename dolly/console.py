@@ -28,6 +28,65 @@ LOG = logging.getLogger(__name__)
 VCONSOLE_VERSION = 0x00D40000
 MAX_PACKET_SIZE = 65535
 _HEADER = struct.Struct("!4sIHH")
+
+
+def _console_fallback_encoding() -> str:
+    """Active Windows ANSI code page, used when console bytes are not UTF-8."""
+    try:
+        import ctypes
+        acp = ctypes.windll.kernel32.GetACP()
+        if isinstance(acp, int) and acp > 0:
+            return f"cp{acp}"
+    except Exception:  # noqa: BLE001 - optional platform detail
+        pass
+    import locale
+    return locale.getpreferredencoding(False) or "cp1252"
+
+
+def _decode_console_text(data: bytes) -> str:
+    """Decode console text, falling back to the active ANSI code page.
+
+    Source 2's Windows console can emit non-ASCII paths (for example a
+    Cyrillic OneDrive folder) in the active ANSI code page rather than UTF-8.
+    Strict UTF-8 is tried first so ordinary output is unchanged.
+    """
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode(_console_fallback_encoding(), errors="replace")
+
+
+class _ConsoleTextDecoder:
+    """Incremental netcon decoder with an ANSI fallback for non-UTF-8 text.
+
+    Buffers an incomplete UTF-8 tail across TCP reads. When the pending bytes
+    are genuinely invalid UTF-8, decodes them with the active ANSI code page.
+    """
+
+    def __init__(self) -> None:
+        self._pending = b""
+
+    def feed(self, data: bytes) -> str:
+        self._pending += data
+        if not self._pending:
+            return ""
+        try:
+            text = self._pending.decode("utf-8")
+            self._pending = b""
+            return text
+        except UnicodeDecodeError as exc:
+            if exc.reason == "unexpected end of data":
+                prefix = self._pending[:exc.start].decode("utf-8")
+                self._pending = self._pending[exc.start:]
+                return prefix
+            text = self._pending.decode(_console_fallback_encoding(), errors="replace")
+            self._pending = b""
+            return text
+
+    def flush(self) -> str:
+        text = _decode_console_text(self._pending)
+        self._pending = b""
+        return text
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
@@ -205,7 +264,7 @@ class VConsoleDecoder:
                 if len(payload) < 28:
                     raise ConsoleError("Truncated VConsole PRNT metadata.")
                 # channel int32 + 20 unknown bytes + RGBA uint32 = 28 bytes.
-                result.append(payload[28:].rstrip(b"\x00").decode("utf-8", errors="replace"))
+                result.append(_decode_console_text(payload[28:].rstrip(b"\x00")))
             # AINF, CHAN, ADON, CVAR, CFGV, etc. are framed and ignored.
         return result
 
@@ -311,7 +370,7 @@ class ConsoleClient:
 
     def _read_loop(self, sock: socket.socket) -> None:
         decoder = VConsoleDecoder()
-        text_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        text_decoder = _ConsoleTextDecoder()
         try:
             while True:
                 with self._condition:
@@ -323,7 +382,7 @@ class ConsoleClient:
                     continue
                 if not data:
                     raise ConsoleError("Game closed the console connection.")
-                chunks = decoder.feed(data) if self.protocol == "vconsole" else [text_decoder.decode(data)]
+                chunks = decoder.feed(data) if self.protocol == "vconsole" else [text_decoder.feed(data)]
                 with self._condition:
                     if self._socket is not sock:
                         return

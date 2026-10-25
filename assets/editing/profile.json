@@ -1,18 +1,18 @@
 {
   "format": 1,
-  "description": "Build6807 private reviewed candidate: completed current3depot metadata, all37 stock GI/cfg and10 named video/UI resources are exact to6806. Configuration consumer images are unchanged; current named server ABI and537 actual pair/table checks pass offline. Only the exact current depot map and client/server identities are additive. No6807 runtime qualification; isolated-process Early Development default and manual hero announcements retain their existing behavior.",
+  "description": "Build6819 private reviewed candidate: completed current depot metadata; configuration consumer images are unchanged; current named server ABI and 712 actual pair/table checks pass offline. Only the exact current client/server identities are additive. No 6819 runtime qualification yet; isolated-process Early Development default and manual hero announcements retain their existing behavior.",
   "gameinfo_sha256": "d8f5ff724a563cc464537238ab5e7bcd37ed0bc74099010a69aa1bd333b2f1ab",
   "modules": {
-    "citadel/bin/win64/client.dll": "96ee2a334a93a6a0f40ed56c0cedf441b882681b9605deeb46d83d62d4a3e4b9",
+    "citadel/bin/win64/client.dll": "c09143cf9cd722909404c64e3ffa05157afc15e8a3519b49a1396a627af8ca85",
     "bin/win64/engine2.dll": "f7dd5763050e203361809360b4354ef3f768753bb6e43fb314d4822065d28da6",
     "bin/win64/tier0.dll": "666c9022739190d571a67161646d1a55511e130b62c3a93f8c95b47beaede433"
   },
-  "unlocker_server_sha256": "5197333b5da46d3825c1cd80d66963eb2143d3b08acd962299cf20da1e25ca3f",
+  "unlocker_server_sha256": "4855ef0712962f43aa4d9f623b258ada286d3e6f8fd2a2c8272984bfecf777e8",
   "video_sha256": "9d2366e991da6f2a58d2015897b63a1b7934eaa7db482664a7e883844867cc10",
   "cfg_manifest_sha256": "84b104784fa54664738479ce86576a5d2de41988ebd4c4232493acf6d3ba815b",
   "stock_gameinfo_sha1": "04bc78a730b9623c8b69db6b00a5aa3790ddfd08",
-  "stock_gameinfo_depot": "1422456_3910018851167511568",
-  "stock_provenance_sha256": "a6887ad95e37e0f4b0c94bccc732e85e16489a46121c2f3cf0c55c9073d3fd84",
+  "stock_gameinfo_depot": "1422456_2286293062839369678",
+  "stock_provenance_sha256": "8279a22555a0ee7f28c4f7932cbed7fe9387fb17d755508075ade4fa347f0c3f",
   "configuration_modules": {
     "bin/win64/engine2.dll": "f7dd5763050e203361809360b4354ef3f768753bb6e43fb314d4822065d28da6",
     "bin/win64/tier0.dll": "666c9022739190d571a67161646d1a55511e130b62c3a93f8c95b47beaede433",

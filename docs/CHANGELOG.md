@@ -4,6 +4,97 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.75-alpha
+
+- Clear stuck replay effects from the in-game Scene appearance card. The renamed **Clear stuck effects** button now removes ragdolls, decals, screen post-processing and Violet's ink constructs left behind when changing replay frames, instead of only ragdolls.
+- Keep the 0.6.74 mixed skin-pack loading and the 0.6.73 audio-level, campath timeline and 6819 camera/roster fixes.
+
+Full details: [0.6.75 release notes](RELEASE_NOTES_0.6.75-alpha.md).
+
+## 0.6.74-alpha
+
+- Load mixed skin packs automatically when the mount contains reviewed model, map, material, animation, scene or audio content, instead of skipping the whole pack because it also includes UI or post-processing files. Pure UI/render packs remain blocked; the explicit mixed-pack setting remains for packs with no recognized skin content.
+- Keep the 0.6.73 audio-level preservation, campath timeline fit and 6819 camera/roster fixes.
+
+Full details: [0.6.74 release notes](RELEASE_NOTES_0.6.74-alpha.md).
+
+## 0.6.73-alpha
+
+- Add an explicit Settings opt-in for mixed mod packs, so a skin pack that also contains UI, shader or post-processing files can be loaded instead of being skipped as a whole.
+- Preserve the active profile's reviewed audio levels in Dolly's isolated editing configuration instead of starting from game-default volume.
+- Fit the campath timeline to the authored camera range so a longer effect track cannot leave an empty tail that looks like an extra camera after playback or recording.
+- Keep the 6819 compatibility, native roster, camera, follow, seek and confetti fixes from 0.6.72.
+
+Full details: [0.6.73 release notes](RELEASE_NOTES_0.6.73-alpha.md).
+
+## 0.6.72-alpha
+
+- Update exact camera, preload, follow, schema, confetti and unlocker compatibility through Deadlock build 6819.
+- Keep the 6814/6815/6817 anchors, the native attach/bones roster fix, and the 6812/6813 follow, seek and non-ASCII-path fixes in this build.
+
+Full details: [0.6.72 release notes](RELEASE_NOTES_0.6.72-alpha.md).
+
+## 0.6.71-alpha
+
+- Update exact camera, preload, follow, schema, confetti and unlocker compatibility through Deadlock build 6817, including the 6814/6815 anchors in the same release.
+- Fix the native player roster for 6817 so attach/bones can select players; it now uses the reviewed entity-list global and an identity-chunk fallback.
+- Keep the 6812/6813 follow, seek and non-ASCII-path fixes in this build.
+
+Full details: [0.6.71 release notes](RELEASE_NOTES_0.6.71-alpha.md).
+
+## 0.6.70-alpha
+
+- Refuse to seek a replay recorded before Deadlock build 6801. Those replays crash the current game during a far seek, so Dolly now stops before sending the seek and asks for a replay recorded on 6812 or 6813 instead.
+- If the game still exits just as the console socket drops during a seek, wait briefly for the process and report the real crash exit code and crash dump location instead of "The console is disconnected."
+
+Full details: [0.6.70 release notes](RELEASE_NOTES_0.6.70-alpha.md).
+
+## 0.6.69-alpha
+
+- Fix replay player following on Deadlock 6813: correct the follow controller, entity-list and vtable anchors, and use the verified live player identity when the attach roster is empty.
+- Explain an early pre-spawn tick instead of reporting a misleading controller change: scrub forward to the match start, then select the player again.
+- Decode console text with the active Windows code page when it is not UTF-8, so the USRLOCAL settings check works when Dolly or the Windows profile lives under a non-ASCII (for example Cyrillic) folder.
+
+Full details: [0.6.69 release notes](RELEASE_NOTES_0.6.69-alpha.md).
+
+## 0.6.68-alpha
+
+- Support Deadlock build 6813: exact client profile, runtime contracts and unlocker shim. The reviewed camera, preload, follow-target and confetti anchors are unchanged from 6812, so the hotfix carries the existing review forward.
+- Report a Deadlock crash as a crash instead of "The console is disconnected": the error now names the game's exit code and says the replay may be incompatible with the installed build.
+- Include the newest crash dump's faulting module, offset and read address in that error, so the fault is visible without exporting diagnostics first.
+
+Full details: [0.6.68 release notes](RELEASE_NOTES_0.6.68-alpha.md).
+
+## 0.6.67-alpha
+
+- Update exact camera, preload, replay-camera, unlocker and confetti compatibility through Deadlock build 6812; retain earlier reviewed profiles.
+- Refuse video encoders the configured FFmpeg does not provide, before the replay is reloaded; restore the game if a recorder fails after a fixed-step take armed.
+- Keep the color take's container for every layer take, white matte, matte combine and take audit; lossless FFV1 layered exports no longer fail with "must end in .mkv".
+- Add one Format choice (MP4, MKV, MOV) for the color and layer takes, with automatic extension correction and an encoder that switches to Auto when the combination is invalid.
+- Retry one transient console reply timeout during native playback instead of stopping the whole export; two consecutive misses still stop the shot.
+- Retry a refused raw Players frame for a short bounded window instead of rejecting the whole take on a brief disk stall.
+- Name the faulting module, offset and access address from the newest crash dump in exported diagnostics.
+
+Full details: [0.6.67 release notes](RELEASE_NOTES_0.6.67-alpha.md).
+
+## 0.6.66-alpha
+
+- Carry installed skin, model, map and audio mod mounts into the editing session again, with Dolly's verified editing configuration still supplying the session's settings.
+- Skip render and interface overrides by inspecting each mount's content: Panorama/UI, shaders, particles, effects, `cfg` startup files, other material overrides and unreadable or linked mounts.
+- Name every skipped mount and its reason in the session log and `session.json`; keep Dolly's unlocker mount ahead of mod mounts and restore the exact original gameinfo on exit.
+
+Full details: [0.6.66 release notes](RELEASE_NOTES_0.6.66-alpha.md).
+
+## 0.6.65-alpha
+
+- Remove Deadlock's own assertion report folder (`cvar_unlocker/rpt`) with the temporary session instead of leaving a mount that blocked every later launch.
+- Preserve any other unrecognised file without blocking the next launch; the ownership marker stays so a later cleanup still recognises the mount.
+- Wait up to two minutes for a shot's replay reload, matching the initial replay load, and say the replay is still loading.
+- Record hidden render CVARs without a graphics warning; real mismatches still warn.
+- List temporary-mount entry names in the exported diagnostics report.
+
+Full details: [0.6.65 release notes](RELEASE_NOTES_0.6.65-alpha.md).
+
 ## 0.6.64-alpha
 
 - Update exact camera and server-unlocker compatibility through the Nurse Harrow build 6807 hotfix; retain earlier reviewed profiles.

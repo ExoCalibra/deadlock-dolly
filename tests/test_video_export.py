@@ -13,7 +13,7 @@ from dolly.gui import DollyApp
 from dolly.bindings import DEFAULT_BINDING
 from dolly.editor_actions import EditorBinding
 from dolly.settings import AppSettings
-from dolly.video_export import VideoExport, VideoOptions, default_video_path, format_video_status, recording_ready
+from dolly.video_export import VideoExport, VideoOptions, default_video_path, format_video_status, recording_ready, video_suffix
 
 
 READY = {"connected": True, "game_running": True, "camera_backend": "native", "startup_stage": "editing_ready"}
@@ -50,6 +50,16 @@ class VideoExportTests(unittest.TestCase):
 
     def stopped(self, cancel=False):
         self.state = {"state": "cancelled" if cancel else "completed", "frames_written": 30, "duration": 1.0}
+
+    def test_lossless_codec_requires_mkv_and_others_mp4(self):
+        from dolly.video_export import resolve_container
+        self.assertEqual(video_suffix("lossless", "mp4"), ".mkv")
+        self.assertEqual(video_suffix("auto"), ".mp4")
+        self.assertEqual(video_suffix("h264_nvenc", "mkv"), ".mkv")
+        self.assertEqual(video_suffix("h264_nvenc", "mov"), ".mov")
+        self.assertEqual(resolve_container("auto", "mkv", ffmpeg_available=False), "mp4")
+        self.assertEqual(resolve_container("auto", "mkv", ffmpeg_available=True), "mkv")
+        self.assertEqual(resolve_container("builtin", "mov"), "mp4")
 
     def test_valid_start_calls_only_native_recording_with_explicit_options(self):
         result = self.export.start(VideoOptions(self.path, 30, 10_000_000))
@@ -378,6 +388,15 @@ class VideoExportTests(unittest.TestCase):
                 self.export.start(options)
         self.bridge.start_video.assert_not_called()
 
+    def test_missing_ffmpeg_encoder_is_rejected_before_native_start(self):
+        exe = self.path.parent / "ffmpeg.exe"
+        exe.write_bytes(b"MZ")
+        with patch("dolly.video_export.ffmpeg_encoder_names",
+                   return_value=frozenset({"h264_nvenc", "ffv1"})):
+            with self.assertRaisesRegex(ValueError, "libx264"):
+                VideoOptions(self.path, codec="libx264", ffmpeg_path=exe).validated()
+        self.bridge.start_video.assert_not_called()
+
     def test_ffmpeg_codec_requires_a_path_and_uses_the_ffmpeg_encoder(self):
         with self.assertRaisesRegex(ValueError, "ffmpeg"):
             VideoOptions(self.path, codec="h264_nvenc").validated()
@@ -680,6 +699,7 @@ class VideoGuiTests(unittest.TestCase):
         self.app.video_reconstructed_audio = Var(False)
         self.app.clip_audio = None
         self.app.video_codec = Var("")
+        self.app.video_format = Var("MP4 video")
         self.app.ffmpeg_path = Var("")
         self.app.video_fixed_step = Var(False)
         self.app.video_depth = Var(False)
@@ -710,6 +730,42 @@ class VideoGuiTests(unittest.TestCase):
             self.app._start_video_recording()
         focus.assert_called_once_with(4321)
         self.app._submit.assert_called_once()
+
+    def test_lossless_choice_corrects_a_typed_mp4_output_to_mkv(self):
+        ffmpeg = Path(self.folder.name) / "ffmpeg.exe"
+        ffmpeg.write_bytes(b"MZ")
+        self.app.ffmpeg_path.set(str(ffmpeg))
+        self.app.video_codec.set("Lossless FFV1 (.mkv)")
+        self.app.controller = Mock()
+        self.app._start_video_recording()
+        self.assertTrue(self.app.video_path.get().endswith(".mkv"))
+        self.assertEqual(self.app.video_format.get(), "Matroska video (MKV)")
+        self.app._error.assert_not_called()
+        self.app._submit.assert_called_once()
+
+    def test_mkv_format_writes_mkv_for_a_lossy_codec(self):
+        ffmpeg = Path(self.folder.name) / "ffmpeg.exe"
+        ffmpeg.write_bytes(b"MZ")
+        self.app.ffmpeg_path.set(str(ffmpeg))
+        self.app.video_format.set("Matroska video (MKV)")
+        self.app.controller = Mock()
+        self.app._start_video_recording()
+        self.assertTrue(self.app.video_path.get().endswith(".mkv"))
+        self.app._error.assert_not_called()
+        self.app._submit.assert_called_once()
+
+    def test_format_change_keeps_encoder_and_extension_in_step(self):
+        ffmpeg = Path(self.folder.name) / "ffmpeg.exe"
+        ffmpeg.write_bytes(b"MZ")
+        self.app.ffmpeg_path.set(str(ffmpeg))
+        self.app.video_format.set("Matroska video (MKV)")
+        self.app._format_changed()
+        self.assertTrue(self.app.video_path.get().endswith(".mkv"))
+        self.app.video_codec.set("Lossless FFV1 (.mkv)")
+        self.app.video_format.set("MP4 video")
+        self.app._format_changed()
+        self.assertEqual(self.app.video_codec.get(), "Auto (hardware when available)")
+        self.assertTrue(self.app.video_path.get().endswith(".mp4"))
 
     def test_export_folder_browse_and_typed_edit_persist_only_parent(self):
         from dolly.settings import load_settings, save_settings
@@ -1258,6 +1314,22 @@ class VideoGuiTests(unittest.TestCase):
         self.app._refresh_video(READY)
         self.app._submit.assert_not_called()
 
+    def test_async_timing_failure_restores_on_worker_after_current_operation(self):
+        self._video_widgets()
+        self.app.controller = SimpleNamespace(_export_timing={"fps": 30, "speed": 1.0})
+        self.app._log = Mock()
+        self.app.video_export.status.return_value = {"state": "failed", "error": "Encoder missing"}
+        self.app.busy = True
+        self.app._refresh_video(READY)
+        self.app._submit.assert_not_called()
+        self.app.busy = False
+        self.app._refresh_video(READY)
+        self.app._submit.assert_called_once_with("Restoring recording settings", self.app.video_export.stop)
+        self.app.controller._export_timing = None
+        self.app._submit.reset_mock()
+        self.app._refresh_video(READY)
+        self.app._submit.assert_not_called()
+
     def test_async_playback_failure_aborts_players_on_worker_before_showing_original_error(self):
         self._video_widgets()
         self.app.controller = Mock(pending_export_restoration=Mock(return_value=[]))
@@ -1690,6 +1762,47 @@ class VideoGuiTests(unittest.TestCase):
         self.assertEqual(result, {"state": "cancelled", "layer": "players", "reason": "run_torn_down"})
         self.app.controller.end_matte_layer.assert_called_once_with()
 
+    def test_mkv_container_is_kept_for_a_lossy_codec_layer_take(self):
+        exe = Path(self.folder.name) / "ffmpeg.exe"
+        exe.write_bytes(b"MZ")
+        base = VideoOptions(Path(self.folder.name) / "shot.mkv", 60, 20_000_000,
+                            codec="auto", container="mkv", fixed_step=True, speed=1.0,
+                            layers=("world",), ffmpeg_path=exe).validated()
+        self.assertEqual(base.container, "mkv")
+        (Path(self.folder.name) / "shot").mkdir()
+        self.app._base_capture = base
+        self.app.controller = Mock()
+        self.app.controller.apply_layer_mode.return_value = {"hidden": []}
+        self.app._snapshot = Mock(return_value=Mock())
+        self.app._layer_queue = [("world", "black")]
+        self.app._start_next_layer_take()
+        options = self.app.video_export.start.call_args.args[0]
+        self.assertEqual(options.path.name, "world.mkv")
+        self.assertEqual(options.container, "mkv")
+
+    def test_effects_matte_combine_reads_the_lossless_mkv_passes(self):
+        exe = Path(self.folder.name) / "ffmpeg.exe"
+        exe.write_bytes(b"MZ")
+        base = VideoOptions(Path(self.folder.name) / "shot.mkv", 60, 20_000_000,
+                            codec="lossless", fixed_step=True, speed=1.0,
+                            layers=("effects",), ffmpeg_path=exe).validated()
+        layer_dir = Path(self.folder.name) / "shot" / "effects"
+        layer_dir.mkdir(parents=True)
+        (layer_dir / "effects.mkv").write_bytes(b"black")
+        (layer_dir / "effects_white.mkv").write_bytes(b"white")
+        self.app._base_capture = base
+        self.app.controller = Mock()
+        def run(args, **_kwargs):
+            Path(args[-1]).write_bytes(b"master")
+            return SimpleNamespace(returncode=0, stderr="")
+        with patch("dolly.gui.resolve_ffmpeg", return_value=exe), \
+                patch("dolly.gui.subprocess.run", side_effect=run) as started:
+            result = self.app._combine_layer("effects")
+        self.assertEqual(result["state"], "completed")
+        args = started.call_args.args[0]
+        self.assertIn(str(layer_dir / "effects.mkv"), args)
+        self.assertIn(str(layer_dir / "effects_white.mkv"), args)
+
     def test_next_layer_take_hides_the_layer_and_starts_a_fixed_step_take(self):
         exe = Path(self.folder.name) / "ffmpeg.exe"
         exe.write_bytes(b"MZ")
@@ -1733,6 +1846,25 @@ class VideoGuiTests(unittest.TestCase):
         self.app._start_next_layer_take()
         self.app.video_export.start.call_args.kwargs["before_record"]()
         self.app.controller.begin_matte_layer.assert_called_once_with()
+
+    def test_lossless_color_take_keeps_mkv_for_every_layer_file(self):
+        exe = Path(self.folder.name) / "ffmpeg.exe"
+        exe.write_bytes(b"MZ")
+        base = VideoOptions(Path(self.folder.name) / "shot.mkv", 60, 20_000_000,
+                            codec="lossless", fixed_step=True, speed=1.0,
+                            layers=("world", "players"), ffmpeg_path=exe).validated()
+        (Path(self.folder.name) / "shot" / "players").mkdir(parents=True)
+        self.app._base_capture = base
+        self.app.controller = Mock()
+        self.app.controller.apply_layer_mode.return_value = {"hidden": []}
+        self.app._snapshot = Mock(return_value=Mock())
+        self.app._layer_queue = [("world", "black")]
+        self.app._start_next_layer_take()
+        self.assertEqual(self.app.video_export.start.call_args.args[0].path.name, "world.mkv")
+        self.app._layer_queue = [("players", "white")]
+        self.app._start_next_layer_take()
+        white = self.app.video_export.start.call_args.args[0]
+        self.assertEqual(white.path.name, "players_white.mkv")
 
     def test_white_matte_pass_writes_beside_the_black_pass(self):
         exe = Path(self.folder.name) / "ffmpeg.exe"

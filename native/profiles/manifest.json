@@ -1,14 +1,14 @@
 {
   "manifest_format": 1,
   "native_abi": 4,
-  "generated_utc": "2026-10-20",
+  "generated_utc": "2026-10-22",
   "generator": "tools/generate_profile.py",
   "reviewed_client_utc": "2026-10-20",
   "modules": {
     "citadel/bin/win64/client.dll": {
       "role": "client",
-      "reviewed_utc": "2026-10-20",
-      "latest_timestamp": 1792557609,
+      "reviewed_utc": "2026-10-22",
+      "latest_timestamp": 1792706908,
       "accepted": [
         "c7d068857c617c9c41d2c501865a94d93c52f3081864623ae23146e495f3021b",
         "769bf1e74afd67ab0aa02fa94c0c7eb3c133991d32c43e099289210511551a2b",
@@ -47,11 +47,18 @@
         "96d84cb1120e05cb030a279801ea0e65b544ac93db1e6ce7022cefb65ee51843",
         "ca6aee3b46fc63e84c89e34fbf9c51f3127abceaec17a1bc6aa9e9d1ff482b53",
         "3a333e279f2fa4ad6270a3406f8039ce349f20ef787bae2e73c784de768c6817",
-        "96ee2a334a93a6a0f40ed56c0cedf441b882681b9605deeb46d83d62d4a3e4b9"
+        "96ee2a334a93a6a0f40ed56c0cedf441b882681b9605deeb46d83d62d4a3e4b9",
+        "5c50c21e71a976161968da71c4ed8f69ddfacda2aa035108a2dbfc2f2c149354",
+        "23b89cd1834420e6e8e593d4205c64ee79c4a712bfffef93c7abbacc0dc19041",
+        "cd46c5485a5aa081a2c0aa1b156ef1b961e17637f393816aac0d71af8110b1b5",
+        "c00bfdfc045f99584c5faefc532327f6a65b01c2bfa5d031ef6cabae1fa79d9e",
+        "52ee3077035808598eb66b64f2b1c2ae40c8753ce4f2044d4f4738e42ff07548",
+        "2f6946bf369dc3cd442fb98267956067c9cf2a531785e22a01342c37d5c42e78",
+        "c09143cf9cd722909404c64e3ffa05157afc15e8a3519b49a1396a627af8ca85"
       ],
       "feature_pins": {
         "automatic preload": [
-          "96ee2a334a93a6a0f40ed56c0cedf441b882681b9605deeb46d83d62d4a3e4b9"
+          "c09143cf9cd722909404c64e3ffa05157afc15e8a3519b49a1396a627af8ca85"
         ]
       }
     },
@@ -221,6 +228,13 @@
     "deadlock-2026-10-20-6803-complete.json",
     "deadlock-2026-10-20-6805-complete.json",
     "deadlock-2026-10-20-6806-complete.json",
-    "deadlock-2026-10-20-6807-complete.json"
+    "deadlock-2026-10-20-6807-complete.json",
+    "deadlock-2026-10-21-6810-complete.json",
+    "deadlock-2026-10-21-6812-complete.json",
+    "deadlock-2026-10-22-6813-complete.json",
+    "deadlock-2026-10-22-6814-complete.json",
+    "deadlock-2026-10-22-6815-complete.json",
+    "deadlock-2026-10-22-6817-complete.json",
+    "deadlock-2026-10-22-6819-complete.json"
   ]
 }

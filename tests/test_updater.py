@@ -400,6 +400,7 @@ class PreferenceTests(unittest.TestCase):
             raw = json.loads(path.read_text()); raw["version"] = 4
             raw.pop("ffmpeg_path"); raw.pop("auto_updates"); raw.pop("framing_grid_enabled"); raw.pop("export_folder")
             raw.pop("pause_after_capture")
+            raw.pop("allow_mod_overrides")
             path.write_text(json.dumps(raw)); before = path.read_bytes()
             self.assertEqual(load_settings(path), original)
             self.assertEqual(path.read_bytes(), before)

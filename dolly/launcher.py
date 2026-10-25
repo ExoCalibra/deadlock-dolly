@@ -247,15 +247,19 @@ def _addon_config_block(text: str) -> str | None:
     return None
 
 
-def merge_addon_mounts(original: str, editing: str) -> str:
+def merge_addon_mounts(original: str, editing: str,
+                       mounts: tuple[tuple[str, str], ...] | list[tuple[str, str]] | None = None) -> str:
     """Carry the installed gameinfo.gi's addon mounts into Dolly's baseline.
 
     The reviewed baseline stays byte-identical on disk; only the temporary
     session file receives the user's own mount lines, so their mods keep loading
     while competitive rendering settings still come from the reviewed file.
+    ``mounts`` restricts this to the entries a Dolly session may load; by default
+    every recognised addon entry is carried (legacy callers).
     """
-    mounts = mod_search_paths(original)
-    config = _addon_config_block(original)
+    explicit = mounts is not None
+    mounts = tuple(mounts) if explicit else mod_search_paths(original)
+    config = None if explicit and not mounts else _addon_config_block(original)
     if not mounts and config is None:
         return editing
     newline = "\r\n" if "\r\n" in editing else "\n"
@@ -305,6 +309,36 @@ def merge_addon_mounts(original: str, editing: str) -> str:
 
 def _game_is_running(processes: set[str]) -> bool:
     return game_processes._game_is_running(processes)
+
+
+def _already_running_message(details, selected_executable: Path) -> str:
+    """Name the process that blocks launch, including an install mismatch.
+
+    The process-name guard is deliberately conservative. Without PID, path and
+    session, a hidden or orphaned game looks exactly like Dolly being stuck on
+    an old state, so the refusal must carry that evidence.
+    """
+    selected = os.path.normcase(os.path.abspath(str(selected_executable)))
+    parts = []
+    different_install = False
+    for process in details:
+        path = process.path or "path unavailable"
+        if process.path and os.path.normcase(os.path.abspath(process.path)) != selected:
+            different_install = True
+        session = ("session " + str(process.session_id)
+                   if process.session_id is not None else "session unavailable")
+        window = (f'visible window "{process.window_title}"'
+                  if process.window_title else "no visible window")
+        parts.append(f"PID {process.pid}, {path}, {session}, {window}")
+    if not parts:
+        return ("Deadlock is already running. Exit Deadlock before using Dolly; "
+                "Dolly only controls the development session it launches.")
+    message = "Deadlock is already running: " + "; ".join(parts) + "."
+    if different_install:
+        message += f" That process is from a different installation than Dolly's selection ({selected_executable})."
+    else:
+        message += f" Dolly is configured for {selected_executable}."
+    return message + " Exit Deadlock, then retry."
 
 
 def _steam_roots() -> list[Path]:
@@ -793,7 +827,7 @@ class Session:
             return False
 
 
-def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] | None = None, port: int = 29090, protocol: str = "netcon", native: bool = False, launch_options: str = "", graphics_profile: str = "") -> Session:
+def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] | None = None, port: int = 29090, protocol: str = "netcon", native: bool = False, launch_options: str = "", graphics_profile: str = "", allow_mod_overrides: bool = False) -> Session:
     _check_runtime()
     from .replays import parse_launch_options
     parse_launch_options(launch_options)  # Validate before changing game files.
@@ -804,9 +838,12 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
     demo = _validate_demo(demo_path)
     processes = running_processes()
     if _game_is_running(processes):
-        raise LaunchError("Deadlock is already running. Exit it before using Dolly; Dolly only controls the development session it launches.")
+        details = game_processes.running_game_processes()
+        raise LaunchError(_already_running_message(details, paths.executable))
     if not isinstance(native, bool):
         raise LaunchError("Native camera selection must be a boolean.")
+    if type(allow_mod_overrides) is not bool:
+        raise LaunchError("The mixed-mod allowance must be a boolean.")
     native_dll = _verified_native(paths) if native else None
     # Recover any unfinished previous session first, so the original we back up
     # and journal is the user's true file, not a still-mounted Dolly session.
@@ -818,10 +855,17 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         original_text = original_data.decode("utf-8")  # Validate before preparing any replacement.
     except (OSError, UnicodeError) as exc:
         raise LaunchError("Could not read the installed UTF-8 gameinfo.gi; no game files were changed.") from exc
-    excluded_mounts = tuple(mod_search_paths(original_text))
-    # User addon mounts can supply startup commands, materials and UI overrides.
-    # Keep them in the exact original backup, outside this editing process.
-    _refuse_loose_ui_sources(paths)
+    installed_mounts = tuple(mod_search_paths(original_text))
+    from . import mod_policy
+    carried_mounts, excluded_mounts = mod_policy.split_mounts(
+        installed_mounts, paths.game_dir, allow_overrides=allow_mod_overrides)
+    carried_pairs = tuple((record["key"], record["path"]) for record in carried_mounts)
+    carried_content = sum(record["key"].casefold() in mod_policy.CONTENT_MOUNT_KEYS
+                          for record in carried_mounts)
+    # Content mods may join the session; render/visual interface overrides do
+    # not, because they change what the capture sees or fight Dolly's own UI.
+    # The exact original file is still backed up and restored on exit.
+    _refuse_loose_ui_sources(paths, carried_pairs)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
             # Exclusive bind on Windows prevents claiming another app's listener.
@@ -848,7 +892,8 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
     from . import editing_assets, editing_session
     config_files = editing_assets.load(EDITING_ROOT)
     session_dir = PACKAGE_ROOT / "logs" / ident
-    patched_data = make_gameinfo(editing, overlay.name, isolated_settings=True).encode("utf-8")
+    merged_editing = merge_addon_mounts(original_text, editing, carried_pairs)
+    patched_data = make_gameinfo(merged_editing, overlay.name, isolated_settings=True).encode("utf-8")
     log_path = session_dir / "launch.log"
     try:
         if native:
@@ -878,8 +923,9 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         command = build_command(paths, overlay, port, demo, protocol, launch_options, native=native)
         metadata = {**marker, "command": command, "selected_demo": str(demo) if demo is not None else None, "port": port, "protocol": protocol, "dolly_version": DOLLY_VERSION, "overlay_dir": str(overlay), "unlocker_version": _Unlocker.VERSION, "unlocker_sha256": UNLOCKER_SHA256, "validation": "Windows game startup and selected console protocol require a local probe.", "backup_name": "original.gameinfo.gi", "patched_sha256": hashlib.sha256(patched_data).hexdigest(), "original_mode": stat.S_IMODE(paths.gameinfo.stat().st_mode), "config_state": "prepared", "editing_configuration_provenance": configuration_provenance}
         metadata["editing_gameinfo_sha256"] = hashlib.sha256(editing.encode("utf-8")).hexdigest()
-        metadata["carried_addon_mounts"] = []
-        metadata["excluded_addon_mounts"] = [{"key": key, "path": path} for key, path in excluded_mounts]
+        metadata["carried_addon_mounts"] = carried_mounts
+        metadata["excluded_addon_mounts"] = excluded_mounts
+        metadata["allow_mod_overrides"] = allow_mod_overrides
         metadata["configuration_mode"] = "isolated_editing"
         if native:
             metadata["native_camera"] = {"abi": NATIVE_ABI, "game_sha256": NATIVE_GAME_SHA256,
@@ -971,7 +1017,10 @@ def launch(game_path: str | os.PathLike[str], demo_path: str | os.PathLike[str] 
         try:
             session.log(f"Created development process PID {session.pid}; -dev and -insecure are mandatory.")
             session.log("Loaded Dolly's verified stock editing configuration and separate session settings. "
-                        "Normal-play configs and addon mounts are excluded; the exact original gameinfo is backed up.")
+                        + (f"Carried {carried_content} content mod mount(s) and skipped "
+                           f"{len(excluded_mounts)} render/visual or unrecognised mount(s). "
+                           if installed_mounts else "")
+                        + "Normal-play ConVars are excluded; the exact original gameinfo is backed up.")
             session.log("Replay loading deferred until the controller confirms cvar_unhide in the pre-lobby/hideout.")
             with session._restore_lock:
                 current_record = _load_record(session_dir)

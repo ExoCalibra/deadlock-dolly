@@ -101,6 +101,23 @@ class EditingSessionTests(unittest.TestCase):
         self.assertEqual((directory / "cfg/machine_convars.vcfg").read_bytes(), editing.EMPTY_CONVARS)
         self.assertEqual((directory / "cfg/user_convars_0_slot0.vcfg").read_bytes(), editing.EMPTY_CONVARS)
 
+    def test_audio_levels_are_carried_without_other_player_settings(self):
+        self.baseline()
+        self.target.parent.joinpath("machine_convars.vcfg").write_text(
+            '"config"\n{\n\t"convars"\n\t{\n'
+            '\t\t"volume"\t\t"0.21"\n'
+            '\t\t"snd_voipvolume"\t\t"1.76"\n'
+            '\t\t"snd_musicvolume"\t\t"0"\n'
+            '\t\t"r_citadel_fog_quality"\t\t"4"\n'
+            '\t}\n}\n', encoding="utf-8")
+        result = editing.prepare(self.session, self.paths)
+        directory = self.session / editing.DIRECTORY
+        values = editing._convar_values((directory / "cfg/machine_convars.vcfg").read_bytes())
+        self.assertEqual(values, {"volume": "0.21", "snd_voipvolume": "1.76",
+                                  "snd_musicvolume": "0"})
+        self.assertEqual(result["audit"]["audio_convar_count"], 3)
+        self.assertNotIn("r_citadel_fog_quality", values)
+
     def test_explicit_window_size_overrides_saved_borderless_only_in_session(self):
         self.baseline()
         editing.prepare(self.session, self.paths, launch_options='-windowed -w 1280 -h 720')
@@ -124,9 +141,13 @@ class EditingSessionTests(unittest.TestCase):
                              if name not in absent and
                              (len(names) == 1 or name != 'r_citadel_shadow_quality'))
         report = graphics.audit_runtime(self.session, query)
-        self.assertEqual(report['unreadable'], ['r_particle_depth_feathering', 'r_citadel_motion_blur'])
+        # Deadlock hides these two from the console echo. A silent reply is
+        # recorded separately instead of warning about an unchecked profile.
+        self.assertEqual(set(report['not_echoed']), absent)
+        self.assertEqual(report['unreadable'], [])
         self.assertEqual(report['observed']['r_citadel_shadow_quality'], 1)
         self.assertEqual(report['mismatches'], [])
+        self.assertNotIn('warning', report)
         self.assertFalse(report['visual_verified'])
         self.assert_player_files_unchanged()
 

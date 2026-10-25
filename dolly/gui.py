@@ -51,9 +51,10 @@ from dolly.particles import (LABEL_TO_ID, PARTICLE_DEFAULT, PARTICLE_INTENSITY_D
 from dolly.smoothing import smoothing_window
 from dolly.source2viewer import HELP_SIZE_MB, find_viewer
 from dolly.video_export import (ACTIVE_STATES, BITRATE_PRESETS, CODEC_BY_KEY, CODEC_CHOICES,
-                                CODEC_LABEL_TO_KEY, DEFAULT_CODEC_KEY, VideoExport, VideoOptions,
+                                CODEC_LABEL_TO_KEY, CONTAINER_CHOICES, CONTAINER_LABEL_TO_KEY,
+                                DEFAULT_CODEC_KEY, DEFAULT_CONTAINER, VideoExport, VideoOptions,
                                 bundled_ffmpeg_path, default_video_path, format_video_status,
-                                recording_ready, resolve_ffmpeg)
+                                recording_ready, resolve_container, resolve_ffmpeg, video_suffix)
 
 
 FIELDS = ("time", "x", "y", "z", "pitch", "yaw", "roll", "aspect_ratio")
@@ -335,6 +336,7 @@ class DollyApp:
         self._tick_rate_prompted = set()
         self.show_coordinates = tk.BooleanVar(value=False)
         self.app_settings = self._load_app_settings()
+        self.allow_mod_overrides = tk.BooleanVar(value=self.app_settings.allow_mod_overrides)
         # Retain the legacy variable for internal callers; every desktop page is available.
         self.full_editor = tk.BooleanVar(value=True)
         self.video_path = tk.StringVar(value=str(default_video_path(self.project.name,
@@ -345,6 +347,7 @@ class DollyApp:
         self.video_fps = tk.StringVar(value="60")
         self.video_bitrate = tk.StringVar(value="20 Mbps")
         self.video_codec = tk.StringVar(value=CODEC_BY_KEY[DEFAULT_CODEC_KEY][0])
+        self.video_format = tk.StringVar(value=dict(CONTAINER_CHOICES)[DEFAULT_CONTAINER])
         self.player_processing = tk.StringVar(value="Background")
         self.players_scratch = tk.StringVar(value="")
         self._player_encode_cancel = None
@@ -613,9 +616,17 @@ class DollyApp:
         if self.busy or self.video_export.status().get("state") in ACTIVE_STATES:
             return
         current = Path(self.video_path.get())
-        path = filedialog.asksaveasfilename(parent=self.root, title="Record video", defaultextension=".mp4",
+        codec_key = CODEC_LABEL_TO_KEY.get(self.video_codec.get(), DEFAULT_CODEC_KEY)
+        container = CONTAINER_LABEL_TO_KEY.get(self.video_format.get(), DEFAULT_CONTAINER)
+        suffix = video_suffix(codec_key, container, ffmpeg_available=self._ffmpeg_available())
+        filetypes = {"mp4": (("MP4 video", "*.mp4"),),
+                     "mkv": (("Matroska video", "*.mkv"),),
+                     "mov": (("QuickTime movie", "*.mov"),)}[
+                         resolve_container(codec_key, container,
+                                           ffmpeg_available=self._ffmpeg_available())]
+        path = filedialog.asksaveasfilename(parent=self.root, title="Record video", defaultextension=suffix,
                                           initialdir=str(current.parent), initialfile=current.name,
-                                          filetypes=(("MP4 video", "*.mp4"),), confirmoverwrite=False)
+                                          filetypes=filetypes, confirmoverwrite=False)
         if path:
             self.video_path.set(path)
             self._remember_export_folder()
@@ -732,6 +743,17 @@ class DollyApp:
             self.app_settings = settings
         self._guard("Save update preference", save)
 
+    def _save_mod_preference(self):
+        def save():
+            settings = replace(self.app_settings,
+                               allow_mod_overrides=self.allow_mod_overrides.get())
+            save_settings(settings)
+            self.app_settings = settings
+            self.status_text.set(
+                "Mixed mod packs will load on the next launch. UI, shader and "
+                "post-processing overrides may appear in captures.")
+        self._guard("Save mod loading preference", save)
+
     def _depth_toggled(self):
         # A depth master is a paired, render-paced export: capture exactly one
         # frame per Present so color and depth cannot diverge. Fixed-step is
@@ -761,6 +783,41 @@ class DollyApp:
         if (self.video_layer_world.get() or self.video_layer_players.get()
                 or self.video_layer_effects.get()):
             self.video_fixed_step.set(True)
+
+    def _ffmpeg_available(self):
+        return resolve_ffmpeg(self.ffmpeg_path.get().strip() or None) is not None
+
+    def _format_changed(self):
+        """Keep the encoder and the output extension valid for the container."""
+        container = CONTAINER_LABEL_TO_KEY.get(self.video_format.get(), DEFAULT_CONTAINER)
+        codec_key = CODEC_LABEL_TO_KEY.get(self.video_codec.get(), DEFAULT_CODEC_KEY)
+        available = self._ffmpeg_available()
+        if resolve_container(codec_key, container, ffmpeg_available=available) != container:
+            # Lossless is MKV-only; the built-in writer (and Auto without
+            # FFmpeg) is MP4-only. Show what will actually be written.
+            self.video_codec.set(CODEC_BY_KEY[DEFAULT_CODEC_KEY][0])
+            container = resolve_container(DEFAULT_CODEC_KEY, container, ffmpeg_available=available)
+        self.video_format.set(dict(CONTAINER_CHOICES)[container])
+        self._sync_video_extension()
+
+    def _codec_changed(self):
+        """Show the container the chosen encoder actually needs."""
+        codec_key = CODEC_LABEL_TO_KEY.get(self.video_codec.get(), DEFAULT_CODEC_KEY)
+        container = resolve_container(codec_key,
+                                      CONTAINER_LABEL_TO_KEY.get(self.video_format.get(), DEFAULT_CONTAINER),
+                                      ffmpeg_available=self._ffmpeg_available())
+        self.video_format.set(dict(CONTAINER_CHOICES)[container])
+        self._sync_video_extension()
+
+    def _sync_video_extension(self):
+        if not self.video_path.get().strip():
+            return
+        codec_key = CODEC_LABEL_TO_KEY.get(self.video_codec.get(), DEFAULT_CODEC_KEY)
+        container = CONTAINER_LABEL_TO_KEY.get(self.video_format.get(), DEFAULT_CONTAINER)
+        wanted = video_suffix(codec_key, container, ffmpeg_available=self._ffmpeg_available())
+        chosen = Path(self.video_path.get().strip())
+        if chosen.suffix.lower() != wanted:
+            self.video_path.set(str(chosen.with_suffix(wanted)))
 
     def _start_video_recording(self):
         if getattr(self, "_bone_picker_context", None):
@@ -796,6 +853,23 @@ class DollyApp:
                     tick_rate=self.project.tick_rate,
                     keyframes=[Keyframe(0, 0, 0, 0, 0, 0, 0), Keyframe(duration, 0, 0, 0, 0, 0, 0)])
             codec_key = CODEC_LABEL_TO_KEY.get(self.video_codec.get(), DEFAULT_CODEC_KEY)
+            container = CONTAINER_LABEL_TO_KEY.get(self.video_format.get(), DEFAULT_CONTAINER)
+            resolved = resolve_container(codec_key, container,
+                                         ffmpeg_available=self._ffmpeg_available())
+            if resolved != container:
+                # The lossless codec is MKV-only and the built-in writer is
+                # MP4-only; show the container actually used.
+                container = resolved
+                self.video_format.set(dict(CONTAINER_CHOICES)[resolved])
+            # Correct a hand-typed extension instead of failing after the user
+            # prepared a shot.
+            if self.video_path.get().strip():
+                wanted = "." + container
+                chosen = Path(self.video_path.get().strip())
+                if chosen.suffix.lower() != wanted:
+                    chosen = chosen.with_suffix(wanted)
+                    self.video_path.set(str(chosen))
+                    LOG.info("Output file extension set to %s for the selected format.", wanted)
             layers = tuple(name for name, var in (("world", self.video_layer_world),
                                                   ("players", self.video_layer_players),
                                                   ("effects", self.video_layer_effects))
@@ -812,7 +886,8 @@ class DollyApp:
                                    camera_track=any(getattr(self, name, None) is not None and getattr(self, name).get()
                                                     for name in ("video_ae_camera", "video_usd_camera")),
                                    bundle_audio=bool(self.video_game_audio.get() or
-                                                     self.video_reconstructed_audio.get())).validated()
+                                                     self.video_reconstructed_audio.get()),
+                                   container=container).validated()
             if "players" in options.layers:
                 self._player_layer_frames(options, project=bone_project)
             from .player_encode import resource_policy
@@ -1132,6 +1207,10 @@ class DollyApp:
             return self._start_player_capture(layer)
         base = self._base_capture
         folder = base.path.with_suffix("")
+        # Every generated take keeps the color take's container. The lossless
+        # codec requires .mkv, and a hard-coded .mp4 used to abort the layered
+        # export with "The output filename must end in .mkv."
+        suffix = base.path.suffix
         white = pass_name == "white"
         def configure_layer():
             # Preparation calls Stop/restore, so apply filtering afterwards.
@@ -1143,17 +1222,19 @@ class DollyApp:
         if white:
             # The black pass created the layer folder; this pass writes the
             # white matte beside it and skips frames like every layer take.
-            target = folder / layer / (layer + "_white.mp4")
+            target = folder / layer / (layer + "_white" + suffix)
             options = VideoOptions(target, base.fps, base.bitrate, base.codec, base.quality,
                                    base.preset, base.ffmpeg_path, True, base.speed,
-                                   False, False, (), True, True, full_resolution=base.full_resolution).validated()
+                                   False, False, (), True, True, full_resolution=base.full_resolution,
+                                   container=base.container).validated()
         else:
             # The layer selection gives the take its own subfolder; the native
             # recorder captures the filtered color into it.
-            target = folder / (layer + ".mp4")
+            target = folder / (layer + suffix)
             options = VideoOptions(target, base.fps, base.bitrate, base.codec, base.quality,
                                    base.preset, base.ffmpeg_path, True, base.speed,
-                                   False, False, (layer,), full_resolution=base.full_resolution).validated()
+                                   False, False, (layer,), full_resolution=base.full_resolution,
+                                   container=base.container).validated()
         self._active_layer_take = (layer, pass_name)
         self._pending_auto_play = True
         self._auto_finish_layered = True
@@ -1219,7 +1300,8 @@ class DollyApp:
         target.parent.mkdir(parents=True, exist_ok=True)
         options = VideoOptions(target, base.fps, base.bitrate, base.codec, base.quality,
                                base.preset, base.ffmpeg_path, True, base.speed,
-                               False, False, (), False, True, full_resolution=base.full_resolution).validated()
+                               False, False, (), False, True, full_resolution=base.full_resolution,
+                               container=base.container).validated()
         self._active_layer_take = (layer, "capture")
         self._pending_auto_play = True
         self._auto_finish_layered = True
@@ -1309,8 +1391,9 @@ class DollyApp:
             return {"state": "cancelled", "layer": layer, "reason": "run_torn_down"}
         folder = base.path.with_suffix("")
         layer_dir = folder / layer
-        black = layer_dir / (layer + ".mp4")
-        white = layer_dir / (layer + "_white.mp4")
+        suffix = base.path.suffix
+        black = layer_dir / (layer + suffix)
+        white = layer_dir / (layer + "_white" + suffix)
         master = layer_dir / (layer + ".mov")
         if not black.is_file() or not white.is_file():
             raise RuntimeError("The " + layer + " matte passes are incomplete.")
@@ -1347,8 +1430,8 @@ class DollyApp:
                 sidecar.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
             except (OSError, ValueError):
                 LOG.warning("Layer sidecar could not be updated for %s", layer)
-        for path in (black, white, layer_dir / (layer + "_white.mp4.shot.json"),
-                     layer_dir / (layer + ".mp4.shot.json")):
+        for path in (black, white, layer_dir / (layer + "_white" + suffix + ".shot.json"),
+                     layer_dir / (layer + suffix + ".shot.json")):
             if os.environ.get("DOLLY_KEEP_MATTE") == "1":
                 break
             try:
@@ -1413,7 +1496,8 @@ class DollyApp:
         if (state in ("failed", "cancelled") and not self.busy
                 and ((getattr(self, "_pov_project", None) is not None
                       and getattr(self.controller, "_pov_active", False))
-                     or getattr(self.controller, "_export_resolution", None) is not None)):
+                     or getattr(self.controller, "_export_resolution", None) is not None
+                     or getattr(self.controller, "_export_timing", None) is not None)):
             self._layer_queue = []
             self._auto_finish_layered = False
             self._submit("Restoring recording settings", self.video_export.stop)
@@ -1457,6 +1541,7 @@ class DollyApp:
                        getattr(self, "video_source_combo", None),
                        getattr(self, "video_pov_duration_combo", None),
                        getattr(self, "video_codec_combo", None),
+                       getattr(self, "video_format_combo", None),
                        getattr(self, "player_processing_combo", None),
                        getattr(self, "video_speed_combo", None)):
             if widget is not None:
@@ -2149,6 +2234,10 @@ class DollyApp:
             cancel = threading.Event()
             protocol = "vconsole" if self.protocol.get() == "VConsole" else "netcon"
             native = self.camera_driver.get() == "Native (experimental)"
+            allow_mods = (self.allow_mod_overrides.get()
+                          if hasattr(self, "allow_mod_overrides")
+                          else bool(getattr(self.app_settings, "allow_mod_overrides", False)))
+            mod_options = {"allow_mod_overrides": True} if allow_mods else {}
             self._disable_external_input()
             self.attach_fields = None
             def start():
@@ -2157,11 +2246,12 @@ class DollyApp:
                 save_settings(settings)
                 if native:
                     return self.controller.start_editing(game, demo, protocol=protocol, native=True,
-                        launch_options=options, cancel_event=cancel, **graphics_options)
+                        launch_options=options, cancel_event=cancel,
+                        **mod_options, **graphics_options)
                 if cancel.is_set():
                     raise RuntimeError("Console startup cancelled before launch.")
                 return self.controller.launch(game, demo, protocol=protocol, native=False,
-                    launch_options=options, **graphics_options)
+                    launch_options=options, **mod_options, **graphics_options)
             def complete(result):
                 self.app_settings = settings
                 if native:
@@ -3358,8 +3448,12 @@ class DollyApp:
         except (OSError, ValueError, RuntimeError) as exc:
             self._error("Graphics profiles", exc)
             return
+        allow_mods = (self.allow_mod_overrides.get()
+                      if hasattr(self, "allow_mod_overrides")
+                      else bool(getattr(self.app_settings, "allow_mod_overrides", False)))
+        mod_options = {"allow_mod_overrides": True} if allow_mods else {}
         self._submit("Launching hideout", lambda: self.controller.launch(game, demo, protocol=protocol, native=native,
-                     **graphics_options), self._session_result)
+                     **mod_options, **graphics_options), self._session_result)
 
     def _session_result(self, result):
         if result is not None:
@@ -3913,11 +4007,15 @@ class DollyApp:
             self._refresh_keys(self.project.keyframes[index].time)
         self._guard("Apply attach camera", operation)
 
+    def _publish_editor(self):
+        """Publish desktop editor state to the native panel; Tk updates itself."""
+        editor_session.configure(self)
+
     def _open_bone_picker(self):
         from .bone_picker import open_picker, start_attached_view
         def open_or_start():
             if self.project.keyframes:
-                return open_picker(self)
+                return open_picker(self, publish=self._publish_editor)
             player = self._attach_players.get(self.attach_player.get())
             if not player:
                 raise ValueError("Choose a player before opening Bone Picker.")
@@ -3926,12 +4024,12 @@ class DollyApp:
                 key.attach = AttachKey(handle=int(player.get("handle", 0)),
                     entity_id=int(player.get("entity_index", 0) or 0),
                     model=str(player.get("model_path") or ""))
-            start_attached_view(self, target)
+            start_attached_view(self, target, publish=self._publish_editor)
         self._guard("Bone Picker", open_or_start)
 
     def _cancel_bone_picker(self):
         from .bone_picker import close_picker
-        self._guard("Bone Picker", lambda: close_picker(self))
+        self._guard("Bone Picker", lambda: close_picker(self, publish=self._publish_editor))
 
     def _update_export_camera_note(self):
         label = getattr(self, "export_camera_note", None)
@@ -4365,8 +4463,15 @@ class DollyApp:
         if hasattr(self, "position_curve"):
             self.position_curve.set_current_time(float(value))
 
+    def _timeline_limit(self, time=0.0):
+        """Keep the scrubber on the authored shot, not a fixed 10-second tail."""
+        duration = max(0.0, float(self.project.duration))
+        if not self.project.keyframes:
+            return max(10.0, duration, float(time))
+        return max(1.0, duration, min(max(0.0, float(time)), duration))
+
     def _set_time(self, time):
-        self.slider.configure(to=max(10.0, float(self.project.duration), time))
+        self.slider.configure(to=self._timeline_limit(time))
         self.shot_time.set(time)
         self.time_text.set(_number(time))
         # Moving the playhead must not rebuild the whole path overview; the
@@ -4581,7 +4686,7 @@ class DollyApp:
             if selected_time is not None and key.time == selected_time:
                 self.camera_tree.selection_set(str(index))
                 self.camera_tree.see(str(index))
-        self.slider.configure(to=max(10.0, float(self.project.duration)))
+        self.slider.configure(to=self._timeline_limit())
         if hasattr(self, "path_summary"):
             self.path_summary.set(f"{len(self.project.keyframes)} cameras · {self.project.duration:.2f} s")
         if hasattr(self, "selected_text") and not self.camera_tree.selection():
@@ -4600,7 +4705,7 @@ class DollyApp:
             self.track_tree.selection_set(str(selected))
             self.track_tree.see(str(selected))
         self._select_track()
-        self.slider.configure(to=max(10.0, float(self.project.duration)))
+        self.slider.configure(to=self._timeline_limit())
 
     def _refresh_fixed(self):
         self.setup_tree.delete(*self.setup_tree.get_children())

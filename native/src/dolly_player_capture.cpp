@@ -1717,8 +1717,18 @@ void gpu_poll(ID3D11DeviceContext* c) noexcept {
                       << " alpha " << alpha << " w " << slot.capture.width << " h "
                       << slot.capture.height << "\n";
             }
-            if (!sequenceWriterReady ||
-                !sequence_writer().push(slot.header, std::move(slot.capture.pixels))) {
+            // The writer queue is deliberately small (a 4K frame is tens of
+            // megabytes). A brief disk stall used to refuse one frame and
+            // reject the whole take, so retry for a bounded window while the
+            // writer drains. The capture is fixed-step: a longer pause costs
+            // wall time, not replay alignment.
+            bool pushed = sequenceWriterReady &&
+                          sequence_writer().push(slot.header, std::move(slot.capture.pixels));
+            for (int retry = 0; !pushed && sequenceWriterReady && retry < 20; ++retry) {
+                Sleep(5);
+                pushed = sequence_writer().push(slot.header, std::move(slot.capture.pixels));
+            }
+            if (!pushed) {
                 sequenceStall = true;
                 break;
             }

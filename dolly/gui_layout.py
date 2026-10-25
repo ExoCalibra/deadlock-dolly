@@ -64,6 +64,7 @@ def build_settings(app):
         reshade_status_text=app.reshade_status_text,
         show_log=app.show_log,
         auto_updates_initial=app.app_settings.auto_updates,
+        allow_mod_overrides_initial=app.app_settings.allow_mod_overrides,
     )
     commands = SettingsActions(
         browse_game=app._browse_game,
@@ -79,6 +80,7 @@ def build_settings(app):
         open_launch_options=app._open_launch_options,
         recover_game_config=app._recover_game_config,
         save_layout_paths=app._save_layout_paths,
+        save_mod_preference=app._save_mod_preference,
         save_update_preference=app._save_update_preference,
         select_reshade_runtime=app._select_reshade_runtime,
         toggle_log=app._toggle_log,
@@ -87,6 +89,7 @@ def build_settings(app):
     view = SettingsPage(app.settings_tab, state, commands, root=app.root, on_error=app._error)
     app.settings_view = view
     app.auto_updates = view.auto_updates
+    app.allow_mod_overrides = view.allow_mod_overrides
     app.graphics_profiles = view.graphics_profiles
     app.reshade_browse_button = view.reshade_browse_button
     app.reshade_library_button = view.reshade_library_button
@@ -102,12 +105,13 @@ def build_settings(app):
 
 def build_export(app):
     from .ui.export_page import ExportActions, ExportPage, ExportState
-    from .video_export import CODEC_CHOICES, BITRATE_PRESETS
+    from .video_export import CODEC_CHOICES, CONTAINER_CHOICES, BITRATE_PRESETS
 
     state = ExportState(
         ffmpeg_path=app.ffmpeg_path,
         video_bitrate=app.video_bitrate,
         video_codec=app.video_codec,
+        video_format=app.video_format,
         player_processing=app.player_processing,
         players_scratch=app.players_scratch,
         video_depth=app.video_depth,
@@ -127,6 +131,7 @@ def build_export(app):
         video_ae_camera=app.video_ae_camera,
         video_usd_camera=app.video_usd_camera,
         codec_choices=tuple(c[1] for c in CODEC_CHOICES),
+        format_choices=tuple(label for _key, label in CONTAINER_CHOICES),
         bitrate_choices=tuple(BITRATE_PRESETS),
     )
     commands = ExportActions(
@@ -158,6 +163,9 @@ def build_export(app):
     app.video_browse_button = view.video_browse_button
     app.video_cancel_button = view.video_cancel_button
     app.video_codec_combo = view.video_codec_combo
+    app.video_format_combo = view.video_format_combo
+    app.video_format_combo.bind("<<ComboboxSelected>>", lambda _event: app._format_changed())
+    app.video_codec_combo.bind("<<ComboboxSelected>>", lambda _event: app._codec_changed())
     app.player_processing_combo = view.player_processing_combo
     app.players_scratch_entry = view.players_scratch_entry
     app.players_scratch_browse = view.players_scratch_browse

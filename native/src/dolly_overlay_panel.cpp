@@ -260,8 +260,23 @@ OverlayPanel::SliderRow OverlayPanel::slider_row(const char* id, const char* lab
         if (stale || timeline_view_end_ > maximum || timeline_view_start_ < minimum
                 || timeline_view_end_ - timeline_view_start_ > full) {
             timeline_view_id_ = id;
-            timeline_view_start_ = minimum;
-            timeline_view_end_ = maximum;
+            // Campath timelines fit the authored camera range, not the longer
+            // effect-track duration. A shot with a 5 s DOF track and cameras
+            // at 0-2.1 s otherwise opens with an empty tail that reads as a
+            // phantom fourth camera after playback.
+            if (timeline && !timeline->graph_keys().empty()) {
+                timeline_view_start_ = std::max(
+                    minimum, float(timeline->graph_keys().front().time));
+                timeline_view_end_ = std::min(
+                    maximum, float(timeline->graph_keys().back().time));
+                if (timeline_view_end_ <= timeline_view_start_) {
+                    timeline_view_start_ = minimum;
+                    timeline_view_end_ = maximum;
+                }
+            } else {
+                timeline_view_start_ = minimum;
+                timeline_view_end_ = maximum;
+            }
         } else {
             timeline_view_start_ = std::max(timeline_view_start_, minimum);
             timeline_view_end_ = std::min(timeline_view_end_, maximum);
@@ -1666,12 +1681,13 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                 if (begin_panel_card("##appearance-card")) {
                     section_title("Scene appearance", "Replay view");
                     ImGui::BeginDisabled(state.playing);
-                    action_button("Clear ragdolls", EditorAction::DestroyRagdolls,
+                    action_button("Clear stuck effects", EditorAction::DestroyRagdolls,
                                   ImGui::GetContentRegionAvail().x);
                     ImGui::EndDisabled();
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(
-                            "Clear accumulated ragdolls after repeated shot playback.");
+                            "Clear ragdolls, decals, screen post-processing and Violet ink left "
+                            "behind after seeking or repeated shot playback.");
                     ImGui::BeginDisabled(state.playing);
                     action_button("Toggle Citadel glow", EditorAction::ToggleCitadelGlow,
                                   ImGui::GetContentRegionAvail().x);

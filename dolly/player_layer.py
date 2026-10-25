@@ -474,7 +474,8 @@ def cleanup_capture(deployment: Path, layer_dir: Path) -> list[str]:
     failures = []
     for parent, names in ((data_dir, (BUNDLE_NAME, META_NAME, "capture-status.txt")),
                           (Path(deployment), ("dolly_owner_events.bin",)),
-                          (Path(layer_dir), ("players.mp4", "players.mp4.shot.json")),
+                          (Path(layer_dir), ("players.mp4", "players.mp4.shot.json",
+                                             "players.mkv", "players.mkv.shot.json")),
                           (Path(layer_dir)/"capture", ())):
         if not parent.exists(): continue
         if parent.is_symlink() or getattr(parent, "is_junction", lambda: False)():

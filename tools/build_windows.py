@@ -214,7 +214,10 @@ def main() -> int:
         report_path = checks / "windows-smoke.json"
         if report_path.exists():
             report_path.unlink()
-        result = subprocess.run([str(relocated / "Dolly.exe"), "--self-test", str(report_path)],
+        # Use the real Tk application with its root withdrawn. The visible
+        # self-test is for manual diagnostics; build gates must not flash
+        # windows or popups over whatever the maintainer is doing.
+        result = subprocess.run([str(relocated / "Dolly.exe"), "--self-test-hidden", str(report_path)],
                                 cwd=temporary, timeout=60)
         if result.returncode != 0 or not report_path.is_file():
             logs = relocated / "logs"
