@@ -186,7 +186,7 @@ def finish_player_capture(app, layer):
     if not status.startswith("complete"):
         # The players pass can end a frame or two before the color take. A still
         # only uses the settled frame, so accept it when that frame is aligned.
-        if not (status.startswith(screenshot.SHORT_CAPTURE_STATUS) and screenshot.settled_frame_aligned(
+        if not (status.startswith(screenshot.SHORT_CAPTURE_STATUSES) and screenshot.settled_frame_aligned(
                 data_dir / player_layer.META_NAME, folder, index)):
             raise RuntimeError("The players capture did not finish cleanly: "
                                + (status or "no status was reported"))

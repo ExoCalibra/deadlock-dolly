@@ -163,6 +163,13 @@ def settled_index(take_folder: Path, video_name: str) -> int:
 
 
 SHORT_CAPTURE_STATUS = "failed player capture missed shot frames"
+# A fixed-step capture can also stop because the scratch drive could not keep
+# up. A still only needs its settled frame, so both shorthands share the same
+# alignment check.
+SHORT_CAPTURE_STATUSES = (
+    SHORT_CAPTURE_STATUS,
+    "failed players capture could not write to the scratch drive fast enough",
+)
 FRAME_TIME_TOLERANCE = 1e-6  # seconds of replay time
 
 

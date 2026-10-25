@@ -250,6 +250,9 @@ std::uint32_t ownerFieldOffset = 0;
 std::uint32_t sceneNodeFieldOffset = 0;
 std::atomic<bool> sequenceStall{false};
 bool sequenceCadenceLost = false;
+// Set only when a fixed-step capture waited past its scratch-write budget.
+// Kept separate from cadence loss so the status names the real cause.
+bool sequenceWriterSlow = false;
 struct ImageAdmissionFailure {
     const char* reason = nullptr;
     double phase = -1, pinned_phase = -1, previous = -1;
@@ -996,7 +999,8 @@ void stall_report() noexcept {
         return;
     f << "framesSealed " << framesSealed << " framesWritten " << framesWritten << " framesDropped "
       << framesDropped << " colorIndex " << colorIndex << " used " << used.load() << " dropped "
-      << dropped.load() << " stall " << (sequenceStall ? 1 : 0) << " refused "
+      << dropped.load() << " stall " << (sequenceStall ? 1 : 0) << " slow "
+      << (sequenceWriterSlow ? 1 : 0) << " refused "
       << sequence_writer().refused() << " writerErr " << (sequence_writer().error() ? 1 : 0)
       << " firstSeal " << (firstSeal ? firstSeal - started : 0) << " lastSeal "
       << (lastSeal ? lastSeal - started : 0) << " link " << linkOffset << " delta " << linkDelta
@@ -1061,7 +1065,7 @@ void arm_capture() noexcept {
     startPresent = presentEpoch.load(std::memory_order_acquire);
     started = GetTickCount64();
     if (sequenceV2 && !sequenceWriterReady) {
-        sequenceWriterReady = sequence_writer().open(captureDirectory + L"dolly_owner_color_frame.bin", 2, sequenceV4);
+        sequenceWriterReady = sequence_writer().open(captureDirectory + L"dolly_owner_color_frame.bin", 4, sequenceV4);
         if (!sequenceWriterReady) {
             status("rejected sequence writer open");
             captured = true;
@@ -1102,6 +1106,7 @@ void reset_capture() noexcept {
     colorIndex = framesSealed = framesWritten = framesDropped = 0;
     sequenceStall = false;
     sequenceCadenceLost = false;
+    sequenceWriterSlow = false;
     firstImageFailure = {};
     firstSeal = lastSeal = drainStarted = 0;
     lastSealedReplayTime = -1.0;
@@ -1377,6 +1382,9 @@ void tick() noexcept {
                 "failed player layer exceeded %u draws per image; incomplete output rejected",
                 AggregateDrawLimit);
             status(buf);
+        } else if (saved && sequenceWriterSlow) {
+            status(
+                "failed players capture could not write to the scratch drive fast enough; choose a faster scratch folder or a lower FPS");
         } else if (saved && sequenceV3 && (sequenceCadenceLost || framesWritten != sequenceCap)) {
             status(
                 "failed player capture missed shot frames; keep capture data and retry at a lower FPS or a higher export speed (closer to 1x)");
@@ -1722,13 +1730,15 @@ void gpu_poll(ID3D11DeviceContext* c) noexcept {
             // reject the whole take, so retry for a bounded window while the
             // writer drains. The capture is fixed-step: a longer pause costs
             // wall time, not replay alignment.
-            bool pushed = sequenceWriterReady &&
-                          sequence_writer().push(slot.header, std::move(slot.capture.pixels));
-            for (int retry = 0; !pushed && sequenceWriterReady && retry < 20; ++retry) {
-                Sleep(5);
-                pushed = sequence_writer().push(slot.header, std::move(slot.capture.pixels));
-            }
+            // Fixed-step capture: waiting for the scratch drive costs wall time,
+            // never replay alignment. Only a real timeout (or a writer error)
+            // ends the take.
+            const bool pushed = sequenceWriterReady &&
+                                sequence_writer().push_blocking(slot.header,
+                                                                std::move(slot.capture.pixels), 1500);
             if (!pushed) {
+                if (sequenceWriterReady && !sequence_writer().error())
+                    sequenceWriterSlow = true;
                 sequenceStall = true;
                 break;
             }

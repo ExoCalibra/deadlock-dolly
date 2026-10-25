@@ -341,6 +341,13 @@ class ShortPlayersCaptureTests(unittest.TestCase):
             module.finish_player_capture(app, "players")
         self.assertFalse((self.folder / "hero_alpha.png").exists())
 
+    def test_slow_scratch_status_also_uses_the_settled_frame(self):
+        (self.deployment / player_layer.STATUS_NAME).write_text(
+            screenshot.SHORT_CAPTURE_STATUSES[1] + "; keep capture data\nrequest x\n")
+        (self.deployment / player_layer.META_NAME).write_bytes(frame_meta(self.color_times[:13]))
+        module, app = self.app()
+        self.assertEqual(module.finish_player_capture(app, "players")["state"], "completed")
+
 
 class FfmpegLaunchTests(unittest.TestCase):
     """Still assembly launches FFmpeg like the players encoder: clean env, no console."""
