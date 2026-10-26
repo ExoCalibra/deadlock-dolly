@@ -4,6 +4,14 @@ Release history. Each section describes its own version; controls and limits
 may have changed since then. Use the [current documentation](README.md) for
 setup and operation.
 
+## 0.6.79-alpha
+
+- Add reviewed support for Deadlock build 6821: relocate the camera, replay, preload, Follow, observer schema and attachment contracts while retaining exact module, code and named-type checks.
+- Rebuild the command unlocker for the new server interface and retain earlier reviewed pairs, secure-mode refusal and owned shutdown. The current pair passes 737 compiled build-pair/interface checks and the earlier unlocker rejects it.
+- Refresh the named death-effect controller and particle wrappers. Preserve normal campath filtering, Player POV effects, Discord presence and Players scratch-drive backpressure.
+
+Full details: [0.6.79 release notes](RELEASE_NOTES_0.6.79-alpha.md).
+
 ## 0.6.78-alpha
 
 - Add optional Discord Rich Presence for editing, previewing, exporting and Players processing, with a session timer and links to Dolly and the editing community. The Windows editor uses local IPC without account tokens or a new runtime dependency.

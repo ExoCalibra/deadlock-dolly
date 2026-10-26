@@ -45,6 +45,26 @@ Player capture profiles also keep the scene fingerprint, producer address and
 calling convention, record layout, and exact renderer pairing together. This
 avoids enabling a new scene build with an older producer entry point.
 
+### Build 6821 (2026-10-26)
+
+The October 26 update changes the client and server; the reviewed engine,
+Tier0, scene, sound, resource, renderer and filesystem modules are unchanged.
+The camera, replay, Follow, observer-services schema, attachment and preload
+contracts use the current reviewed addresses and bytes. One stock startup
+function changed after the section Dolly reads; its saved startup section and
+containing instruction block are independently equivalent, without changing
+the readiness conditions.
+
+The named death-effect controller moved again. Its factory, RTTI vtable,
+weight/update functions and named death-event consumer identify the current
+object. The screen-option hook and complete relevant caller fragment retain
+their instruction structure. Particle wrappers and their stock callees are
+reviewed separately. The server interface has a new table and method tuple;
+the rebuilt unlocker passes 737 actual-function pair/interface checks, with
+the old implementation correctly rejecting the new pair. Stock cfg and video
+resources match the current Steam depot content. These are offline proofs;
+bounded runtime and rendered-output qualification remain separate.
+
 ### Build 6819 (2026-10-22)
 
 The 6819 hotfix changes `client.dll` and `server.dll`; the reviewed engine,

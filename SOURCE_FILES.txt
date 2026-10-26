@@ -143,6 +143,7 @@ docs/RELEASE_NOTES_0.6.75-alpha.md
 docs/RELEASE_NOTES_0.6.76-alpha.md
 docs/RELEASE_NOTES_0.6.77-alpha.md
 docs/RELEASE_NOTES_0.6.78-alpha.md
+docs/RELEASE_NOTES_0.6.79-alpha.md
 docs/DISCORD_PRESENCE.md
 docs/SCREENSHOTS.md
 docs/SUPPORTED_CAMERA_CVARS.json
@@ -398,6 +399,7 @@ native/profiles/deadlock-2026-10-22-6814-complete.json
 native/profiles/deadlock-2026-10-22-6815-complete.json
 native/profiles/deadlock-2026-10-22-6817-complete.json
 native/profiles/deadlock-2026-10-22-6819-complete.json
+native/profiles/deadlock-2026-10-26-6821-complete.json
 native/profiles/deadlock-client-2026-09-07-engine-2026-08-13.json
 native/profiles/deadlock-client-2026-09-09-engine-2026-08-13.json
 native/profiles/manifest.json
@@ -762,6 +764,7 @@ third_party/cvar_unlocker/unlocker-build-6814.patch
 third_party/cvar_unlocker/unlocker-build-6815.patch
 third_party/cvar_unlocker/unlocker-build-6817.patch
 third_party/cvar_unlocker/unlocker-build-6819.patch
+third_party/cvar_unlocker/unlocker-build-6821.patch
 third_party/cvar_unlocker/unlocker-shutdown.patch
 third_party/notices/CS2RemoteConsole-MIT.txt
 third_party/notices/RUNTIME_NOTICES.md
