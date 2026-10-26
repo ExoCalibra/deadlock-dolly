@@ -143,6 +143,7 @@ docs/RELEASE_NOTES_0.6.75-alpha.md
 docs/RELEASE_NOTES_0.6.76-alpha.md
 docs/RELEASE_NOTES_0.6.77-alpha.md
 docs/RELEASE_NOTES_0.6.78-alpha.md
+docs/DISCORD_PRESENCE.md
 docs/SCREENSHOTS.md
 docs/SUPPORTED_CAMERA_CVARS.json
 docs/SUPPORTED_CAMERA_CVARS.md
@@ -194,6 +195,8 @@ dolly/demo_packets.py
 dolly/depth_exr.py
 dolly/depth_normals.py
 dolly/desktop.py
+dolly/discord_ipc.py
+dolly/discord_presence.py
 dolly/dialogs.py
 dolly/display.py
 dolly/dof_preflight.py
@@ -589,6 +592,7 @@ tests/test_crash_dumps.py
 tests/test_curve.py
 tests/test_curve_preview.py
 tests/test_definitions.py
+tests/test_discord_presence.py
 tests/test_demo_packets.py
 tests/test_depth_exr.py
 tests/test_depth_normals.py

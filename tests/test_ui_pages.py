@@ -68,18 +68,23 @@ class PageBoundaryTests(unittest.TestCase):
     def test_settings_owns_preferences_and_routes_to_dedicated_controls(self):
         state = self.variables(SettingsState, auto_updates_initial=True,
                                allow_mod_overrides_initial=False,
+                               discord_presence_initial=True,
                                show_log=tk.BooleanVar(self.root, False))
         with patch('dolly.graphics_profiles.load_library', return_value={'format': 1, 'selected': '', 'profiles': []}):
             view = SettingsPage(self.root, state, self.callbacks(SettingsActions), root=self.root,
                                 on_error=lambda *args: self.fail(str(args)))
         self.assertEqual(self.calls, [])
         self.assertTrue(view.auto_updates.get())
+        self.assertTrue(view.discord_presence.get())
         self.assertFalse(hasattr(view, 'controls_disclosure'))
         self.button('Save paths').invoke()
         self.button('Menu shortcut...').invoke()
         self.button('Browse FX library...').invoke()
         self.assertEqual([c[0] for c in self.calls],
                          ['save_layout_paths', 'show_reshade_keybinds', 'browse_reshade_library'])
+        view.discord_presence_checkbox.invoke()
+        self.assertFalse(view.discord_presence.get())
+        self.assertEqual(self.calls[-1][0], 'save_discord_preference')
         self.assertEqual(str(view.reshade_path_entry.cget('textvariable')), str(state.reshade_runtime_path))
         self.assertEqual(str(view.reshade_disable_button.cget('state')), 'disabled')
         self.assertFalse(hasattr(view.graphics_profiles, 'app'))

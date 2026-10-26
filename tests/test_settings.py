@@ -36,8 +36,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(set(raw), {"version", "full_editor", "ffmpeg_path", "auto_updates", "capture_binding", "game_path", "replay_folder",
                                    "demo_path", "launch_options", "movement_speed",
                                    "mouse_sensitivity", "action_bindings", "reshade_binding",
-                                   "reshade_runtime_path", "framing_grid_enabled", "export_folder", "pause_after_capture", "allow_mod_overrides"})
-        self.assertEqual(raw["version"], 9)
+                                   "reshade_runtime_path", "framing_grid_enabled", "export_folder", "pause_after_capture", "allow_mod_overrides", "discord_presence"})
+        self.assertEqual(raw["version"], 10)
         self.assertEqual(raw["capture_binding"], settings.capture_binding.to_dict())
         self.assertNotIn("enabled", raw)
 
@@ -53,6 +53,7 @@ class SettingsTests(unittest.TestCase):
         raw.pop("framing_grid_enabled"); raw.pop("export_folder")
         raw.pop("pause_after_capture")
         raw.pop("allow_mod_overrides")
+        raw.pop("discord_presence")
         self.write_raw(json.dumps(raw))
         before = self.path.read_bytes()
         loaded = load_settings(self.path)
@@ -77,6 +78,7 @@ class SettingsTests(unittest.TestCase):
         raw.pop('export_folder')
         raw.pop('pause_after_capture')
         raw.pop('allow_mod_overrides')
+        raw.pop('discord_presence')
         self.write_raw(json.dumps(raw))
         before = self.path.read_bytes()
         self.assertEqual(load_settings(self.path), settings)
@@ -84,7 +86,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_update_check_choice_survives_legacy_migrations_without_read_time_writes(self):
-        for version in (5, 6, 7, 8, 9):
+        for version in (5, 6, 7, 8, 9, 10):
             for enabled in (False, True):
                 with self.subTest(version=version, automatic_checks=enabled):
                     settings = AppSettings(auto_updates=enabled, ffmpeg_path='E:/tools/ffmpeg.exe')
@@ -93,7 +95,7 @@ class SettingsTests(unittest.TestCase):
                     raw['version'] = version
                     for since, name in ((6, 'framing_grid_enabled'), (7, 'export_folder'),
                                         (8, 'pause_after_capture'),
-                                        (9, 'allow_mod_overrides')):
+                                        (9, 'allow_mod_overrides'), (10, 'discord_presence')):
                         if version < since:
                             raw.pop(name)
                     self.write_raw(json.dumps(raw))
@@ -105,7 +107,7 @@ class SettingsTests(unittest.TestCase):
                     self.assertEqual(list(self.path.parent.iterdir()), [self.path])
                     save_settings(loaded, self.path)
                     persisted = json.loads(self.path.read_text('utf-8'))
-                    self.assertEqual(persisted['version'], 9)
+                    self.assertEqual(persisted['version'], 10)
                     self.assertIs(persisted['auto_updates'], enabled)
 
     def test_export_folder_survives_reload_even_when_drive_is_unavailable(self):
@@ -129,6 +131,7 @@ class SettingsTests(unittest.TestCase):
         raw['version'] = 7
         raw.pop('pause_after_capture')
         raw.pop('allow_mod_overrides')
+        raw.pop('discord_presence')
         self.write_raw(json.dumps(raw))
         before = self.path.read_bytes()
         loaded = load_settings(self.path)
@@ -153,6 +156,25 @@ class SettingsTests(unittest.TestCase):
         for value in (0, 1, 'true', None):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'allow_mod_overrides'):
                 AppSettings(allow_mod_overrides=value)
+
+    def test_discord_presence_migrates_v9_without_writing_and_preserves_an_opt_out(self):
+        original = AppSettings(auto_updates=False, allow_mod_overrides=True, export_folder='E:/Private exports')
+        save_settings(original, self.path)
+        raw = json.loads(self.path.read_text())
+        raw['version'] = 9
+        raw.pop('discord_presence')
+        self.write_raw(json.dumps(raw))
+        before = self.path.read_bytes()
+        self.assertEqual(load_settings(self.path), original)
+        self.assertTrue(load_settings(self.path).discord_presence)
+        self.assertEqual(self.path.read_bytes(), before)
+        from dataclasses import replace
+        disabled = replace(original, discord_presence=False)
+        save_settings(disabled, self.path)
+        self.assertEqual(load_settings(self.path), disabled)
+        for invalid in (None, 0, 1, 'true'):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, 'discord_presence'):
+                AppSettings(discord_presence=invalid)
 
     def test_invalid_file_load_preserves_original_and_creates_no_backup(self):
         self.write_raw("{ broken")

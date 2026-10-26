@@ -6,9 +6,13 @@ setup and operation.
 
 ## 0.6.78-alpha
 
+- Add optional Discord Rich Presence for editing, previewing, exporting and Players processing, with a session timer and links to Dolly and the editing community. The Windows editor uses local IPC without account tokens or a new runtime dependency.
+- Add a saved Settings switch, background reconnects, bounded requests and shutdown cleanup. Presence shares fixed activity phrases and camera counts; replay names, project names and paths remain private. Bundle self-tests do not publish activity.
+- Correct the build 6819 death-effect controller address so selected-player damage and death grading is filtered while Dolly owns a normal campath or free camera. Player POV and the game-owned replay view keep their normal effects.
+- Verify the named controller object before installing the effect filter; stale event-queue addresses now stop camera admission instead of silently leaving death effects enabled.
 - Keep Players layer exports running when the scratch drive briefly falls behind: the fixed-step capture now waits for the ordered writer instead of rejecting the frame and reporting "missed shot frames". A real timeout names the scratch drive, and stills keep using the aligned settled frame.
 
-Full details: [0.6.78 release notes](RELEASE_NOTES_0.6.78-alpha.md).
+Full details: [0.6.78 release notes](RELEASE_NOTES_0.6.78-alpha.md) and [Discord Rich Presence](DISCORD_PRESENCE.md).
 
 ## 0.6.77-alpha
 

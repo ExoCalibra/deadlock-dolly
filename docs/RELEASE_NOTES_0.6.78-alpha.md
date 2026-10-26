@@ -2,6 +2,10 @@
 
 **0.6.78-alpha**
 
-- **Players layer captures survive a busy scratch drive.** *Before:* a 1440p Players export could stop with "missed shot frames" after a brief write stall, and lowering the FPS or raising the export speed did not help. *After:* the fixed-step capture waits for the scratch drive and keeps every frame, so the export continues instead of failing.
+- **Discord Rich Presence.** *Before:* Discord could not show whether you were editing a shot or exporting from Dolly. *After:* your activity can show campath editing, previewing, video exporting and Players processing, with a session timer and links to Dolly and the editing community.
 
-- **A real stop names the scratch drive.** *Before:* every writer stall was reported as a missed shot cadence. *After:* a genuine write timeout says the scratch drive could not keep up and suggests a faster scratch folder or a lower FPS. Still captures keep using the aligned settled frame.
+- **Control what you share.** *Before:* Dolly had no Discord activity control. *After:* Settings includes a Rich Presence switch. Replay names, project names and file paths stay private; Discord can close or restart without interrupting editing, and closing Dolly clears its presence.
+
+- **Clean campath death effects.** *Before:* selected-player death effects could tint a normal campath export red and change its saturation on the current game build. *After:* Dolly uses the verified current effect controller and checks its identity before enabling camera ownership. Player POV retains its normal effects.
+
+- **Players exports wait for the scratch drive.** *Before:* a brief scratch-write stall could stop a Players export with a misleading missed-frames error. *After:* fixed-step capture waits for the writer, preserves every frame, and names the scratch drive if a genuine timeout occurs.

@@ -281,6 +281,7 @@ class DollyApp:
         self._take_audit_seen: set[str] = set()
         self._take_audit_reported = False
         self.closed = False
+        self._discord_presence = None
         self._closing = False
         self.busy = False
         self._error_dialog_open = False
@@ -742,6 +743,48 @@ class DollyApp:
             save_settings(settings)
             self.app_settings = settings
         self._guard("Save update preference", save)
+
+    def start_discord_presence(self):
+        # Real desktop entry only. Bundle self-tests and constructed test UIs
+        # must never publish activity to a maintainer's Discord account.
+        if self._discord_presence is None and not self.closed:
+            try:
+                from .discord_presence import RichPresence
+                self._discord_presence = RichPresence()
+                self._refresh_discord_presence()
+                self._discord_presence.start()
+            except Exception:
+                LOG.debug("Discord presence startup unavailable", exc_info=True)
+
+    def _save_discord_preference(self):
+        # Sharing controls remain available during playback and exports.
+        try:
+            settings = replace(self.app_settings, discord_presence=self.discord_presence.get())
+            save_settings(settings)
+        except Exception as exc:
+            self.discord_presence.set(self.app_settings.discord_presence)
+            self._error("Save Discord preference", exc)
+            return
+        self.app_settings = settings
+        self._refresh_discord_presence()
+
+    def _refresh_discord_presence(self, status=None):
+        service = getattr(self, "_discord_presence", None)
+        if service is None:
+            return
+        try:
+            if status is not None:
+                self._discord_controller_status = status
+            else:
+                status = getattr(self, "_discord_controller_status", {})
+            from .discord_presence import activity_for
+            service.update(activity_for(status, {"state": getattr(self, "_last_video_state", "idle")},
+                cameras=len(self.project.keyframes),
+                processing_players=bool(getattr(self, "_player_encode_cancel", None))),
+                enabled=self.app_settings.discord_presence)
+            _set_var(self.discord_status, service.status)
+        except Exception:
+            LOG.debug("Discord activity update unavailable", exc_info=True)
 
     def _save_mod_preference(self):
         def save():
@@ -3225,6 +3268,7 @@ class DollyApp:
         else:
             try:
                 self._refresh_video(status)
+                self._refresh_discord_presence(status)
                 self._last_video_poll_error = None
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 message = "Media status unavailable: " + str(exc)
@@ -5029,6 +5073,12 @@ class DollyApp:
         self._destroy()
 
     def _destroy(self):
+        presence = getattr(self, "_discord_presence", None)
+        if presence is not None:
+            try:
+                presence.close()
+            except Exception:
+                LOG.debug("Discord presence shutdown unavailable", exc_info=True)
         editor_session.close(self)
         self.capture_generation += 1
         self.hotkey_enabled.set(False)
@@ -5046,9 +5096,14 @@ class DollyApp:
 def main():
     root = tk.Tk()
     app = DollyApp(root)
+    app.start_discord_presence()
     from .update_ui import UpdateUI
     app.update_manager = UpdateUI(app, skip_startup="--updated" in sys.argv)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        if app._discord_presence is not None:
+            app._discord_presence.close()
 
 
 if __name__ == "__main__":

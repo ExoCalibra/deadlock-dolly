@@ -72,6 +72,9 @@ See the
   up to 8K, with optional depth within the documented readback limits.
 - **ReShade integration.** Optional color effects and verified scene depth for
   compatible depth-based effects, with a bundled crosire/prod80 shader library.
+- **Discord Rich Presence.** Show editing and export activity, a session timer
+  and links to Dolly. Turn it off in Settings; replay names and file paths stay private.
+  See the [Discord presence guide](docs/DISCORD_PRESENCE.md).
 
 ## Guides
 

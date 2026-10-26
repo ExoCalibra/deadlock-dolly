@@ -53,6 +53,7 @@ class SettingsState:
     show_log: tk.Variable
     auto_updates_initial: bool
     allow_mod_overrides_initial: bool
+    discord_presence_initial: bool
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ class SettingsActions:
     save_layout_paths: Callable[..., object]
     save_mod_preference: Callable[..., object]
     save_update_preference: Callable[..., object]
+    save_discord_preference: Callable[..., object]
     select_reshade_runtime: Callable[..., object]
     toggle_log: Callable[..., object]
     show_reshade_keybinds: Callable[..., object]
@@ -94,6 +96,18 @@ class SettingsPage:
                   wraplength=700, style="CardMuted.TLabel").pack(anchor="w", pady=(0, GAP))
         self.update_check_button = actions(updates, (("Check for updates", commands.check_updates),), 1)[0]
         ttk.Label(updates, textvariable=self.update_status, wraplength=700, style="CardMuted.TLabel").pack(fill="x")
+        presence = card(body, "Discord Rich Presence")
+        self.discord_presence = tk.BooleanVar(value=state.discord_presence_initial)
+        self.discord_status = tk.StringVar(value="Requires the Discord desktop app and activity sharing enabled in Discord.")
+        self.discord_presence_checkbox = ttk.Checkbutton(
+            presence, style="Card.TCheckbutton", text="Show Dolly activity on Discord",
+            variable=self.discord_presence, command=commands.save_discord_preference)
+        self.discord_presence_checkbox.pack(anchor="w", pady=(0, GAP))
+        ttk.Label(presence, text="Shows editing, previewing and exporting activity with a session timer. "
+                  "Replay names, project names and file paths stay private.",
+                  wraplength=700, style="CardMuted.TLabel").pack(anchor="w", pady=(0, GAP))
+        ttk.Label(presence, textvariable=self.discord_status, wraplength=700,
+                  style="CardMuted.TLabel").pack(fill="x")
         game = card(body, "Game & files")
         field(game, "Deadlock executable", state.game_path)
         actions(game, (("Browse game...", commands.browse_game),), 1)

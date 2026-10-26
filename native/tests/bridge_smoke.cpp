@@ -145,6 +145,22 @@ void gameplay_effect_filter_checks(const GameplayEffectsProfile& profile) {
 void gameplay_effect_filter_checks() {
     for (const auto& profile : kGameplayEffectsProfiles)
         gameplay_effect_filter_checks(profile);
+    Allocation image(0x1000);
+    GameplayEffectsProfile profile{};
+    profile.controller = 0x100;
+    const auto table = image.address() + 0x800;
+    put(image.address() + profile.controller, table);
+    require(gameplay_controller_matches(image.address(), profile, table),
+            "Verified gameplay controller was refused");
+    auto stale = profile;
+    stale.controller += 0x100;
+    require(!gameplay_controller_matches(image.address(), stale, table),
+            "Relocated gameplay controller silently accepted stale queues");
+    require(!gameplay_controller_matches(image.address(), profile, 0),
+            "Missing named controller vtable was accepted");
+    put(image.address() + profile.controller, table + 8);
+    require(!gameplay_controller_matches(image.address(), profile, table),
+            "Another gameplay object type was accepted");
 }
 
 void bone_string_bounds() {

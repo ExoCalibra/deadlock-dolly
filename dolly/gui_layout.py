@@ -65,6 +65,7 @@ def build_settings(app):
         show_log=app.show_log,
         auto_updates_initial=app.app_settings.auto_updates,
         allow_mod_overrides_initial=app.app_settings.allow_mod_overrides,
+        discord_presence_initial=app.app_settings.discord_presence,
     )
     commands = SettingsActions(
         browse_game=app._browse_game,
@@ -82,6 +83,7 @@ def build_settings(app):
         save_layout_paths=app._save_layout_paths,
         save_mod_preference=app._save_mod_preference,
         save_update_preference=app._save_update_preference,
+        save_discord_preference=app._save_discord_preference,
         select_reshade_runtime=app._select_reshade_runtime,
         toggle_log=app._toggle_log,
         show_reshade_keybinds=lambda: app._show_keybinds("reshade"),
@@ -89,6 +91,8 @@ def build_settings(app):
     view = SettingsPage(app.settings_tab, state, commands, root=app.root, on_error=app._error)
     app.settings_view = view
     app.auto_updates = view.auto_updates
+    app.discord_presence = view.discord_presence
+    app.discord_status = view.discord_status
     app.allow_mod_overrides = view.allow_mod_overrides
     app.graphics_profiles = view.graphics_profiles
     app.reshade_browse_button = view.reshade_browse_button

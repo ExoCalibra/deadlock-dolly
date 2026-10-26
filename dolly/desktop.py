@@ -117,6 +117,11 @@ def bundle_self_test(report_path: Path, *, hidden: bool = False) -> int:
         assert app_ui.notebook.tab(app_ui.camera_tab, "state") == "normal"
         assert app_ui.notebook.tab(app_ui.cvar_tab, "state") == "normal"
         report["checks"]["all_editor_pages_available"] = True
+        from .discord_presence import APPLICATION_ID
+        assert APPLICATION_ID.isascii() and APPLICATION_ID.isdecimal()
+        assert app_ui._discord_presence is None, "Bundle checks must not publish Discord activity"
+        assert app_ui.discord_presence.get() == app_ui.app_settings.discord_presence
+        report["checks"]["discord_presence"] = "configured; settings available; no activity published"
         report["checks"]["export_layout"] = "minimum_window_controls_visible"
         if sys.platform == "win32":
             root.iconbitmap(str(branding.ASSETS / "dolly.ico"))  # No silent PNG fallback in this gate.
