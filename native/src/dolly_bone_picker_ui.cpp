@@ -106,6 +106,16 @@ void OverlayPanel::draw_bone_picker(const EditorSnapshot& state, const PickerPor
     if (ImGui::RadioButton("Attached preview", snapshot.preview))
         picker_preview(request, true);
     ImGui::EndDisabled();
+    {
+        bool lock_vertical = attach_lock_vertical_aim();
+        if (ImGui::Checkbox("Lock vertical aim (no up/down tilt)", &lock_vertical)) {
+            set_attach_lock_vertical_aim(lock_vertical);
+            save_layout();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Ignore the hero's vertical look (up/down pitch) so the camera stays level while tracking the bone.");
+    }
     ImGui::EndDisabled();
     ImGui::Spacing();
     ImGui::TextColored(ImVec4(.51f, .94f, .81f, 1), "BODY JOINTS");

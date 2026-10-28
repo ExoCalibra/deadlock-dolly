@@ -161,6 +161,11 @@ bool attach_view_offset(const std::array<float, 3>& values, std::array<double, 3
 // caller can show a readable stem instead of guessing a hero.
 const char* attach_hero_name(const char* model_path) noexcept;
 
+// When enabled, bone and weapon attachments ignore the player's vertical look
+// pitch (and roll) so the camera stays level when the player looks up or down.
+bool attach_lock_vertical_aim() noexcept;
+void set_attach_lock_vertical_aim(bool enabled) noexcept;
+
 // Fill out[0..5] from the sample and segment; out[6] is preserved so the
 // authored aspect keeps applying. Refuses a missing sample, a point or
 // identity mismatch, and nonfinite values.

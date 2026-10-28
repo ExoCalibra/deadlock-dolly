@@ -1367,6 +1367,16 @@ void OverlayPanel::draw_panel(const EditorSnapshot& state) {
                                                                      ? state.attach_bone
                                                                      : "Choose a bone");
                     }
+                    if (state.attach_point != 0) {
+                        bool lock_vertical = attach_lock_vertical_aim();
+                        if (compact_checkbox("Lock vertical aim (no up/down tilt)", &lock_vertical, panel_scale)) {
+                            set_attach_lock_vertical_aim(lock_vertical);
+                            save_layout();
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip(
+                                "Ignore the hero's vertical look (up/down pitch) so the camera stays level while tracking the bone.");
+                    }
                     ImGui::Separator();
                     const float attach_half =
                         (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;

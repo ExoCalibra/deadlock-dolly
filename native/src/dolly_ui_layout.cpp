@@ -1,5 +1,6 @@
 // Layout preferences belong to presentation, never to the camera project or IPC.
 #include "dolly_overlay_panel.hpp"
+#include "dolly_attach.hpp"
 #include "dolly_ui_storage.hpp"
 #include "imgui_internal.h"
 #include <algorithm>
@@ -79,6 +80,7 @@ void OverlayPanel::read_layout_line(ImGuiContext*, ImGuiSettingsHandler*, void* 
     auto& panel = *static_cast<OverlayPanel*>(entry);
     int value = 0;
     if (std::sscanf(line, "ReducedMotion=%d", &value) == 1) panel.reduced_motion_ = value != 0;
+    if (std::sscanf(line, "LockVerticalAim=%d", &value) == 1) set_attach_lock_vertical_aim(value != 0);
     if (std::sscanf(line, "Classic=%d", &value) == 1) panel.classic_layout_ = value != 0;
     if (std::sscanf(line, "Custom=%d", &value) == 1) panel.layout_custom_ = value != 0;
     if (std::sscanf(line, "EditorCustom=%d", &value) == 1) panel.editor_custom_ = value != 0;
@@ -120,6 +122,7 @@ void OverlayPanel::write_layout(ImGuiContext*, ImGuiSettingsHandler* handler, Im
     const auto& panel = *static_cast<OverlayPanel*>(handler->UserData);
     out->appendf("[DollyUI][Preferences]\nReducedMotion=%d\nClassic=%d\nCustom=%d\nEditorCustom=%d\n",
                  int(panel.reduced_motion_), int(panel.classic_layout_), int(panel.layout_custom_),int(panel.editor_custom_));
+    out->appendf("LockVerticalAim=%d\n", int(attach_lock_vertical_aim()));
     for(int page=0;page<5;++page)out->appendf("Sections%d=%u,%u,%u,%u\n",page,
         panel.section_slots_[page][0],panel.section_slots_[page][1],panel.section_slots_[page][2],panel.section_slots_[page][3]);
     for(int page=0;page<5;++page) {

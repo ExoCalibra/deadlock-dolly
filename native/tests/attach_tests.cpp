@@ -555,7 +555,13 @@ void bone_segments() {
     require(dolly::resolve_attach_pose(sample, *loaded, pose), "A bone sample resolves");
     require(near(pose[0], 10.0) && near(pose[1], 20.0) && near(pose[2], 30.0),
             "The bone point composes the bone origin");
+    dolly::set_attach_lock_vertical_aim(true);
+    require(dolly::resolve_attach_pose(sample, *loaded, pose), "A bone sample resolves with vertical lock");
+    require(near(pose[3], 0.0) && near(pose[4], 90.0), "Vertical lock zeroes pitch while keeping yaw");
+    dolly::set_attach_lock_vertical_aim(false);
+    require(dolly::resolve_attach_pose(sample, *loaded, pose), "A bone sample resolves with vertical lock off");
     require(near(pose[3], 5.0) && near(pose[4], 90.0), "The bone point uses the aim angles");
+    dolly::set_attach_lock_vertical_aim(true);
     auto zero_hash = block;
     set_u64(zero_hash, 116, 0);
     require(!track.load(zero_hash.data(), zero_hash.size(), 1.0, error),

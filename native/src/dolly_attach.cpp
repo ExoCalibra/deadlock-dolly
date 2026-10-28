@@ -1,6 +1,7 @@
 #include "dolly_attach.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -10,6 +11,16 @@ namespace dolly {
 namespace {
 
 constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
+std::atomic<bool> g_lock_vertical_aim{true};
+
+std::array<double, 3> effective_base_angles(AttachPoint point, const AttachSample& sample) noexcept {
+    std::array<double, 3> angles = point == AttachPoint::eyes ? sample.aim : sample.angles;
+    if (point != AttachPoint::eyes && g_lock_vertical_aim.load(std::memory_order_relaxed)) {
+        angles[0] = 0.0;
+        angles[2] = 0.0;
+    }
+    return angles;
+}
 
 class Reader {
 public:
@@ -261,6 +272,14 @@ const char* attach_hero_name(const char* model_path) noexcept {
     return nullptr;
 }
 
+bool attach_lock_vertical_aim() noexcept {
+    return g_lock_vertical_aim.load(std::memory_order_relaxed);
+}
+
+void set_attach_lock_vertical_aim(bool enabled) noexcept {
+    g_lock_vertical_aim.store(enabled, std::memory_order_relaxed);
+}
+
 bool attach_snap_offsets(const AttachSample& sample, const CameraPose& camera,
                          std::array<double, 6>& out) noexcept {
     if (!sample.valid || !finite3(sample.origin, 1e8) || !finite3(sample.angles, 1e6) ||
@@ -269,8 +288,7 @@ bool attach_snap_offsets(const AttachSample& sample, const CameraPose& camera,
     for (int i = 0; i < 6; ++i)
         if (!std::isfinite(camera[i]))
             return false;
-    const std::array<double, 3> base_angles =
-        sample.point == AttachPoint::eyes ? sample.aim : sample.angles;
+    const std::array<double, 3> base_angles = effective_base_angles(sample.point, sample);
     std::array<double, 3> base_position = sample.origin;
     if (sample.point == AttachPoint::eyes) {
         double body[3][3];
@@ -314,8 +332,7 @@ bool resolve_attach_pose(const AttachSample& sample, const AttachSegment& segmen
     if (!finite3(sample.origin, 1e8) || !finite3(sample.angles, 1e6) || !finite3(sample.aim, 1e6) ||
         !finite3(sample.eye_local, kAttachViewOffsetLimit))
         return false;
-    const std::array<double, 3> base_angles =
-        segment.point == AttachPoint::eyes ? sample.aim : sample.angles;
+    const std::array<double, 3> base_angles = effective_base_angles(segment.point, sample);
     std::array<double, 3> base_position = sample.origin;
     if (segment.point == AttachPoint::eyes) {
         double body[3][3];
@@ -343,7 +360,7 @@ void enforce_attach_clearance(const AttachSample& sample, const AttachSegment& s
                               CameraPose& pose) noexcept {
     if (!(segment.flags & 4) || !sample.valid)
         return;
-    const auto base_angles = segment.point == AttachPoint::eyes ? sample.aim : sample.angles;
+    const auto base_angles = effective_base_angles(segment.point, sample);
     double basis[3][3];
     source_basis(base_angles, basis);
     std::array<double, 3> center = sample.origin;
