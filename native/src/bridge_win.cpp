@@ -1126,7 +1126,6 @@ static void on_view(void* self, std::uintptr_t caller) noexcept {
                 preview_paused_sample.reset();
                 preview_dirty = true;
             }
-            editor_integrate_flight(preview_offsets, real_delta);
             AttachSample preview_sample{};
             const char* preview_error = nullptr;
             AttachSegment segment{};
@@ -1146,6 +1145,27 @@ static void on_view(void* self, std::uintptr_t caller) noexcept {
             rendered_attach_sample(0, preview, &preview->cache, preview->schema, segment,
                                    preview_sample, now, status.frame_count, demo.tick, demo.paused);
             preview_paused_sample.apply(preview_sample, demo.paused, demo.tick);
+            {
+                CameraPose pre_flight = manual_pose;
+                if (!resolve_attach_pose(preview_sample, segment, pre_flight))
+                    pre_flight = manual_pose;
+                CameraPose post_flight = pre_flight;
+                post_flight[6] = preview_offsets[6];
+                editor_integrate_flight(post_flight, real_delta);
+                const std::array<double, 3> world_delta = {
+                    post_flight[0] - pre_flight[0],
+                    post_flight[1] - pre_flight[1],
+                    post_flight[2] - pre_flight[2],
+                };
+                attach_step_local_offset(preview_sample, world_delta, preview_offsets);
+                for (int axis = 0; axis < 3; ++axis)
+                    preview_offsets[3 + axis] = std::remainder(
+                        preview_offsets[3 + axis] + (post_flight[3 + axis] - pre_flight[3 + axis]),
+                        360.0);
+                preview_offsets[6] = post_flight[6];
+                for (int index = 0; index < 6; ++index)
+                    segment.offset[index] = preview_offsets[index];
+            }
             CameraPose composed = manual_pose;
             if (!resolve_attach_pose(preview_sample, segment, composed)) {
                 fault = 42;

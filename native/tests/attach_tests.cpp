@@ -622,6 +622,19 @@ void snap_round_trip() {
     dolly::CameraPose broken = camera;
     broken[0] = std::numeric_limits<double>::quiet_NaN();
     require(!dolly::attach_snap_offsets(sample, broken, offsets), "A nonfinite camera is refused");
+    dolly::CameraPose step_offsets{};
+    for (int i = 0; i < 6; ++i)
+        step_offsets[i] = offsets[i];
+    const std::array<double, 3> world_delta = {12.5, -7.25, 3.0};
+    require(dolly::attach_step_local_offset(sample, world_delta, step_offsets),
+            "Camera-space world delta projects into local attach offsets");
+    for (int i = 0; i < 6; ++i)
+        segment.offset[i] = step_offsets[i];
+    dolly::CameraPose stepped{};
+    require(dolly::resolve_attach_pose(sample, segment, stepped), "Stepped offsets resolve");
+    for (int i = 0; i < 3; ++i)
+        require(near(stepped[i], camera[i] + world_delta[i], 1e-6),
+                "Stepped local offsets move the camera by the exact world delta");
 }
 
 void envelope_loading() {

@@ -184,6 +184,10 @@ void enforce_attach_clearance(const AttachSample& sample, const AttachSegment& s
 // the camera pose up to angle wrapping.
 bool attach_snap_offsets(const AttachSample& sample, const CameraPose& camera,
                          std::array<double, 6>& out) noexcept;
+// Step local attach offsets along a world-space camera displacement so WASD
+// flight moves in the camera's own look direction rather than the bone's basis.
+bool attach_step_local_offset(const AttachSample& sample, const std::array<double, 3>& world_delta,
+                              CameraPose& offsets) noexcept;
 // Quintic easing gives zero slope and acceleration at both ends. Angles take
 // their shortest route; aspect stays with the existing authored lens curve.
 double attach_blend_weight(double phase, double begin, double end) noexcept;

@@ -319,6 +319,26 @@ bool attach_snap_offsets(const AttachSample& sample, const CameraPose& camera,
     return true;
 }
 
+bool attach_step_local_offset(const AttachSample& sample, const std::array<double, 3>& world_delta,
+                              CameraPose& offsets) noexcept {
+    if (!sample.valid || !finite3(sample.angles, 1e6) || !finite3(sample.aim, 1e6) ||
+        !finite3(world_delta, kAttachOffsetLimit))
+        return false;
+    const std::array<double, 3> base_angles = effective_base_angles(sample.point, sample);
+    double basis[3][3];
+    source_basis(base_angles, basis);
+    for (int axis = 0; axis < 3; ++axis) {
+        double delta_local = 0.0;
+        for (int i = 0; i < 3; ++i)
+            delta_local += world_delta[i] * basis[i][axis];
+        const double next = std::clamp(offsets[axis] + delta_local, -kAttachOffsetLimit, kAttachOffsetLimit);
+        if (!std::isfinite(next))
+            return false;
+        offsets[axis] = next;
+    }
+    return true;
+}
+
 bool resolve_attach_pose(const AttachSample& sample, const AttachSegment& segment,
                          CameraPose& out) noexcept {
     if (!sample.valid || sample.point != segment.point)
